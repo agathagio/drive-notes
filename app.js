@@ -8,7 +8,7 @@ const CONFIG = {
   APP_ID: '104411957628',
   // Default folder for new files (vault/00-inbox/ on Google Drive)
   // Set this to the folder ID after first setup, or leave null to use Picker
-  DEFAULT_FOLDER_ID: null,
+  DEFAULT_FOLDER_ID: '1xONP1bGB7qqNDQ1XNQRSk8rqWKoqCuuV',
 };
 
 const SCOPES = 'https://www.googleapis.com/auth/drive.file';
