@@ -9,6 +9,7 @@ const CONFIG = {
   // Default folder for new files (vault/00-inbox/ on Google Drive)
   // Set this to the folder ID after first setup, or leave null to use Picker
   DEFAULT_FOLDER_ID: '1xONP1bGB7qqNDQ1XNQRSk8rqWKoqCuuV',
+  VAULT_FOLDER_ID: '1xJYm3FFeafY1IAcvAHuQ5BaMX7KxRM-K',
 };
 
 const SCOPES = 'https://www.googleapis.com/auth/drive';
@@ -128,30 +129,77 @@ const App = {
   checkReady() {
     if (this.gapiLoaded && this.gisLoaded) {
       console.log('Drive Notes: Google APIs ready');
+      // Try to restore saved token
+      this.restoreToken();
     }
+  },
+
+  /** Save token + expiry to sessionStorage */
+  saveToken(accessToken, expiresIn) {
+    this.accessToken = accessToken;
+    const expiresAt = Date.now() + (expiresIn || 3600) * 1000;
+    sessionStorage.setItem('drivenotes_token', accessToken);
+    sessionStorage.setItem('drivenotes_token_expires', expiresAt.toString());
+
+    // Schedule silent refresh 5 minutes before expiry
+    this.scheduleTokenRefresh(expiresAt);
+  },
+
+  /** Restore token from sessionStorage if still valid */
+  restoreToken() {
+    const token = sessionStorage.getItem('drivenotes_token');
+    const expiresAt = parseInt(sessionStorage.getItem('drivenotes_token_expires') || '0');
+
+    if (token && expiresAt > Date.now() + 60000) {
+      // Token exists and has more than 1 minute left
+      this.accessToken = token;
+      gapi.client.setToken({ access_token: token });
+      this.scheduleTokenRefresh(expiresAt);
+      console.log('Drive Notes: token restored, expires in', Math.round((expiresAt - Date.now()) / 60000), 'min');
+    }
+  },
+
+  /** Schedule silent token refresh before expiry */
+  scheduleTokenRefresh(expiresAt) {
+    if (this._refreshTimer) clearTimeout(this._refreshTimer);
+
+    // Refresh 5 minutes before expiry
+    const refreshIn = expiresAt - Date.now() - 5 * 60 * 1000;
+    if (refreshIn <= 0) return;
+
+    this._refreshTimer = setTimeout(() => {
+      this.silentRefresh();
+    }, refreshIn);
+  },
+
+  /** Silently refresh the token without user interaction */
+  silentRefresh() {
+    if (!this.tokenClient) return;
+
+    this.tokenClient.callback = (response) => {
+      if (response.error) {
+        console.warn('Silent refresh failed:', response.error);
+        this.accessToken = null;
+        sessionStorage.removeItem('drivenotes_token');
+        sessionStorage.removeItem('drivenotes_token_expires');
+        return;
+      }
+      this.saveToken(response.access_token, response.expires_in);
+      gapi.client.setToken({ access_token: response.access_token });
+      console.log('Drive Notes: token refreshed silently');
+    };
+    this.tokenClient.requestAccessToken({ prompt: '' });
   },
 
   /** Ensure we have a valid access token. Returns a promise. */
   async ensureAuth() {
-    if (this.accessToken) {
+    // Check if current token is still valid
+    const expiresAt = parseInt(sessionStorage.getItem('drivenotes_token_expires') || '0');
+    if (this.accessToken && expiresAt > Date.now() + 60000) {
       return this.accessToken;
     }
 
-    return new Promise((resolve, reject) => {
-      this.tokenClient.callback = (response) => {
-        if (response.error) {
-          reject(response);
-          return;
-        }
-        this.accessToken = response.access_token;
-        resolve(this.accessToken);
-      };
-      this.tokenClient.requestAccessToken({ prompt: '' });
-    });
-  },
-
-  /** Re-authenticate (e.g. after token expiry) */
-  async reAuth() {
+    // Token missing or expiring — request new one
     this.accessToken = null;
     return new Promise((resolve, reject) => {
       this.tokenClient.callback = (response) => {
@@ -159,7 +207,28 @@ const App = {
           reject(response);
           return;
         }
-        this.accessToken = response.access_token;
+        this.saveToken(response.access_token, response.expires_in);
+        gapi.client.setToken({ access_token: response.access_token });
+        resolve(this.accessToken);
+      };
+      this.tokenClient.requestAccessToken({ prompt: '' });
+    });
+  },
+
+  /** Re-authenticate (e.g. after token expiry / 401) */
+  async reAuth() {
+    this.accessToken = null;
+    sessionStorage.removeItem('drivenotes_token');
+    sessionStorage.removeItem('drivenotes_token_expires');
+
+    return new Promise((resolve, reject) => {
+      this.tokenClient.callback = (response) => {
+        if (response.error) {
+          reject(response);
+          return;
+        }
+        this.saveToken(response.access_token, response.expires_in);
+        gapi.client.setToken({ access_token: response.access_token });
         resolve(this.accessToken);
       };
       this.tokenClient.requestAccessToken({ prompt: 'consent' });
@@ -177,18 +246,22 @@ const App = {
       return;
     }
 
-    const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+    // Default view: vault folder
+    const vaultView = new google.picker.DocsView(google.picker.ViewId.DOCS)
+      .setIncludeFolders(true)
+      .setSelectFolderEnabled(false)
+      .setParent(CONFIG.VAULT_FOLDER_ID)
+      .setMimeTypes('text/markdown,text/plain,text/x-markdown');
+
+    // Fallback: search all Drive
+    const allView = new google.picker.DocsView(google.picker.ViewId.DOCS)
       .setIncludeFolders(true)
       .setSelectFolderEnabled(false)
       .setMimeTypes('text/markdown,text/plain,text/x-markdown');
 
     const picker = new google.picker.PickerBuilder()
-      .addView(view)
-      .addView(new google.picker.DocsView(google.picker.ViewId.FOLDERS)
-        .setIncludeFolders(true)
-        .setSelectFolderEnabled(false)
-        .setMimeTypes('text/markdown,text/plain,text/x-markdown'))
-      .enableFeature(google.picker.Feature.NAV_HIDDEN)
+      .addView(vaultView)
+      .addView(allView)
       .setOAuthToken(this.accessToken)
       .setDeveloperKey(CONFIG.API_KEY)
       .setAppId(CONFIG.APP_ID)
@@ -353,18 +426,34 @@ const App = {
 
     recents.slice(0, 8).forEach(r => {
       const li = document.createElement('li');
-      li.textContent = r.name;
+
+      // File name (clickable)
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'recent-name';
+      nameSpan.textContent = r.name;
+      nameSpan.addEventListener('click', () => this.openRecent(r.id, r.name));
+      li.appendChild(nameSpan);
 
       // Relative time
       const ago = this.timeAgo(r.timestamp);
       if (ago) {
-        const span = document.createElement('span');
-        span.className = 'recent-time';
-        span.textContent = ago;
-        li.appendChild(span);
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'recent-time';
+        timeSpan.textContent = ago;
+        li.appendChild(timeSpan);
       }
 
-      li.addEventListener('click', () => this.openRecent(r.id, r.name));
+      // Remove button
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'recent-remove';
+      removeBtn.textContent = '\u00d7';
+      removeBtn.title = 'Remover dos recentes';
+      removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.removeFromRecents(r.id);
+      });
+      li.appendChild(removeBtn);
+
       ul.appendChild(li);
     });
   },
@@ -393,6 +482,18 @@ const App = {
     } catch (e) {
       console.error('Failed to load recent file:', e);
       this.setSaveStatus('error', 'Erro ao carregar');
+    }
+  },
+
+  removeFromRecents(fileId) {
+    try {
+      const raw = localStorage.getItem('drivenotes_recents');
+      let recents = raw ? JSON.parse(raw) : [];
+      recents = recents.filter(r => r.id !== fileId);
+      localStorage.setItem('drivenotes_recents', JSON.stringify(recents));
+      this.renderRecents();
+    } catch {
+      // ignore
     }
   },
 
