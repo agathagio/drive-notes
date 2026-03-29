@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#1a1a2e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Drive Notes</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+  <link rel="apple-touch-icon" href="icon-192.png">
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="style.css">
+
+  <!-- TinyMDE (markdown editor with mobile autocorrect support) -->
+  <script src="https://unpkg.com/tiny-markdown-editor@0.1.8/dist/tiny-mde.min.js"></script>
+
+  <!-- marked.js (markdown preview renderer) -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+
+  <!-- Google APIs (Drive + Picker + Auth) -->
+  <script async defer src="https://apis.google.com/js/api.js" onload="onGapiLoaded()"></script>
+  <script async defer src="https://accounts.google.com/gsi/client" onload="onGisLoaded()"></script>
+</head>
+<body>
+
+  <!-- ── Header ── -->
+  <header class="header">
+    <div class="header-left">
+      <span id="file-name" class="file-name">Drive Notes</span>
+      <span id="save-status" class="save-status"></span>
+    </div>
+    <div class="header-actions">
+      <button id="btn-new" class="btn btn-icon" title="Nova nota">+</button>
+      <button id="btn-open" class="btn btn-icon" title="Abrir do Drive">&#128194;</button>
+      <button id="btn-save" class="btn btn-icon" title="Salvar">&#128190;</button>
+      <button id="btn-preview" class="btn">Preview</button>
+    </div>
+  </header>
+
+  <!-- ── Welcome screen ── -->
+  <div id="welcome" class="welcome">
+    <h2>Drive Notes</h2>
+    <p>Editor de markdown pessoal.<br>Anote ideias rápidas e brain dumps.</p>
+    <button id="welcome-new" class="btn">Nova nota</button>
+    <button id="welcome-open" class="btn">Abrir do Drive</button>
+    <button id="welcome-draft" class="btn">Rascunho local</button>
+    <div id="recents-list" class="recents-list hidden">
+      <h3>Recentes</h3>
+      <ul id="recents-ul"></ul>
+    </div>
+  </div>
+
+  <!-- ── Editor ── -->
+  <div id="editor-container" class="editor-container hidden">
+    <div id="editor"></div>
+  </div>
+
+  <!-- ── Preview ── -->
+  <div id="preview-container" class="preview-container"></div>
+
+  <!-- ── Toolbar (bottom, thumb-reachable) ── -->
+  <nav class="toolbar">
+    <button class="toolbar-btn" data-format="heading" title="Heading">#</button>
+    <button class="toolbar-btn" data-format="bold" title="Bold"><strong>B</strong></button>
+    <button class="toolbar-btn" data-format="italic" title="Italic"><em>I</em></button>
+    <div class="toolbar-separator"></div>
+    <button class="toolbar-btn" data-format="list" title="Lista">⁃</button>
+    <button class="toolbar-btn" data-format="checklist" title="Checklist">☐</button>
+    <button class="toolbar-btn" data-format="quote" title="Citação">"</button>
+    <div class="toolbar-separator"></div>
+    <button class="toolbar-btn" data-format="link" title="Link">🔗</button>
+    <button class="toolbar-btn" data-format="code" title="Código">&lt;/&gt;</button>
+  </nav>
+
+  <!-- ── Modal: new file ── -->
+  <div id="modal-overlay" class="modal-overlay">
+    <div class="modal">
+      <h3>Nova nota</h3>
+      <input id="modal-input" type="text" placeholder="Nome do arquivo" autocomplete="off">
+      <div class="modal-actions">
+        <button id="modal-cancel" class="btn">Cancelar</button>
+        <button id="modal-confirm" class="btn active">Criar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- App logic -->
+  <script src="app.js"></script>
+
+  <!-- Register Service Worker -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js')
+        .then(() => console.log('Service Worker registered'))
+        .catch((err) => console.warn('SW registration failed:', err));
+    }
+  </script>
+</body>
+</html>
