@@ -11,7 +11,7 @@ const CONFIG = {
   DEFAULT_FOLDER_ID: '1xONP1bGB7qqNDQ1XNQRSk8rqWKoqCuuV',
 };
 
-const SCOPES = 'https://www.googleapis.com/auth/drive.file';
+const SCOPES = 'https://www.googleapis.com/auth/drive';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest';
 
 // =====================================================
@@ -246,7 +246,7 @@ const App = {
         method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${this.accessToken}`,
-          'Content-Type': 'text/markdown',
+          'Content-Type': 'text/plain',
         },
         body: content,
       }
