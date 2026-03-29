@@ -3,9 +3,9 @@
 // CONFIG: Replace these with your Google Cloud project values
 // =====================================================
 const CONFIG = {
-  CLIENT_ID: 'YOUR_CLIENT_ID_HERE',
-  API_KEY: 'YOUR_API_KEY_HERE',
-  APP_ID: 'YOUR_PROJECT_NUMBER_HERE',
+  CLIENT_ID: '104411957628-eu5gbpopvot1ai5a95qbpdn3frcvko4r.apps.googleusercontent.com',
+  API_KEY: 'AIzaSyD4muL3FkZEVc5c4bN0cmOj2rpCQMDGOGo',
+  APP_ID: '104411957628',
   // Default folder for new files (vault/00-inbox/ on Google Drive)
   // Set this to the folder ID after first setup, or leave null to use Picker
   DEFAULT_FOLDER_ID: null,
