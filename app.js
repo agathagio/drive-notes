@@ -574,38 +574,54 @@ const App = {
 
   // ── File operations ──
 
-  newFile() {
-    this.showModal('Nova nota', 'Nome do arquivo', async (name) => {
-      if (!name.trim()) return;
-      if (!name.endsWith('.md')) name += '.md';
+  /** Generate a timestamp-based filename like 2026-04-11-2143.md */
+  generateFileName() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}.md`;
+  },
 
-      this.currentFile = { id: null, name: name };
-      this.setContent('');
-      this.showEditor();
-      this.updateFileNameDisplay();
+  async newFile() {
+    const name = this.generateFileName();
+    this.currentFile = { id: null, name: name };
+    this.setContent('');
+    this.showEditor();
+    this.updateFileNameDisplay();
+    this.focusEditor();
 
-      // If authenticated, create on Drive immediately
-      if (this.accessToken) {
-        try {
-          this.setSaveStatus('saving', 'Criando no Drive...');
-          const result = await this.driveCreateFile(
-            name,
-            '',
-            CONFIG.DEFAULT_FOLDER_ID
-          );
-          this.currentFile.id = result.id;
-          this.saveToRecents(result.id, name);
-          this.setSaveStatus('saved', 'Criado no Drive');
-          setTimeout(() => this.setSaveStatus('', ''), 2000);
-        } catch (e) {
-          console.error('Failed to create on Drive:', e);
-          this.setSaveStatus('error', 'Erro — salvo local');
-          this.saveDraft();
-        }
-      } else {
+    // Create on Drive in background
+    if (this.accessToken) {
+      try {
+        this.setSaveStatus('saving', 'Criando no Drive...');
+        const result = await this.driveCreateFile(
+          name,
+          '',
+          CONFIG.DEFAULT_FOLDER_ID
+        );
+        this.currentFile.id = result.id;
+        this.saveToRecents(result.id, name);
+        this.setSaveStatus('saved', 'Criado no Drive');
+        setTimeout(() => this.setSaveStatus('', ''), 2000);
+      } catch (e) {
+        console.error('Failed to create on Drive:', e);
+        this.setSaveStatus('error', 'Erro — salvo local');
         this.saveDraft();
       }
-    });
+    } else {
+      this.saveDraft();
+    }
+  },
+
+  /** Focus the editor for immediate typing */
+  focusEditor() {
+    if (this.editor) {
+      // TinyMDE — focus its internal contentEditable element
+      const editable = this.els.editorElement.querySelector('[contenteditable]');
+      if (editable) editable.focus();
+      else this.els.editorElement.focus();
+    } else {
+      this.els.editorElement.focus();
+    }
   },
 
   async save() {
