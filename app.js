@@ -794,8 +794,10 @@ const App = {
       if (e.key === 'Escape') this.hideModal();
     });
 
-    // Toolbar buttons
+    // Toolbar buttons — prevent focus steal so virtual keyboard stays open
     document.querySelectorAll('.toolbar-btn[data-format]').forEach(btn => {
+      btn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
       btn.addEventListener('click', () => {
         const format = btn.dataset.format;
         const formats = {

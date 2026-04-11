@@ -1,5 +1,5 @@
 // Drive Notes — Service Worker
-const CACHE_NAME = 'drivenotes-v2';
+const CACHE_NAME = 'drivenotes-v3';
 
 // Static assets to cache for offline use
 const STATIC_ASSETS = [
