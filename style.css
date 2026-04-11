@@ -237,7 +237,7 @@ body {
   margin: 1em 0;
 }
 
-/* ── Toolbar (bottom) ── */
+/* ── Toolbar (bottom, sticks above virtual keyboard) ── */
 
 .toolbar {
   display: flex;
@@ -249,6 +249,12 @@ body {
   overflow-x: auto;
   flex-shrink: 0;
   -webkit-overflow-scrolling: touch;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  transition: transform 0.1s ease-out;
 }
 
 .toolbar-btn {
@@ -458,11 +464,21 @@ body {
   display: none !important;
 }
 
+/* ── Spacer to compensate for fixed toolbar ── */
+
+.toolbar-spacer {
+  height: 52px; /* matches toolbar height */
+  flex-shrink: 0;
+}
+
 /* ── Safe area for notch phones ── */
 
 @supports (padding: env(safe-area-inset-bottom)) {
   .toolbar {
     padding-bottom: calc(6px + env(safe-area-inset-bottom));
+  }
+  .toolbar-spacer {
+    height: calc(52px + env(safe-area-inset-bottom));
   }
   .header {
     padding-top: calc(8px + env(safe-area-inset-top));

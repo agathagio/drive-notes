@@ -52,6 +52,7 @@ const App = {
 
     this.initEditor();
     this.bindEvents();
+    this.initToolbarKeyboardHandler();
     this.showWelcome();
     this.renderRecents();
   },
@@ -754,6 +755,27 @@ const App = {
   },
 
   // ── Events ──
+
+  /** Keep toolbar visible above virtual keyboard using visualViewport API */
+  initToolbarKeyboardHandler() {
+    const toolbar = document.querySelector('.toolbar');
+    if (!toolbar || !window.visualViewport) return;
+
+    const update = () => {
+      const vv = window.visualViewport;
+      // How much the keyboard is covering: difference between layout and visual viewport
+      const keyboardHeight = window.innerHeight - vv.height;
+      if (keyboardHeight > 50) {
+        // Keyboard is open — move toolbar up
+        toolbar.style.transform = `translateY(-${keyboardHeight}px)`;
+      } else {
+        toolbar.style.transform = '';
+      }
+    };
+
+    window.visualViewport.addEventListener('resize', update);
+    window.visualViewport.addEventListener('scroll', update);
+  },
 
   bindEvents() {
     // Header buttons
