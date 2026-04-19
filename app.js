@@ -137,21 +137,26 @@ const App = {
     }
   },
 
-  /** Save token + expiry to sessionStorage */
+  /** Save token + expiry to localStorage (persists across PWA restarts) */
   saveToken(accessToken, expiresIn) {
     this.accessToken = accessToken;
     const expiresAt = Date.now() + (expiresIn || 3600) * 1000;
-    sessionStorage.setItem('drivenotes_token', accessToken);
-    sessionStorage.setItem('drivenotes_token_expires', expiresAt.toString());
+    localStorage.setItem('drivenotes_token', accessToken);
+    localStorage.setItem('drivenotes_token_expires', expiresAt.toString());
 
     // Schedule silent refresh 5 minutes before expiry
     this.scheduleTokenRefresh(expiresAt);
   },
 
-  /** Restore token from sessionStorage if still valid */
+  /** Restore token from localStorage if still valid. Falls back to legacy sessionStorage. */
   restoreToken() {
-    const token = sessionStorage.getItem('drivenotes_token');
-    const expiresAt = parseInt(sessionStorage.getItem('drivenotes_token_expires') || '0');
+    const token = localStorage.getItem('drivenotes_token')
+      || sessionStorage.getItem('drivenotes_token');
+    const expiresAt = parseInt(
+      localStorage.getItem('drivenotes_token_expires')
+      || sessionStorage.getItem('drivenotes_token_expires')
+      || '0'
+    );
 
     if (token && expiresAt > Date.now() + 60000) {
       // Token exists and has more than 1 minute left
@@ -183,6 +188,8 @@ const App = {
       if (response.error) {
         console.warn('Silent refresh failed:', response.error);
         this.accessToken = null;
+        localStorage.removeItem('drivenotes_token');
+        localStorage.removeItem('drivenotes_token_expires');
         sessionStorage.removeItem('drivenotes_token');
         sessionStorage.removeItem('drivenotes_token_expires');
         return;
@@ -197,7 +204,11 @@ const App = {
   /** Ensure we have a valid access token. Returns a promise. */
   async ensureAuth() {
     // Check if current token is still valid
-    const expiresAt = parseInt(sessionStorage.getItem('drivenotes_token_expires') || '0');
+    const expiresAt = parseInt(
+      localStorage.getItem('drivenotes_token_expires')
+      || sessionStorage.getItem('drivenotes_token_expires')
+      || '0'
+    );
     if (this.accessToken && expiresAt > Date.now() + 60000) {
       return this.accessToken;
     }
@@ -221,6 +232,8 @@ const App = {
   /** Re-authenticate (e.g. after token expiry / 401) */
   async reAuth() {
     this.accessToken = null;
+    localStorage.removeItem('drivenotes_token');
+    localStorage.removeItem('drivenotes_token_expires');
     sessionStorage.removeItem('drivenotes_token');
     sessionStorage.removeItem('drivenotes_token_expires');
 
