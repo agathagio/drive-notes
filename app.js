@@ -28,6 +28,8 @@ const App = {
   tokenClient: null,
   gapiLoaded: false,
   gisLoaded: false,
+  // Tracks an in-flight driveCreateFile so concurrent saves don't duplicate the file on Drive
+  _pendingCreate: null,
 
   // DOM refs
   els: {},
@@ -584,7 +586,8 @@ const App = {
 
   async newFile() {
     const name = this.generateFileName();
-    this.currentFile = { id: null, name: name };
+    const file = { id: null, name: name };
+    this.currentFile = file;
     this.setContent('');
     this.showEditor();
     this.updateFileNameDisplay();
@@ -592,22 +595,32 @@ const App = {
 
     // Create on Drive in background
     if (this.accessToken) {
-      try {
-        this.setSaveStatus('saving', 'Criando no Drive...');
-        const result = await this.driveCreateFile(
-          name,
-          '',
-          CONFIG.DEFAULT_FOLDER_ID
-        );
-        this.currentFile.id = result.id;
-        this.saveToRecents(result.id, name);
-        this.setSaveStatus('saved', 'Criado no Drive');
-        setTimeout(() => this.setSaveStatus('', ''), 2000);
-      } catch (e) {
-        console.error('Failed to create on Drive:', e);
-        this.setSaveStatus('error', 'Erro — salvo local');
-        this.saveDraft();
-      }
+      this.setSaveStatus('saving', 'Criando no Drive...');
+      this._pendingCreate = (async () => {
+        try {
+          const result = await this.driveCreateFile(name, '', CONFIG.DEFAULT_FOLDER_ID);
+          file.id = result.id;
+          // Only update UI if user hasn't navigated to a different file
+          if (this.currentFile === file) {
+            this.saveToRecents(result.id, name);
+            this.setSaveStatus('saved', 'Criado no Drive');
+            setTimeout(() => {
+              if (this.currentFile === file) this.setSaveStatus('', '');
+            }, 2000);
+          }
+          return result;
+        } catch (e) {
+          console.error('Failed to create on Drive:', e);
+          if (this.currentFile === file) {
+            this.setSaveStatus('error', 'Erro — salvo local');
+            this.saveDraft();
+          }
+          throw e;
+        } finally {
+          this._pendingCreate = null;
+        }
+      })();
+      // Don't await — let user type immediately
     } else {
       this.saveDraft();
     }
@@ -628,6 +641,12 @@ const App = {
   async save() {
     if (!this.isDirty) return;
 
+    // If a create is in flight (from newFile), wait for it so we don't duplicate.
+    if (this._pendingCreate) {
+      try { await this._pendingCreate; }
+      catch { /* create failed — fall through, we'll try again below */ }
+    }
+
     const content = this.getContent();
 
     // If we have a Drive file ID, save to Drive
@@ -638,7 +657,7 @@ const App = {
         this.isDirty = false;
         this.updateFileNameDisplay();
         this.setSaveStatus('saved', 'Salvo no Drive');
-        this.saveDraft(); // also keep local draft as backup
+        this.clearDraft(); // synced — drop local backup
         setTimeout(() => this.setSaveStatus('', ''), 3000);
       } catch (e) {
         console.error('Drive save failed:', e);
@@ -646,20 +665,22 @@ const App = {
         this.saveDraft();
       }
     } else if (this.currentFile && !this.currentFile.id && this.accessToken) {
-      // New file not yet on Drive — create it
+      // New file not yet on Drive — create it, tracked to prevent concurrent duplicates
+      const file = this.currentFile;
       this.setSaveStatus('saving', 'Criando no Drive...');
+      this._pendingCreate = (async () => {
+        const result = await this.driveCreateFile(file.name, content, CONFIG.DEFAULT_FOLDER_ID);
+        file.id = result.id;
+        return result;
+      })().finally(() => { this._pendingCreate = null; });
+
       try {
-        const result = await this.driveCreateFile(
-          this.currentFile.name,
-          content,
-          CONFIG.DEFAULT_FOLDER_ID
-        );
-        this.currentFile.id = result.id;
-        this.saveToRecents(result.id, this.currentFile.name);
+        await this._pendingCreate;
+        this.saveToRecents(file.id, file.name);
         this.isDirty = false;
         this.updateFileNameDisplay();
         this.setSaveStatus('saved', 'Salvo no Drive');
-        this.saveDraft();
+        this.clearDraft();
         setTimeout(() => this.setSaveStatus('', ''), 3000);
       } catch (e) {
         console.error('Drive create failed:', e);
@@ -676,6 +697,13 @@ const App = {
     }
   },
 
+  // Drafts are keyed per-file so saving file B doesn't overwrite an unsaved draft of file A.
+  draftKey() {
+    return this.currentFile?.id
+      ? `drivenotes_draft_${this.currentFile.id}`
+      : 'drivenotes_draft_new';
+  },
+
   saveDraft() {
     const draft = {
       name: this.currentFile ? this.currentFile.name : 'sem-titulo.md',
@@ -683,18 +711,32 @@ const App = {
       timestamp: Date.now(),
       fileId: this.currentFile ? this.currentFile.id : null,
     };
-    localStorage.setItem('drivenotes_draft', JSON.stringify(draft));
+    const key = this.draftKey();
+    localStorage.setItem(key, JSON.stringify(draft));
+    localStorage.setItem('drivenotes_draft_latest', key);
+  },
+
+  clearDraft() {
+    localStorage.removeItem(this.draftKey());
+    if (localStorage.getItem('drivenotes_draft_latest') === this.draftKey()) {
+      localStorage.removeItem('drivenotes_draft_latest');
+    }
   },
 
   loadDraft() {
     try {
-      const raw = localStorage.getItem('drivenotes_draft');
+      // Prefer latest per-file key; fall back to legacy single-key draft
+      const latestKey = localStorage.getItem('drivenotes_draft_latest');
+      const raw = (latestKey && localStorage.getItem(latestKey))
+        || localStorage.getItem('drivenotes_draft');
       if (!raw) return false;
 
       const draft = JSON.parse(raw);
       this.currentFile = { id: draft.fileId, name: draft.name };
       this.setContent(draft.content);
       this.showEditor();
+      // Draft exists precisely because it wasn't synced — flag as unsaved
+      this.isDirty = true;
       this.updateFileNameDisplay();
       return true;
     } catch {
@@ -834,6 +876,18 @@ const App = {
       if (this.loadDraft()) {
         this.setSaveStatus('', 'Rascunho carregado');
       }
+    });
+
+    // Flush on hide/close — mobile users switch apps constantly.
+    // saveDraft is sync (localStorage) so it always runs; save() is async best-effort.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden' && this.isDirty) {
+        this.saveDraft();
+        this.save();
+      }
+    });
+    window.addEventListener('pagehide', () => {
+      if (this.isDirty) this.saveDraft();
     });
   },
 };
