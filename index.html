@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#1a1a2e">
+  <meta name="theme-color" content="#FAF8F4">
+  <meta name="theme-color" content="#1B1A17" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Drive Notes</title>
@@ -44,13 +45,20 @@
 
   <!-- ── Welcome screen ── -->
   <div id="welcome" class="welcome">
-    <h2>Drive Notes</h2>
-    <p>Editor de markdown pessoal.<br>Anote ideias rápidas e brain dumps.</p>
-    <button id="welcome-new" class="btn">Nova nota</button>
-    <button id="welcome-open" class="btn">Abrir do Drive</button>
-    <button id="welcome-draft" class="btn">Rascunho local</button>
+    <div class="masthead-meta">№ 47 · editorial</div>
+    <h2>Drive <span class="sans">Notes</span></h2>
+    <p>Um caderno silencioso, sincronizado com o Drive. Pra ideias rápidas, anotações longas, tudo entre.</p>
+
+    <div class="actions">
+      <button id="welcome-new" class="btn btn-primary">Nova nota</button>
+      <div class="actions-row">
+        <button id="welcome-open" class="btn">Abrir do Drive</button>
+        <button id="welcome-draft" class="btn">Rascunho</button>
+      </div>
+    </div>
+
     <div id="recents-list" class="recents-list hidden">
-      <h3>Recentes</h3>
+      <h3><span>Recentes</span><span id="recents-count"></span></h3>
       <ul id="recents-ul"></ul>
     </div>
   </div>
