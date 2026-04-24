@@ -1,304 +1,501 @@
-/* Drive Notes — v2.0 · Editorial minimal redesign
- * Substitui integralmente o style.css antigo.
- * Paleta creme, tinta sóbria, Newsreader (serif) + IBM Plex Mono (meta/código).
- */
+/* Drive Notes — Mobile-first dark theme */
 
 :root {
-  /* paper & ink */
-  --paper:       #FAF8F4;
-  --paper-card:  #FFFFFF;
-  --ink:         #1A1815;
-  --ink-soft:    #3A3835;
-  --muted:       #8C8679;
-  --rule:        #E6E1D6;
-  --accent:      #1A1815;   /* accent = ink for sober feel */
-  --warning:     #B45A1F;
-  --success:     #3F5E40;
-  --error:       #8B2E1F;
-
-  /* type — system sans for UI/content, monospace for editor + meta */
-  --font-sans:   -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono:   "SF Mono", "Fira Code", "Cascadia Code", ui-monospace, Menlo, Consolas, monospace;
-  --font-serif:  var(--font-sans);  /* legacy alias */
-  --font-ui:     var(--font-sans);
+  --bg-primary: #1a1a2e;
+  --bg-secondary: #16213e;
+  --bg-editor: #0f0f1a;
+  --text-primary: #e0e0e0;
+  --text-secondary: #a0a0b0;
+  --accent: #7c5cbf;
+  --accent-hover: #9b7dd4;
+  --border: #2a2a4a;
+  --toolbar-bg: #16213e;
+  --button-bg: #2a2a4a;
+  --button-hover: #3a3a5a;
+  --success: #4caf50;
+  --warning: #ff9800;
+  --error: #f44336;
 }
 
-/* dark mode (mesma vibe, papel crepúsculo) */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper:      #1B1A17;
-    --paper-card: #23221E;
-    --ink:        #EAE6DB;
-    --ink-soft:   #C9C4B6;
-    --muted:      #8A8578;
-    --rule:       #2F2C26;
-    --accent:     #EAE6DB;
-  }
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
 }
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
-
-html, body { height: 100%; overflow: hidden; }
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
 
 body {
-  font-family: var(--font-ui);
-  background: var(--paper);
-  color: var(--ink);
-  display: flex; flex-direction: column; height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   touch-action: manipulation;
-  -webkit-font-smoothing: antialiased;
 }
 
-/* ── Header (minimal topbar) ── */
+/* ── Header ── */
+
 .header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 18px; background: var(--paper);
-  border-bottom: 1px solid var(--rule);
-  min-height: 48px; flex-shrink: 0; gap: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  min-height: 48px;
+  flex-shrink: 0;
 }
-.header-left { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; }
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
 .file-name {
-  font-family: var(--font-serif); font-size: 16px; font-weight: 500;
-  color: var(--ink); letter-spacing: -0.1px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.file-name::before { content: '○ '; color: var(--muted); font-family: var(--font-mono); font-size: 12px; }
-.file-name.unsaved::before { content: '● '; color: var(--warning); }
+
+.file-name.unsaved::after {
+  content: ' •';
+  color: var(--warning);
+}
+
 .save-status {
-  font-family: var(--font-mono); font-size: 11px; color: var(--muted);
-  letter-spacing: 0.4px; text-transform: uppercase; white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
-.save-status.saving { color: var(--warning); }
-.save-status.saved  { color: var(--success); }
-.save-status.error  { color: var(--error); }
-.header-actions { display: flex; gap: 14px; flex-shrink: 0; }
+
+.save-status.saving {
+  color: var(--warning);
+}
+
+.save-status.saved {
+  color: var(--success);
+}
+
+.save-status.error {
+  color: var(--error);
+}
+
+.header-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
 
 /* ── Buttons ── */
-.btn {
-  background: transparent; color: var(--ink);
-  border: 1px solid var(--rule); border-radius: 2px;
-  padding: 12px 16px; font-family: var(--font-serif); font-size: 14px;
-  cursor: pointer; white-space: nowrap;
-  -webkit-tap-highlight-color: transparent;
-  transition: background 0.12s ease;
-}
-.btn:hover, .btn:active { background: var(--rule); }
-.btn.active, .btn-primary {
-  background: var(--accent); color: var(--paper-card); border-color: var(--accent);
-}
-.btn-icon {
-  padding: 6px; background: none; border: none; color: var(--muted);
-  display: flex; align-items: center; justify-content: center;
-}
-.btn-icon:hover { color: var(--ink); background: none; }
 
-/* ── Welcome (masthead) ── */
-.welcome {
-  flex: 1; display: flex; flex-direction: column;
-  padding: 28px 28px 20px; overflow-y: auto;
+.btn {
+  background: var(--button-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.btn:hover, .btn:active {
+  background: var(--button-hover);
+}
+
+.btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.btn-icon {
+  padding: 6px 8px;
+  font-size: 16px;
+}
+
+/* ── Editor area ── */
+
+.editor-container {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* TinyMDE injects a child <div class="TinyMDE"> inside #editor.
+   Both need to participate in the flex chain so the editor scrolls
+   internally instead of overflowing the container. */
+#editor {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* TinyMDE editor */
+.TinyMDE {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 15px;
+  line-height: 1.6;
+  background: var(--bg-editor);
+  color: var(--text-primary);
+  outline: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* TinyMDE inline styling overrides */
+.TinyMDE .TMHeading1 { font-size: 1.5em; font-weight: 700; color: #bb86fc; }
+.TinyMDE .TMHeading2 { font-size: 1.3em; font-weight: 600; color: #bb86fc; }
+.TinyMDE .TMHeading3 { font-size: 1.1em; font-weight: 600; color: #bb86fc; }
+.TinyMDE .TMBold { font-weight: 700; }
+.TinyMDE .TMItalic { font-style: italic; }
+.TinyMDE .TMCode { background: rgba(255,255,255,0.08); padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+.TinyMDE .TMLink { color: var(--accent-hover); text-decoration: underline; }
+.TinyMDE .TMMark { color: var(--text-secondary); }
+.TinyMDE .TMBlockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--text-secondary); }
+.TinyMDE .TMListItem::before { color: var(--accent); }
+
+/* Fallback textarea (if TinyMDE fails to load) */
+.editor-fallback {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  padding: 16px;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 15px;
+  line-height: 1.6;
+  background: var(--bg-editor);
+  color: var(--text-primary);
+  border: none;
+  outline: none;
+  resize: none;
   -webkit-overflow-scrolling: touch;
 }
-.welcome .masthead-meta {
-  font-family: var(--font-mono); font-size: 11px; color: var(--muted);
-  letter-spacing: 2.6px; text-transform: uppercase; margin-bottom: 6px;
-}
-.welcome h2 {
-  font-family: var(--font-sans); font-size: 40px; font-weight: 600;
-  color: var(--ink); letter-spacing: -1.2px; line-height: 1.05;
-}
-.welcome h2 .sans { font-weight: 400; color: var(--muted); }
-.welcome p {
-  font-family: var(--font-serif); font-size: 15px; color: var(--muted);
-  line-height: 1.5; max-width: 280px; margin-top: 8px;
-}
-.welcome .actions { display: flex; flex-direction: column; gap: 10px; margin: 24px 0 12px; }
-.welcome .actions-row { display: flex; gap: 10px; }
-.welcome .actions-row .btn { flex: 1; }
-
-/* ── Recents list ── */
-.recents-list {
-  width: 100%; margin-top: 4px;
-  border-top: 1px solid var(--rule);
-}
-.recents-list h3 {
-  font-family: var(--font-mono); font-size: 11px; color: var(--muted);
-  letter-spacing: 2.4px; text-transform: uppercase;
-  padding: 12px 0 8px; display: flex; justify-content: space-between;
-  font-weight: 400;
-}
-.recents-list ul { list-style: none; padding: 0; }
-.recents-list li {
-  padding: 12px 0; border-top: 1px solid var(--rule);
-  display: flex; align-items: baseline; gap: 12px;
-}
-.recents-list .recent-name {
-  font-family: var(--font-serif); font-size: 16px; color: var(--ink);
-  letter-spacing: -0.1px; flex: 1; min-width: 0;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  cursor: pointer;
-}
-.recents-list .recent-time {
-  font-family: var(--font-mono); font-size: 11px; color: var(--muted);
-  flex-shrink: 0; text-align: right;
-}
-.recents-list .recent-remove {
-  background: none; border: none; color: var(--muted); font-size: 16px;
-  cursor: pointer; padding: 0 4px; flex-shrink: 0; opacity: 0;
-  transition: opacity 0.15s;
-}
-.recents-list li:hover .recent-remove { opacity: 1; }
-@media (hover: none) { .recents-list .recent-remove { opacity: 0.5; } }
-
-/* ── Editor ── */
-.editor-container {
-  flex: 1; overflow: hidden; position: relative;
-  display: flex; flex-direction: column;
-}
-#editor { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
-
-.TinyMDE, .editor-fallback {
-  flex: 1 1 0; min-height: 0;
-  padding: 24px 26px;
-  font-family: var(--font-mono);
-  font-size: 15px; line-height: 1.6; letter-spacing: 0;
-  background: var(--paper); color: var(--ink);
-  border: none; outline: none; resize: none;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
-}
-
-/* TinyMDE inline styling — Bear-style visible markers in soft ink */
-.TinyMDE .TMHeading1, .TinyMDE .TMHeading2, .TinyMDE .TMHeading3 {
-  font-family: var(--font-serif); font-weight: 500; color: var(--ink);
-  letter-spacing: -0.4px;
-}
-.TinyMDE .TMHeading1 { font-size: 1.6em; }
-.TinyMDE .TMHeading2 { font-size: 1.3em; }
-.TinyMDE .TMHeading3 { font-size: 1.1em; }
-.TinyMDE .TMBold    { font-weight: 600; }
-.TinyMDE .TMItalic  { font-style: italic; }
-.TinyMDE .TMCode    {
-  font-family: var(--font-mono); font-size: 0.88em;
-  background: var(--rule); padding: 1px 6px; border-radius: 2px;
-}
-.TinyMDE .TMLink    { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
-.TinyMDE .TMMark    {
-  color: var(--muted); font-family: var(--font-mono); font-weight: 400;
-  font-size: 0.75em;
-}
-.TinyMDE .TMBlockquote {
-  border-left: 2px solid var(--accent); padding-left: 14px;
-  color: var(--muted); font-style: italic;
-}
-.TinyMDE .TMListItem::before { color: var(--muted); }
 
 /* ── Preview ── */
+
 .preview-container {
-  flex: 1 1 0; min-height: 0;
-  padding: 24px 26px; background: var(--paper);
-  font-family: var(--font-serif); font-size: 17px; line-height: 1.65;
-  color: var(--ink); letter-spacing: -0.1px;
-  overflow-y: auto; display: none;
-  -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  background: var(--bg-editor);
+  display: none;
+  -webkit-overflow-scrolling: touch;
 }
-.preview-container.visible { display: block; }
-.preview-container h1, .preview-container h2, .preview-container h3 {
-  font-family: var(--font-serif); font-weight: 500; color: var(--ink);
-  letter-spacing: -0.4px; margin: 0.8em 0 0.4em;
+
+.preview-container.visible {
+  display: block;
 }
-.preview-container h1 { font-size: 1.7em; letter-spacing: -0.8px; }
-.preview-container h2 { font-size: 1.3em; }
-.preview-container h3 { font-size: 1.1em; }
-.preview-container p  { margin: 0 0 0.8em; }
-.preview-container a  { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+
+.preview-container h1 { font-size: 1.5em; margin: 0.5em 0 0.3em; color: #bb86fc; }
+.preview-container h2 { font-size: 1.3em; margin: 0.5em 0 0.3em; color: #bb86fc; }
+.preview-container h3 { font-size: 1.1em; margin: 0.5em 0 0.3em; color: #bb86fc; }
+.preview-container p { margin: 0.4em 0; }
+.preview-container a { color: var(--accent-hover); }
 .preview-container code {
-  background: var(--rule); padding: 1px 6px; border-radius: 2px;
-  font-family: var(--font-mono); font-size: 0.88em;
+  background: rgba(255,255,255,0.08);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.9em;
 }
 .preview-container pre {
-  background: var(--paper-card); border: 1px solid var(--rule);
-  padding: 12px 14px; border-radius: 2px; overflow-x: auto;
-  margin: 0.8em 0;
+  background: rgba(255,255,255,0.05);
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0.5em 0;
 }
-.preview-container pre code { background: none; padding: 0; border: 0; }
+.preview-container pre code {
+  background: none;
+  padding: 0;
+}
 .preview-container blockquote {
-  border-left: 2px solid var(--accent); padding-left: 14px;
-  color: var(--muted); font-style: italic; margin: 0.8em 0;
+  border-left: 3px solid var(--accent);
+  padding-left: 12px;
+  color: var(--text-secondary);
+  margin: 0.5em 0;
 }
-.preview-container ul, .preview-container ol { padding-left: 24px; margin: 0 0 0.8em; }
-.preview-container img { max-width: 100%; border-radius: 2px; }
-.preview-container hr  { border: none; border-top: 1px solid var(--rule); margin: 1.2em 0; }
+.preview-container ul, .preview-container ol {
+  padding-left: 24px;
+  margin: 0.4em 0;
+}
+.preview-container img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+.preview-container hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1em 0;
+}
 
-/* ── Toolbar (bottom; opção C → só aparece com teclado) ── */
+/* ── Toolbar (bottom, sticks above virtual keyboard) ── */
+
 .toolbar {
-  display: flex; align-items: center; gap: 2px;
-  padding: 10px 12px; background: var(--paper);
-  border-top: 1px solid var(--rule);
-  overflow-x: auto; flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--toolbar-bg);
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
   -webkit-overflow-scrolling: touch;
-  position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
-  transition: transform 0.15s ease-out;
-  /* opção C: hidden por padrão, só aparece quando .keyboard-open está no body */
-  transform: translateY(100%);
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  transition: transform 0.1s ease-out;
 }
-body.keyboard-open .toolbar { transform: translateY(0); }
+
 .toolbar-btn {
-  background: none; color: var(--muted); border: none;
-  padding: 8px 10px; font-size: 14px; font-weight: 500;
-  cursor: pointer; flex: 1; min-width: 36px; text-align: center;
-  font-family: var(--font-mono);
+  background: none;
+  color: var(--text-secondary);
+  border: none;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  min-width: 36px;
+  text-align: center;
   -webkit-tap-highlight-color: transparent;
 }
-.toolbar-btn:hover, .toolbar-btn:active { color: var(--ink); }
-.toolbar-separator {
-  width: 1px; height: 16px; background: var(--rule);
-  margin: 0 6px; flex-shrink: 0;
+
+.toolbar-btn:hover, .toolbar-btn:active {
+  background: var(--button-bg);
+  color: var(--text-primary);
 }
 
-/* ── Modal (nova nota) ── */
+.toolbar-separator {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+/* ── Modal (new file dialog) ── */
+
 .modal-overlay {
-  position: fixed; inset: 0; background: rgba(26,24,21,0.4);
-  display: none; align-items: center; justify-content: center;
-  z-index: 100; padding: 20px;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
 }
-.modal-overlay.visible { display: flex; }
+
+.modal-overlay.visible {
+  display: flex;
+}
+
 .modal {
-  background: var(--paper-card); border: 1px solid var(--rule);
-  border-radius: 2px; padding: 24px; width: 100%; max-width: 360px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  width: 100%;
+  max-width: 360px;
 }
+
 .modal h3 {
-  font-family: var(--font-serif); font-size: 22px; font-weight: 500;
-  letter-spacing: -0.3px; margin-bottom: 14px;
+  font-size: 16px;
+  margin-bottom: 12px;
 }
+
 .modal input {
-  width: 100%; padding: 12px 14px;
-  font-family: var(--font-mono); font-size: 14px;
-  background: var(--paper); color: var(--ink);
-  border: 1px solid var(--rule); border-radius: 2px;
-  outline: none; margin-bottom: 14px;
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 15px;
+  background: var(--bg-editor);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  margin-bottom: 12px;
 }
-.modal input:focus { border-color: var(--ink); }
-.modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+.modal input:focus {
+  border-color: var(--accent);
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* ── Welcome screen ── */
+
+.welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 32px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.welcome h2 {
+  color: var(--text-primary);
+  font-size: 20px;
+}
+
+.welcome p {
+  font-size: 14px;
+  max-width: 280px;
+  line-height: 1.5;
+}
+
+.welcome .btn {
+  font-size: 15px;
+  padding: 10px 20px;
+}
+
+/* ── Recents list ── */
+
+.recents-list {
+  width: 100%;
+  max-width: 320px;
+  margin-top: 8px;
+  text-align: left;
+}
+
+.recents-list h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.recents-list ul {
+  list-style: none;
+  padding: 0;
+}
+
+.recents-list li {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.recents-list li:hover, .recents-list li:active {
+  background: var(--button-bg);
+}
+
+.recents-list .recent-name {
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.recents-list .recent-time {
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.recents-list .recent-remove {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.recents-list li:hover .recent-remove {
+  opacity: 1;
+}
+
+/* Always show on touch devices */
+@media (hover: none) {
+  .recents-list .recent-remove {
+    opacity: 0.5;
+  }
+}
 
 /* ── Scrollbar ── */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 0; }
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
 
 /* ── Utilities ── */
-.hidden { display: none !important; }
-.toolbar-spacer { height: 0; flex-shrink: 0; }
-body.keyboard-open .toolbar-spacer { height: 52px; }
 
-/* ── Safe-area (gesture bar Android + notch iPhone) ── */
+.hidden {
+  display: none !important;
+}
+
+/* ── Spacer to compensate for fixed toolbar ── */
+
+.toolbar-spacer {
+  height: 52px; /* matches toolbar height */
+  flex-shrink: 0;
+}
+
+/* ── Safe area for notch phones ── */
+
 @supports (padding: env(safe-area-inset-bottom)) {
   .toolbar {
-    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    padding-bottom: calc(6px + env(safe-area-inset-bottom));
   }
-  body.keyboard-open .toolbar-spacer {
+  .toolbar-spacer {
     height: calc(52px + env(safe-area-inset-bottom));
   }
   .header {
-    padding-top: calc(10px + env(safe-area-inset-top));
+    padding-top: calc(8px + env(safe-area-inset-top));
   }
 }

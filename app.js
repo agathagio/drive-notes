@@ -811,47 +811,25 @@ const App = {
 
   // ── Events ──
 
-  /** Keep toolbar visible above virtual keyboard, and toggle body.keyboard-open
-   *  so CSS can show/hide the toolbar (v2.0 opção C). */
+  /** Keep toolbar visible above virtual keyboard using visualViewport API */
   initToolbarKeyboardHandler() {
     const toolbar = document.querySelector('.toolbar');
-    if (!toolbar) return;
+    if (!toolbar || !window.visualViewport) return;
 
     const update = () => {
       const vv = window.visualViewport;
-      if (!vv) return;
+      // How much the keyboard is covering: difference between layout and visual viewport
       const keyboardHeight = window.innerHeight - vv.height;
-      const open = keyboardHeight > 50;
-
-      document.body.classList.toggle('keyboard-open', open);
-
-      if (open) {
-        toolbar.style.bottom = `${keyboardHeight}px`;
+      if (keyboardHeight > 50) {
+        // Keyboard is open — move toolbar up
+        toolbar.style.transform = `translateY(-${keyboardHeight}px)`;
       } else {
-        toolbar.style.bottom = '';
+        toolbar.style.transform = '';
       }
     };
 
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', update);
-      window.visualViewport.addEventListener('scroll', update);
-    }
-
-    // Fallback / desktop: show toolbar when editor has focus
-    const showOnFocus = () => document.body.classList.add('keyboard-open');
-    const hideOnBlur  = () => {
-      setTimeout(() => {
-        if (!document.activeElement || !document.activeElement.closest('.editor-container, .toolbar')) {
-          document.body.classList.remove('keyboard-open');
-        }
-      }, 150);
-    };
-    document.addEventListener('focusin', (e) => {
-      if (e.target.closest('.editor-container')) showOnFocus();
-    });
-    document.addEventListener('focusout', (e) => {
-      if (e.target.closest('.editor-container')) hideOnBlur();
-    });
+    window.visualViewport.addEventListener('resize', update);
+    window.visualViewport.addEventListener('scroll', update);
   },
 
   bindEvents() {
