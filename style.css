@@ -3,9 +3,6 @@
  * Paleta creme, tinta sóbria, Newsreader (serif) + IBM Plex Mono (meta/código).
  */
 
-/* ── Fontes via Google Fonts ── */
-@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=IBM+Plex+Mono:wght@400;500&display=swap');
-
 :root {
   /* paper & ink */
   --paper:       #FAF8F4;
@@ -19,10 +16,11 @@
   --success:     #3F5E40;
   --error:       #8B2E1F;
 
-  /* type */
-  --font-serif:  "Newsreader", Georgia, "Times New Roman", serif;
-  --font-mono:   "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  --font-ui:     "Newsreader", Georgia, serif;
+  /* type — system sans for UI/content, monospace for editor + meta */
+  --font-sans:   -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono:   "SF Mono", "Fira Code", "Cascadia Code", ui-monospace, Menlo, Consolas, monospace;
+  --font-serif:  var(--font-sans);  /* legacy alias */
+  --font-ui:     var(--font-sans);
 }
 
 /* dark mode (mesma vibe, papel crepúsculo) */
@@ -105,11 +103,10 @@ body {
   letter-spacing: 2.6px; text-transform: uppercase; margin-bottom: 6px;
 }
 .welcome h2 {
-  font-family: var(--font-serif); font-size: 52px; font-weight: 400;
-  color: var(--ink); letter-spacing: -1.6px; line-height: 1;
-  font-style: italic;
+  font-family: var(--font-sans); font-size: 40px; font-weight: 600;
+  color: var(--ink); letter-spacing: -1.2px; line-height: 1.05;
 }
-.welcome h2 .sans { font-style: normal; font-weight: 300; }
+.welcome h2 .sans { font-weight: 400; color: var(--muted); }
 .welcome p {
   font-family: var(--font-serif); font-size: 15px; color: var(--muted);
   line-height: 1.5; max-width: 280px; margin-top: 8px;
@@ -162,8 +159,8 @@ body {
 .TinyMDE, .editor-fallback {
   flex: 1 1 0; min-height: 0;
   padding: 24px 26px;
-  font-family: var(--font-serif);
-  font-size: 17px; line-height: 1.62; letter-spacing: -0.1px;
+  font-family: var(--font-mono);
+  font-size: 15px; line-height: 1.6; letter-spacing: 0;
   background: var(--paper); color: var(--ink);
   border: none; outline: none; resize: none;
   overflow-y: auto;
