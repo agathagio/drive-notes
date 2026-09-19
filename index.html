@@ -29,11 +29,12 @@
   <script async defer src="https://apis.google.com/js/api.js" onload="onGapiLoaded()"></script>
   <script async defer src="https://accounts.google.com/gsi/client" onload="onGisLoaded()"></script>
 </head>
-<body>
+<body data-view="welcome">
 
   <!-- ── Header ── -->
   <header class="header">
     <div class="header-left">
+      <button id="btn-back" class="btn btn-icon btn-back" title="Voltar" aria-label="Voltar">&#8592;</button>
       <span id="file-name" class="file-name">Drive Notes</span>
       <span id="save-status" class="save-status"></span>
     </div>
@@ -41,7 +42,7 @@
       <button id="btn-new" class="btn btn-icon" title="Nova nota">+</button>
       <button id="btn-open" class="btn btn-icon" title="Abrir do Drive">&#128194;</button>
       <button id="btn-save" class="btn btn-icon" title="Salvar">&#128190;</button>
-      <button id="btn-preview" class="btn">Preview</button>
+      <button id="btn-preview" class="btn btn-mode">Ler</button>
     </div>
   </header>
 

@@ -209,11 +209,123 @@ body {
   display: block;
 }
 
-.preview-container h1 { font-size: 1.5em; margin: 0.5em 0 0.3em; color: #bb86fc; }
-.preview-container h2 { font-size: 1.3em; margin: 0.5em 0 0.3em; color: #bb86fc; }
-.preview-container h3 { font-size: 1.1em; margin: 0.5em 0 0.3em; color: #bb86fc; }
-.preview-container p { margin: 0.4em 0; }
+/* Reading view: comfortable measure on a phone, capped on wider screens */
+.preview-container {
+  font-size: 16px;
+  line-height: 1.65;
+  overflow-wrap: break-word;
+  padding-left: max(16px, calc((100% - 68ch) / 2));
+  padding-right: max(16px, calc((100% - 68ch) / 2));
+  padding-bottom: calc(32px + env(safe-area-inset-bottom, 0px));
+}
+
+.preview-container h1 { font-size: 1.5em; line-height: 1.25; margin: 1em 0 0.4em; color: #bb86fc; }
+.preview-container h2 { font-size: 1.3em; line-height: 1.3; margin: 1em 0 0.4em; color: #bb86fc; }
+.preview-container h3 { font-size: 1.1em; line-height: 1.35; margin: 0.9em 0 0.3em; color: #bb86fc; }
+.preview-container h4,
+.preview-container h5,
+.preview-container h6 { font-size: 1em; margin: 0.8em 0 0.3em; color: var(--accent-hover); }
+.preview-container > :first-child { margin-top: 0; }
+.preview-container p { margin: 0.6em 0; }
 .preview-container a { color: var(--accent-hover); }
+.preview-container li { margin: 0.2em 0; }
+
+/* Wikilinks */
+.preview-container a.wikilink {
+  text-decoration: none;
+  border-bottom: 1px dashed var(--accent-hover);
+}
+.preview-container .wikilink-file {
+  color: var(--text-secondary);
+  font-size: 0.9em;
+  font-style: italic;
+}
+
+/* Task lists */
+.preview-container li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -22px;
+}
+.preview-container li > input[type="checkbox"] {
+  margin-right: 8px;
+  accent-color: var(--accent);
+  transform: scale(1.15);
+}
+
+/* Tables: scroll sideways inside their own box */
+.preview-container .table-wrap {
+  overflow-x: auto;
+  margin-top: 0.8em;
+  margin-bottom: 0.8em;
+  -webkit-overflow-scrolling: touch;
+}
+.preview-container table {
+  border-collapse: collapse;
+  font-size: 0.9em;
+  line-height: 1.4;
+}
+.preview-container th,
+.preview-container td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.preview-container th {
+  background: var(--bg-secondary);
+  font-weight: 600;
+}
+.preview-container tr:nth-child(even) td {
+  background: rgba(255,255,255,0.03);
+}
+
+/* Callouts: > [!note] Title */
+.preview-container blockquote.callout {
+  --callout: var(--accent-hover);
+  border-left: 3px solid var(--callout);
+  background: rgba(255,255,255,0.04);
+  border-radius: 0 6px 6px 0;
+  padding: 10px 12px;
+  color: var(--text-primary);
+}
+.preview-container .callout-title {
+  font-weight: 600;
+  color: var(--callout);
+  margin-bottom: 4px;
+}
+.preview-container .callout[data-callout="warning"],
+.preview-container .callout[data-callout="caution"],
+.preview-container .callout[data-callout="attention"],
+.preview-container .callout[data-callout="question"],
+.preview-container .callout[data-callout="todo"] { --callout: var(--warning); }
+.preview-container .callout[data-callout="danger"],
+.preview-container .callout[data-callout="error"],
+.preview-container .callout[data-callout="bug"],
+.preview-container .callout[data-callout="failure"] { --callout: var(--error); }
+.preview-container .callout[data-callout="success"],
+.preview-container .callout[data-callout="check"],
+.preview-container .callout[data-callout="done"],
+.preview-container .callout[data-callout="tip"] { --callout: var(--success); }
+
+/* Frontmatter: collapsed by default */
+.preview-container .frontmatter {
+  margin-bottom: 1em;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.8em;
+  color: var(--text-secondary);
+}
+.preview-container .frontmatter summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.preview-container .frontmatter pre {
+  margin: 0;
+  border-radius: 0 0 6px 6px;
+  white-space: pre-wrap;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
 .preview-container code {
   background: rgba(255,255,255,0.08);
   padding: 1px 4px;
@@ -493,6 +605,25 @@ body {
 ::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 3px;
+}
+
+/* ── Views (body[data-view] = welcome | edit | preview) ── */
+
+/* The formatting toolbar only exists while editing */
+body:not([data-view="edit"]) .toolbar,
+body:not([data-view="edit"]) .toolbar-spacer {
+  display: none;
+}
+
+body[data-view="welcome"] .btn-back,
+body[data-view="welcome"] .btn-mode,
+body[data-view="welcome"] #btn-save,
+body[data-view="preview"] #btn-save {
+  display: none;
+}
+
+.btn-back {
+  flex-shrink: 0;
 }
 
 /* ── Utilities ── */

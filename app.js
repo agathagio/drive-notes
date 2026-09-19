@@ -35,6 +35,8 @@ const App = {
   _saveChain: Promise.resolve(),
   // Bumped on every file open; a slow load that lost the race is discarded
   _loadSeq: 0,
+  // Views left behind, for "back": { id, name } of a note, or null for the welcome screen
+  navStack: [],
 
   // DOM refs
   els: {},
@@ -43,6 +45,7 @@ const App = {
     this.els = {
       fileName: document.getElementById('file-name'),
       saveStatus: document.getElementById('save-status'),
+      btnBack: document.getElementById('btn-back'),
       btnNew: document.getElementById('btn-new'),
       btnOpen: document.getElementById('btn-open'),
       btnSave: document.getElementById('btn-save'),
@@ -337,15 +340,16 @@ const App = {
     this.openFile(doc[google.picker.Document.ID], doc[google.picker.Document.NAME]);
   },
 
-  /** Open a Drive file in the editor. Shared by the Picker and the recents list. */
-  async openFile(fileId, fileName) {
+  /** Open a Drive file, in the reading view. Shared by the Picker, the recents list, links and "back".
+      `heading` scrolls to a title once open; `isBack` means we are returning, so the view left is not remembered. */
+  async openFile(fileId, fileName, { heading = '', isBack = false } = {}) {
     const draftKey = `drivenotes_draft_${fileId}`;
 
     try {
       await this.ensureAuth();
     } catch {
       // No login (offline, popup blocked): unsynced local edits of this file are still reachable
-      if (!this.openDraft(draftKey)) this.setSaveStatus('error', 'Faça login primeiro');
+      if (!this.openDraft(draftKey, { isBack })) this.setSaveStatus('error', 'Faça login primeiro');
       return;
     }
 
@@ -365,10 +369,12 @@ const App = {
       console.error('Failed to load file:', e);
       if (seq !== this._loadSeq) return;
       // Offline or Drive error: unsynced local edits of this file are still reachable
-      if (!this.openDraft(draftKey)) this.setSaveStatus('error', 'Erro ao carregar');
+      if (!this.openDraft(draftKey, { isBack })) this.setSaveStatus('error', 'Erro ao carregar');
       return;
     }
     if (seq !== this._loadSeq) return; // another file was opened meanwhile
+
+    if (!isBack) this.pushNav();
 
     const file = {
       id: fileId,
@@ -394,7 +400,8 @@ const App = {
       this.setContent(content);
       // What the editor gives back for an untouched file, so opening never counts as a change
       file.lastSavedContent = this.getContent();
-      this.showEditor();
+      this.showEditor('preview');
+      this.scrollToHeading(heading);
       this.setSaveStatus('saved', 'Carregado');
       setTimeout(() => {
         if (this.currentFile === file) this.setSaveStatus('', '');
@@ -430,6 +437,20 @@ const App = {
       `https://www.googleapis.com/drive/v3/files/${fileId}?fields=${fields}`
     );
     return response.json();
+  },
+
+  /** Files with exactly one of these names, anywhere in Drive, newest first */
+  async driveFindByName(names) {
+    const quote = (s) => `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+    const q = `(${names.map(n => `name = ${quote(n)}`).join(' or ')}) and trashed = false`;
+    const params = new URLSearchParams({
+      q,
+      fields: 'files(id,name,parents,mimeType)',
+      orderBy: 'modifiedTime desc',
+      pageSize: '20',
+    });
+    const response = await this.driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
+    return (await response.json()).files || [];
   },
 
   /** Fetch file content by ID */
@@ -591,38 +612,215 @@ const App = {
     this.els.welcome.classList.remove('hidden');
     this.els.editorContainer.classList.add('hidden');
     this.els.previewContainer.classList.remove('visible');
+    // The stylesheet keys off data-view: the formatting toolbar only exists while editing
+    document.body.dataset.view = 'welcome';
   },
 
-  showEditor() {
+  showEditor(mode = 'edit') {
     this.els.welcome.classList.add('hidden');
-    this.els.editorContainer.classList.remove('hidden');
-    this.setMode('edit');
+    this.setMode(mode);
   },
 
   setMode(mode) {
     this.mode = mode;
+    document.body.dataset.view = mode;
 
     if (mode === 'preview') {
-      const content = this.getContent();
-      // The token in this page has full Drive scope, so rendered HTML is never trusted:
-      // without the sanitizer the note is shown as plain text instead
-      const sanitized = typeof DOMPurify !== 'undefined';
-      if (sanitized) {
-        this.els.previewContainer.innerHTML = DOMPurify.sanitize(marked.parse(content));
-      } else {
-        this.els.previewContainer.textContent = content;
-      }
-      this.els.previewContainer.style.whiteSpace = sanitized ? '' : 'pre-wrap';
+      this.renderPreview();
       this.els.editorContainer.classList.add('hidden');
       this.els.previewContainer.classList.add('visible');
-      this.els.btnPreview.classList.add('active');
+      this.els.previewContainer.scrollTop = 0;
       this.els.btnPreview.textContent = 'Editar';
     } else {
       this.els.editorContainer.classList.remove('hidden');
       this.els.previewContainer.classList.remove('visible');
-      this.els.btnPreview.classList.remove('active');
-      this.els.btnPreview.textContent = 'Preview';
+      this.els.btnPreview.textContent = 'Ler';
     }
+  },
+
+  // ── Reading view ──
+
+  renderPreview() {
+    const container = this.els.previewContainer;
+    const { frontmatter, body } = this.splitFrontmatter(this.getContent());
+
+    // The token in this page has full Drive scope, so rendered HTML is never trusted:
+    // without the sanitizer (or the renderer) the note is shown as plain text instead
+    const canRender = typeof DOMPurify !== 'undefined' && typeof marked !== 'undefined';
+    container.style.whiteSpace = canRender ? '' : 'pre-wrap';
+    if (!canRender) {
+      container.textContent = body;
+      return;
+    }
+
+    container.innerHTML = DOMPurify.sanitize(marked.parse(body));
+    this.decoratePreview(container);
+
+    if (frontmatter) {
+      // YAML properties: out of the way, one tap to see. Shown raw, never parsed.
+      const details = document.createElement('details');
+      details.className = 'frontmatter';
+      const summary = document.createElement('summary');
+      summary.textContent = 'Propriedades';
+      const pre = document.createElement('pre');
+      pre.textContent = frontmatter;
+      details.append(summary, pre);
+      container.prepend(details);
+    }
+  },
+
+  /** Split a leading YAML block (--- ... ---) from the note body */
+  splitFrontmatter(content) {
+    const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(content);
+    if (!match) return { frontmatter: '', body: content };
+    return { frontmatter: match[1], body: content.slice(match[0].length) };
+  },
+
+  /** Obsidian-flavoured touches on the already sanitized DOM */
+  decoratePreview(container) {
+    // Wide tables scroll sideways inside their own box instead of stretching the page
+    container.querySelectorAll('table').forEach(table => {
+      const wrap = document.createElement('div');
+      wrap.className = 'table-wrap';
+      table.replaceWith(wrap);
+      wrap.appendChild(table);
+    });
+
+    // Callouts: a blockquote whose first line is [!type] Optional title
+    container.querySelectorAll('blockquote').forEach(quote => {
+      const first = quote.querySelector(':scope > p');
+      const textNode = first?.firstChild;
+      if (!textNode || textNode.nodeType !== Node.TEXT_NODE) return;
+      const match = /^\[!([\w-]+)\][+-]?[ \t]*(.*)$/.exec(textNode.textContent.trim());
+      if (!match) return;
+
+      const type = match[1].toLowerCase();
+      const title = document.createElement('div');
+      title.className = 'callout-title';
+      title.textContent = match[2] || type.charAt(0).toUpperCase() + type.slice(1);
+
+      if (textNode.nextSibling?.nodeName === 'BR') textNode.nextSibling.remove();
+      textNode.remove();
+      if (!first.textContent.trim() && !first.children.length) first.remove();
+      quote.prepend(title);
+      quote.classList.add('callout');
+      quote.dataset.callout = type;
+    });
+  },
+
+  /** Taps inside the reading view: wikilinks and relative .md links open notes, the rest leaves the app */
+  onPreviewClick(e) {
+    const link = e.target.closest('a');
+    if (!link || !this.els.previewContainer.contains(link)) return;
+    e.preventDefault();
+
+    if (link.classList.contains('wikilink')) {
+      this.followLink(link.dataset.target || '', link.dataset.heading || '');
+      return;
+    }
+
+    const href = link.getAttribute('href') || '';
+    if (href.startsWith('#')) {
+      this.scrollToHeading(decodeURIComponent(href.slice(1)));
+    } else if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+      window.open(href, '_blank', 'noopener');
+    } else {
+      // Relative link to another note: [texto](pasta/nota.md#titulo)
+      const [file, heading = ''] = decodeURIComponent(href).split('#');
+      this.followLink(file, heading);
+    }
+  },
+
+  /** Open the note a link points to. Notes are found by file name, like Obsidian does. */
+  async followLink(target, heading) {
+    if (!target) {
+      this.scrollToHeading(heading);
+      return;
+    }
+
+    const base = target.split('/').pop().trim();
+    const names = /\.md$/i.test(base) ? [base] : [`${base}.md`, base];
+    this.setSaveStatus('saving', 'Procurando...');
+
+    let matches;
+    try {
+      await this.ensureAuth();
+      matches = await this.driveFindByName(names);
+    } catch (e) {
+      console.error('Link lookup failed:', e);
+      this.setSaveStatus('error', 'Erro ao procurar a nota');
+      return;
+    }
+
+    const isText = (f) => /\.(md|markdown|txt)$/i.test(f.name) || (f.mimeType || '').startsWith('text/');
+    const notes = matches.filter(isText);
+    if (!notes.length) {
+      this.setSaveStatus('error', matches.length ? `Não abro esse tipo: ${base}` : `Nota não encontrada: ${base}`);
+      return;
+    }
+
+    // Same name in more than one place: the one next to the open note wins, then .md over the rest
+    const folder = this.currentFile?.parents?.[0];
+    const pick = notes.find(f => folder && f.parents?.includes(folder))
+      || notes.find(f => /\.md$/i.test(f.name))
+      || notes[0];
+
+    await this.openFile(pick.id, pick.name, { heading });
+  },
+
+  scrollToHeading(heading) {
+    if (!heading) return;
+    const norm = (s) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+    const wanted = norm(heading);
+    const slug = wanted.replace(/ /g, '-');
+    const found = [...this.els.previewContainer.querySelectorAll('h1, h2, h3, h4, h5, h6')]
+      .find(h => norm(h.textContent) === wanted || norm(h.textContent).replace(/ /g, '-') === slug);
+    if (found) found.scrollIntoView({ block: 'start' });
+  },
+
+  // ── Navigation (back button, Android back gesture) ──
+
+  /** Remember the view being left, so "back" can return to it. null means the welcome screen. */
+  pushNav() {
+    const file = this.currentFile;
+    this.navStack.push(file && file.id ? { id: file.id, name: file.name } : null);
+    history.pushState({ drivenotes: this.navStack.length }, '');
+  },
+
+  /** Header back button. The real work happens in onPopState, shared with the system back gesture. */
+  goBack() {
+    if (this.navStack.length) {
+      history.back();
+    } else {
+      this.goHome();
+    }
+  },
+
+  onPopState() {
+    const entry = this.navStack.pop();
+    if (entry) {
+      this.openFile(entry.id, entry.name, { isBack: true });
+    } else {
+      this.goHome();
+    }
+  },
+
+  goHome() {
+    this.flushCurrent();
+    this._loadSeq++;
+    this.currentFile = null;
+    this.isDirty = false;
+    this.navStack = [];
+    this.els.fileName.textContent = 'Drive Notes';
+    this.els.fileName.classList.remove('unsaved');
+    this.setSaveStatus('', '');
+    this.showWelcome();
+    this.renderDrafts();
+    this.renderRecents();
+    // The note just left may still be syncing; once it settles its draft is gone
+    this._saveChain.then(() => {
+      if (!this.currentFile) this.renderDrafts();
+    });
   },
 
   togglePreview() {
@@ -668,6 +866,7 @@ const App = {
     // Whatever is open gets saved before it is replaced
     this.flushCurrent();
     this._loadSeq++; // a file still loading must not land on top of the new note
+    this.pushNav();
 
     const name = this.generateFileName();
     // The draft key is fixed for the life of the note, so the draft is still found
@@ -906,12 +1105,13 @@ const App = {
     return drafts.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
   },
 
-  openDraft(key) {
+  openDraft(key, { isBack = false } = {}) {
     const draft = this.readDraft(key);
     if (!draft) return false;
 
     this.flushCurrent();
     this._loadSeq++;
+    if (!isBack) this.pushNav();
 
     this.currentFile = {
       id: draft.fileId || null,
@@ -1012,7 +1212,7 @@ const App = {
       this.clearDraft(file);
       file.conflict = false;
       this.isDirty = false;
-      await this.openFile(file.id, file.name);
+      await this.openFile(file.id, file.name, { isBack: true }); // same note: nothing to go back to
       return;
     }
 
@@ -1125,6 +1325,11 @@ const App = {
     this.els.btnSave?.addEventListener('click', () => this.save({ manual: true }));
     this.els.btnPreview.addEventListener('click', () => this.togglePreview());
 
+    // Navigation
+    this.els.btnBack?.addEventListener('click', () => this.goBack());
+    window.addEventListener('popstate', () => this.onPopState());
+    this.els.previewContainer.addEventListener('click', (e) => this.onPreviewClick(e));
+
     // Conflict dialog
     document.querySelectorAll('[data-conflict]').forEach(btn => {
       btn.addEventListener('click', () => this.resolveConflict(btn.dataset.conflict));
@@ -1192,11 +1397,46 @@ const App = {
 };
 
 // ── marked.js config ──
+// Obsidian links: [[nota]], [[nota|texto]], [[nota#titulo]], ![[embed]].
+// An inline extension, so links inside code spans and code blocks are left alone.
+const wikilinkExtension = {
+  name: 'wikilink',
+  level: 'inline',
+  start(src) {
+    const index = src.search(/!?\[\[/);
+    return index < 0 ? undefined : index;
+  },
+  tokenizer(src) {
+    // Inside a table the alias separator is written \|
+    const match = /^(!?)\[\[([^\]\n|#\\]*)(?:#([^\]\n|\\]*))?(?:\\?\|([^\]\n]*))?\]\]/.exec(src);
+    if (!match) return undefined;
+    return {
+      type: 'wikilink',
+      raw: match[0],
+      embed: match[1] === '!',
+      target: match[2].trim(),
+      heading: (match[3] || '').trim(),
+      alias: (match[4] || '').trim(),
+    };
+  },
+  renderer(token) {
+    const escape = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const label = token.alias
+      || [token.target, token.heading].filter(Boolean).join(' > ');
+    // Embedded images and PDFs are not fetched: shown as a plain label
+    if (token.embed && /\.(png|jpe?g|gif|webp|svg|pdf|mp3|mp4|canvas)$/i.test(token.target)) {
+      return `<span class="wikilink-file">${escape(label)}</span>`;
+    }
+    return `<a href="#" class="wikilink" data-target="${escape(token.target)}" data-heading="${escape(token.heading)}">${escape(label)}</a>`;
+  },
+};
+
 if (typeof marked !== 'undefined') {
   marked.setOptions({
     breaks: true,
     gfm: true,
   });
+  marked.use({ extensions: [wikilinkExtension] });
 }
 
 // ── Google API callbacks (called from script onload in index.html) ──
