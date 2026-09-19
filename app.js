@@ -2222,7 +2222,7 @@ const App = {
         return;
       }
       const photo = await this.shrinkPhoto(picked);
-      name = this.photoName(photo, picked.name);
+      name = this.mediaName(photo, picked.name, 'foto');
       await this.driveUploadBlob(name, photo, folderId);
       // The reading view shows it straight from here, without asking Drive for it back
       this._embedUrls.set(name, Promise.resolve(URL.createObjectURL(photo)));
@@ -2269,14 +2269,14 @@ const App = {
     }
   },
 
-  /** foto-2026-09-19-153012.jpg: the vault's kebab-case, and unique to the second */
-  photoName(blob, originalName) {
+  /** foto-2026-09-19-153012.jpg, desenho-2026-09-19-153012.png: the vault's kebab-case, unique to the second */
+  mediaName(blob, originalName, prefix) {
     const two = (n) => String(n).padStart(2, '0');
     const d = new Date();
     const stamp = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
     const fromType = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg' }[blob.type];
     const ext = fromType || (/\.([a-z0-9]+)$/i.exec(originalName || '')?.[1] || 'jpg').toLowerCase();
-    return `foto-${stamp}.${ext}`;
+    return `${prefix}-${stamp}.${ext}`;
   },
 
   /** Insert `text` as a line of its own: at the cursor, or where it was (`at`) when the editor lost the focus,

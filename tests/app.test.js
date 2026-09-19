@@ -517,6 +517,9 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     const up = uploaded()[0];
     check('foto no _media, com nome foto-data-hora.jpg', uploaded().length === 1 && up.parents[0] === 'media' && /^foto-\d{4}-\d{2}-\d{2}-\d{6}\.jpg$/.test(up.name), up);
     check('conteudo e tipo chegaram inteiros', up.content === 'bytes-da-foto' && up.mimeType === 'image/jpeg', up);
+    const pngBlob = new w.Blob(['x'], { type: 'image/png' });
+    const drawn = App.mediaName(pngBlob, null, 'desenho');
+    check('mediaName carimba o prefixo e tira a extensao do tipo', /^desenho-\d{4}-\d{2}-\d{2}-\d{6}\.png$/.test(drawn), drawn);
     check('embed em linha propria, no cursor', ta.value === `linha um\n![[${up.name}]]\n\nlinha dois`, ta.value);
     check('nota ficou suja pra salvar', App.isDirty && App.els.saveStatus.textContent === 'Foto inserida');
     const gets = drive.count('GET content');
