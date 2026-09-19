@@ -35,8 +35,6 @@ const App = {
   _saveChain: Promise.resolve(),
   // Bumped on every file open; a slow load that lost the race is discarded
   _loadSeq: 0,
-  // Views left behind, for "back": { id, name } of a note, or null for the welcome screen
-  navStack: [],
 
   // DOM refs
   els: {},
@@ -69,6 +67,7 @@ const App = {
     this.bindEvents();
     this.initToolbarKeyboardHandler();
     this.showWelcome();
+    this.syncHistory();
     this.renderDrafts();
     this.renderRecents();
   },
@@ -244,14 +243,18 @@ const App = {
   },
 
   /** Ensure we have a valid access token. Returns a promise. */
-  async ensureAuth() {
-    // Check if current token is still valid
+  /** True while the token in hand has more than a minute left */
+  hasValidToken() {
     const expiresAt = parseInt(
       localStorage.getItem('drivenotes_token_expires')
       || sessionStorage.getItem('drivenotes_token_expires')
       || '0'
     );
-    if (this.accessToken && expiresAt > Date.now() + 60000) {
+    return !!this.accessToken && expiresAt > Date.now() + 60000;
+  },
+
+  async ensureAuth() {
+    if (this.hasValidToken()) {
       return this.accessToken;
     }
 
@@ -291,7 +294,8 @@ const App = {
     sessionStorage.removeItem('drivenotes_token');
     sessionStorage.removeItem('drivenotes_token_expires');
 
-    return this.requestToken('consent');
+    // No forced consent screen: with the login hint this is a popup that closes by itself
+    return this.requestToken('');
   },
 
   // ── Google Picker ──
@@ -337,20 +341,30 @@ const App = {
     }
 
     const doc = data[google.picker.Response.DOCUMENTS][0];
-    this.openFile(doc[google.picker.Document.ID], doc[google.picker.Document.NAME]);
+    this.navigateTo(doc[google.picker.Document.ID], doc[google.picker.Document.NAME]);
   },
 
   /** Open a Drive file, in the reading view. Shared by the Picker, the recents list, links and "back".
-      `heading` scrolls to a title once open; `isBack` means we are returning, so the view left is not remembered. */
-  async openFile(fileId, fileName, { heading = '', isBack = false } = {}) {
+      `heading` scrolls to a title once open. Callers reacting to a tap call beginNav() first. */
+  async openFile(fileId, fileName, { heading = '' } = {}) {
+    try {
+      return await this.loadFile(fileId, fileName, heading);
+    } finally {
+      // Whatever ended up on screen: the note, its draft, or the previous view if loading failed
+      this.syncHistory();
+    }
+  },
+
+  async loadFile(fileId, fileName, heading) {
     const draftKey = `drivenotes_draft_${fileId}`;
 
     try {
       await this.ensureAuth();
     } catch {
       // No login (offline, popup blocked): unsynced local edits of this file are still reachable
-      if (!this.openDraft(draftKey, { isBack })) this.setSaveStatus('error', 'Faça login primeiro');
-      return;
+      if (this.openDraft(draftKey)) return true;
+      this.setSaveStatus('error', 'Faça login primeiro');
+      return false;
     }
 
     // Whatever is open gets saved before it is replaced
@@ -367,14 +381,13 @@ const App = {
       content = await this.driveGetFileContent(fileId);
     } catch (e) {
       console.error('Failed to load file:', e);
-      if (seq !== this._loadSeq) return;
+      if (seq !== this._loadSeq) return true;
       // Offline or Drive error: unsynced local edits of this file are still reachable
-      if (!this.openDraft(draftKey, { isBack })) this.setSaveStatus('error', 'Erro ao carregar');
-      return;
+      if (this.openDraft(draftKey)) return true;
+      this.setSaveStatus('error', 'Erro ao carregar');
+      return false;
     }
-    if (seq !== this._loadSeq) return; // another file was opened meanwhile
-
-    if (!isBack) this.pushNav();
+    if (seq !== this._loadSeq) return true; // another file was opened meanwhile: not ours to undo
 
     const file = {
       id: fileId,
@@ -408,6 +421,13 @@ const App = {
       }, 2000);
     }
     this.saveToRecents(fileId, file.name);
+    return true;
+  },
+
+  /** A tap that leads to a note: the history entry is created now, and dropped again if the note never opens */
+  async navigateTo(fileId, fileName, options) {
+    this.beginNav();
+    if (!(await this.openFile(fileId, fileName, options))) history.back();
   },
 
   // ── Google Drive API ──
@@ -459,6 +479,19 @@ const App = {
       `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`
     );
     return response.text();
+  },
+
+  /** Rename a file. Resolves to { id, name, modifiedTime }. */
+  async driveRenameFile(fileId, name) {
+    const response = await this.driveFetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,modifiedTime`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      }
+    );
+    return response.json();
   },
 
   /** Update existing file content. Resolves to { id, modifiedTime }. */
@@ -554,7 +587,7 @@ const App = {
       const nameSpan = document.createElement('span');
       nameSpan.className = 'recent-name';
       nameSpan.textContent = r.name;
-      nameSpan.addEventListener('click', () => this.openFile(r.id, r.name));
+      nameSpan.addEventListener('click', () => this.navigateTo(r.id, r.name));
       li.appendChild(nameSpan);
 
       // Relative time
@@ -738,6 +771,10 @@ const App = {
       return;
     }
 
+    // Still inside the tap: the history entry has to be created now (see beginNav).
+    // Every way out that does not open a note drops it again with history.back().
+    this.beginNav();
+
     const base = target.split('/').pop().trim();
     const names = /\.md$/i.test(base) ? [base] : [`${base}.md`, base];
     this.setSaveStatus('saving', 'Procurando...');
@@ -749,6 +786,7 @@ const App = {
     } catch (e) {
       console.error('Link lookup failed:', e);
       this.setSaveStatus('error', 'Erro ao procurar a nota');
+      history.back();
       return;
     }
 
@@ -756,6 +794,7 @@ const App = {
     const notes = matches.filter(isText);
     if (!notes.length) {
       this.setSaveStatus('error', matches.length ? `Não abro esse tipo: ${base}` : `Nota não encontrada: ${base}`);
+      history.back();
       return;
     }
 
@@ -765,7 +804,7 @@ const App = {
       || notes.find(f => /\.md$/i.test(f.name))
       || notes[0];
 
-    await this.openFile(pick.id, pick.name, { heading });
+    if (!(await this.openFile(pick.id, pick.name, { heading }))) history.back();
   },
 
   scrollToHeading(heading) {
@@ -780,28 +819,42 @@ const App = {
 
   // ── Navigation (back button, Android back gesture) ──
 
-  /** Remember the view being left, so "back" can return to it. null means the welcome screen. */
-  pushNav() {
+  // Each history entry carries the view it shows: { view: 'welcome' } or { view: 'file', id, name }.
+  // "Back" (header button or system gesture) lands on an entry and onPopState shows what it says.
+
+  viewState() {
     const file = this.currentFile;
-    this.navStack.push(file && file.id ? { id: file.id, name: file.name } : null);
-    history.pushState({ drivenotes: this.navStack.length }, '');
+    return file ? { view: 'file', id: file.id, name: file.name } : { view: 'welcome' };
+  },
+
+  /** Call synchronously from the tap that starts a navigation. Chrome's back gesture skips
+      history entries that were not created during a user gesture, so this cannot wait for the Drive. */
+  beginNav() {
+    history.pushState(this.viewState(), '');
+  },
+
+  /** Make the current history entry describe what is on screen */
+  syncHistory() {
+    history.replaceState(this.viewState(), '');
   },
 
   /** Header back button. The real work happens in onPopState, shared with the system back gesture. */
   goBack() {
-    if (this.navStack.length) {
-      history.back();
-    } else {
-      this.goHome();
-    }
+    this._popped = false;
+    history.back();
+    // No entry of ours behind this one (should not happen): still leave the note
+    setTimeout(() => {
+      if (!this._popped) this.goHome();
+    }, 500);
   },
 
-  onPopState() {
-    const entry = this.navStack.pop();
-    if (entry) {
-      this.openFile(entry.id, entry.name, { isBack: true });
-    } else {
-      this.goHome();
+  onPopState(state) {
+    this._popped = true;
+    if (!state || state.view !== 'file' || !state.id) {
+      // Already there when a failed navigation is being undone: keep its error message on screen
+      if (this.currentFile || document.body.dataset.view !== 'welcome') this.goHome();
+    } else if (state.id !== this.currentFile?.id) {
+      this.openFile(state.id, state.name);
     }
   },
 
@@ -810,7 +863,7 @@ const App = {
     this._loadSeq++;
     this.currentFile = null;
     this.isDirty = false;
-    this.navStack = [];
+    this.syncHistory();
     this.els.fileName.textContent = 'Drive Notes';
     this.els.fileName.classList.remove('unsaved');
     this.setSaveStatus('', '');
@@ -866,13 +919,14 @@ const App = {
     // Whatever is open gets saved before it is replaced
     this.flushCurrent();
     this._loadSeq++; // a file still loading must not land on top of the new note
-    this.pushNav();
+    this.beginNav();
 
     const name = this.generateFileName();
     // The draft key is fixed for the life of the note, so the draft is still found
     // (and cleared) after the note gets its Drive ID
     const file = { id: null, name: name, draftKey: `drivenotes_draft_new_${Date.now()}` };
     this.currentFile = file;
+    this.syncHistory();
     this.setContent('');
     this.showEditor();
     this.updateFileNameDisplay();
@@ -880,7 +934,7 @@ const App = {
 
     // Create on Drive in background, not awaited, so the user can type immediately.
     // If it fails, the first save creates the file instead.
-    if (this.accessToken) {
+    if (this.hasValidToken()) {
       this.setSaveStatus('saving', 'Criando no Drive...');
       this.enqueue(() => this.createOnDrive(file, '')).then(() => {
         if (this.currentFile !== file) return;
@@ -915,16 +969,28 @@ const App = {
   },
 
   /** Save the open file. `manual` is a tap on save: the only thing that reopens a pending conflict dialog. */
-  save({ manual = false } = {}) {
+  async save({ manual = false } = {}) {
     const file = this.currentFile;
-    if (!file || !this.isDirty) return Promise.resolve();
+    if (!file || !this.isDirty) return;
     clearTimeout(this.autoSaveTimer);
 
     if (file.conflict) {
       // Never write over a Drive version the user hasn't ruled on; keep the text safe locally
       this.saveDraft();
       if (manual) this.showConflict(file);
-      return Promise.resolve();
+      return;
+    }
+
+    // A tap is the only moment a login popup is allowed to open, so an expired login is renewed here.
+    // Automatic saves never try: they fall back to the local draft (see saveSnapshot).
+    if (manual && !this.hasValidToken()) {
+      this.saveDraft();
+      try {
+        await this.ensureAuth();
+      } catch (e) {
+        console.warn('Login on save failed:', e);
+      }
+      if (this.currentFile !== file) return; // flushCurrent already took care of it
     }
 
     const content = this.getContent();
@@ -960,14 +1026,18 @@ const App = {
       return;
     }
 
-    if (!this.accessToken) {
-      // No auth: keep it locally. It stays flagged as unsaved because it is not on Drive.
+    if (!this.hasValidToken()) {
+      // No usable login: keep it locally. It stays flagged as unsaved because it is not on Drive.
       this.saveDraft(file, content);
       if (isCurrent()) {
-        this.setSaveStatus('saved', 'Rascunho salvo');
-        setTimeout(() => {
-          if (isCurrent()) this.setSaveStatus('', '');
-        }, 3000);
+        if (this.accessToken) {
+          this.setSaveStatus('error', 'Login expirou: toque em salvar');
+        } else {
+          this.setSaveStatus('saved', 'Rascunho salvo');
+          setTimeout(() => {
+            if (isCurrent()) this.setSaveStatus('', '');
+          }, 3000);
+        }
       }
       return;
     }
@@ -1057,6 +1127,7 @@ const App = {
     }
 
     this.saveToRecents(file.id, file.name);
+    if (this.currentFile === file) this.syncHistory(); // the entry can now name the note by ID
   },
 
   // ── Drafts (localStorage) ──
@@ -1105,13 +1176,12 @@ const App = {
     return drafts.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
   },
 
-  openDraft(key, { isBack = false } = {}) {
+  openDraft(key) {
     const draft = this.readDraft(key);
     if (!draft) return false;
 
     this.flushCurrent();
     this._loadSeq++;
-    if (!isBack) this.pushNav();
 
     this.currentFile = {
       id: draft.fileId || null,
@@ -1126,6 +1196,7 @@ const App = {
     this.isDirty = true;
     this.updateFileNameDisplay();
     this.setSaveStatus('', 'Rascunho não sincronizado');
+    this.syncHistory();
     return true;
   },
 
@@ -1144,7 +1215,10 @@ const App = {
       const nameSpan = document.createElement('span');
       nameSpan.className = 'recent-name';
       nameSpan.textContent = d.name || 'sem-titulo.md';
-      nameSpan.addEventListener('click', () => this.openDraft(d.key));
+      nameSpan.addEventListener('click', () => {
+        this.beginNav();
+        this.openDraft(d.key);
+      });
       li.appendChild(nameSpan);
 
       const ago = this.timeAgo(d.timestamp);
@@ -1212,7 +1286,7 @@ const App = {
       this.clearDraft(file);
       file.conflict = false;
       this.isDirty = false;
-      await this.openFile(file.id, file.name, { isBack: true }); // same note: nothing to go back to
+      await this.openFile(file.id, file.name);
       return;
     }
 
@@ -1238,19 +1312,100 @@ const App = {
       this.clearDraft(file);
       file.conflict = false;
       this.currentFile = copy;
+      this.syncHistory();
       this.settleSaved(copy, content);
       this.setSaveStatus('saved', 'Cópia salva no Drive');
     }
   },
 
+  // ── Rename ──
+
+  promptRename() {
+    const file = this.currentFile;
+    if (!file) return;
+    this.showModal('Renomear nota', 'Nome do arquivo', (value) => this.renameFile(file, value), {
+      value: file.name,
+      confirmLabel: 'Renomear',
+    });
+  },
+
+  /** A name Drive, Windows and Obsidian all accept. The extension never changes: a rename is not a conversion. */
+  cleanFileName(value, oldName) {
+    const name = value.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').trim();
+    if (!name) return '';
+    const dot = oldName.lastIndexOf('.');
+    const ext = dot > 0 ? oldName.slice(dot) : '.md';
+    return name.toLowerCase().endsWith(ext.toLowerCase()) ? name : name + ext;
+  },
+
+  async renameFile(file, value) {
+    const name = this.cleanFileName(value, file.name);
+    if (!name || name === file.name) return;
+
+    // A note that is already on Drive is only renamed there, never just locally
+    if (file.id) {
+      try {
+        await this.ensureAuth();
+      } catch {
+        this.setSaveStatus('error', 'Faça login pra renomear');
+        return;
+      }
+    }
+
+    const oldName = file.name;
+    const applyName = (n) => {
+      file.name = n;
+      const draft = this.readDraft(file.draftKey);
+      if (draft) {
+        draft.name = n;
+        localStorage.setItem(file.draftKey, JSON.stringify(draft));
+      }
+      if (this.currentFile === file) {
+        this.updateFileNameDisplay();
+        this.syncHistory();
+      }
+    };
+
+    // Applied right away, so a note whose creation is still queued is created with the new name
+    applyName(name);
+
+    try {
+      await this.enqueue(async () => {
+        if (!file.id) return; // not on Drive yet and nothing queued: the first save creates it with this name
+        const before = await this.driveGetFileMeta(file.id, 'modifiedTime');
+        const result = await this.driveRenameFile(file.id, name);
+        // Our own rename moves modifiedTime. Adopt the new value only if nobody else wrote in between,
+        // otherwise the next save must still see the conflict.
+        if (before.modifiedTime === file.modifiedTime) file.modifiedTime = result.modifiedTime;
+        this.saveToRecents(file.id, name);
+      });
+    } catch (e) {
+      console.error('Rename failed:', e);
+      applyName(oldName);
+      if (this.currentFile === file) this.setSaveStatus('error', 'Erro ao renomear');
+      return;
+    }
+
+    if (this.currentFile === file) {
+      this.setSaveStatus('saved', 'Renomeado');
+      setTimeout(() => {
+        if (this.currentFile === file) this.setSaveStatus('', '');
+      }, 2000);
+    }
+  },
+
   // ── Modal ──
 
-  showModal(title, placeholder, onConfirm) {
+  showModal(title, placeholder, onConfirm, { value = '', confirmLabel = 'Criar' } = {}) {
     this.els.modal.querySelector('h3').textContent = title;
     this.els.modalInput.placeholder = placeholder;
-    this.els.modalInput.value = '';
+    this.els.modalInput.value = value;
+    this.els.modalConfirm.textContent = confirmLabel;
     this.els.modal.classList.add('visible');
     this.els.modalInput.focus();
+    // Ready to type over the name, keeping the extension
+    const dot = value.lastIndexOf('.');
+    if (dot > 0) this.els.modalInput.setSelectionRange(0, dot);
 
     this._modalConfirm = () => {
       const value = this.els.modalInput.value;
@@ -1266,33 +1421,93 @@ const App = {
 
   // ── Toolbar formatting ──
 
-  insertFormatting(prefix, suffix) {
-    if (!this.editor) {
-      const ta = this.els.editorElement;
-      const start = ta.selectionStart;
-      const end = ta.selectionEnd;
-      const selected = ta.value.substring(start, end);
-      const replacement = prefix + (selected || 'texto') + (suffix || '');
-      ta.value = ta.value.substring(0, start) + replacement + ta.value.substring(end);
-      ta.selectionStart = start + prefix.length;
-      ta.selectionEnd = start + prefix.length + (selected || 'texto').length;
-      ta.focus();
-      this.markDirty();
-      return;
+  // `wrap` formats go around the selection; `line` formats toggle a marker at the start of every
+  // selected line, wherever the cursor is in it. `command` is the TinyMDE command doing the same job.
+  FORMATS: {
+    bold: { wrap: ['**', '**'], command: 'bold' },
+    italic: { wrap: ['_', '_'], command: 'italic' },
+    code: { wrap: ['`', '`'], command: 'code' },
+    link: { wrap: ['[', '](url)'] },
+    heading: { line: '## ', command: 'h2' },
+    list: { line: '- ', command: 'ul' },
+    quote: { line: '> ', command: 'blockquote' },
+    checklist: { line: '- [ ] ' },
+  },
+
+  applyFormat(name) {
+    const format = this.FORMATS[name];
+    if (!format) return;
+
+    if (this.editor) {
+      this.applyFormatTinyMDE(format);
+    } else if (format.line) {
+      this.toggleLinesInTextarea(format.line);
+    } else {
+      this.wrapInTextarea(...format.wrap);
     }
+    // TinyMDE commands change the text without firing its change event
+    this.markDirty();
+  },
 
-    const sel = window.getSelection();
-    if (sel.rangeCount > 0) {
-      const range = sel.getRangeAt(0);
-      const selected = range.toString();
-      const text = prefix + (selected || 'texto') + (suffix || '');
-
-      range.deleteContents();
-      range.insertNode(document.createTextNode(text));
-
-      this.editor.update();
-      this.markDirty();
+  applyFormatTinyMDE(format) {
+    const ed = this.editor;
+    if (format.command) {
+      ed.setCommandState(format.command, ed.getCommandState()[format.command] !== true);
+    } else if (format.wrap) {
+      ed.wrapSelection(...format.wrap);
+    } else {
+      // No TinyMDE command for this marker: same steps its own line commands take
+      const focus = ed.getSelection(false);
+      const anchor = ed.getSelection(true) || focus;
+      if (!focus) return;
+      const first = Math.min(focus.row, anchor.row);
+      const last = Math.max(focus.row, anchor.row);
+      for (let row = first; row <= last; row++) {
+        ed.lines[row] = this.toggleLinePrefix(ed.lines[row], format.line);
+        ed.lineDirty[row] = true;
+      }
+      ed.updateFormatting();
+      ed.setSelection({ row: last, col: ed.lines[last].length });
     }
+  },
+
+  /** Put `prefix` at the start of the line, replacing any other block marker; take it off if it is already there */
+  toggleLinePrefix(line, prefix) {
+    const kindOf = (marker) => {
+      if (marker.startsWith('#')) return 'heading';
+      if (marker.startsWith('>')) return 'quote';
+      if (marker.includes('[')) return 'checklist';
+      if (/^[-*+]/.test(marker)) return 'list';
+      return marker ? 'ordered' : '';
+    };
+    const [, indent, marker = '', rest] =
+      /^(\s*)((?:#{1,6}|[0-9]{1,9}[).]|>|[-*+](?: \[[ xX]\])?)\s+)?(.*)$/.exec(line);
+    return kindOf(marker) === kindOf(prefix) ? indent + rest : indent + prefix + rest;
+  },
+
+  toggleLinesInTextarea(prefix) {
+    const ta = this.els.editorElement;
+    const value = ta.value;
+    const start = value.lastIndexOf('\n', ta.selectionStart - 1) + 1;
+    let end = value.indexOf('\n', ta.selectionEnd);
+    if (end < 0) end = value.length;
+
+    const block = value.slice(start, end).split('\n')
+      .map(line => this.toggleLinePrefix(line, prefix)).join('\n');
+    ta.value = value.slice(0, start) + block + value.slice(end);
+    ta.selectionStart = ta.selectionEnd = start + block.length;
+    ta.focus();
+  },
+
+  wrapInTextarea(prefix, suffix) {
+    const ta = this.els.editorElement;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    const selected = ta.value.substring(start, end) || 'texto';
+    ta.value = ta.value.substring(0, start) + prefix + selected + suffix + ta.value.substring(end);
+    ta.selectionStart = start + prefix.length;
+    ta.selectionEnd = start + prefix.length + selected.length;
+    ta.focus();
   },
 
   // ── Events ──
@@ -1325,9 +1540,12 @@ const App = {
     this.els.btnSave?.addEventListener('click', () => this.save({ manual: true }));
     this.els.btnPreview.addEventListener('click', () => this.togglePreview());
 
+    // Tap the title to rename the open note
+    this.els.fileName.addEventListener('click', () => this.promptRename());
+
     // Navigation
     this.els.btnBack?.addEventListener('click', () => this.goBack());
-    window.addEventListener('popstate', () => this.onPopState());
+    window.addEventListener('popstate', (e) => this.onPopState(e.state));
     this.els.previewContainer.addEventListener('click', (e) => this.onPreviewClick(e));
 
     // Conflict dialog
@@ -1345,25 +1563,17 @@ const App = {
       if (e.key === 'Escape') this.hideModal();
     });
 
-    // Toolbar buttons — prevent focus steal so virtual keyboard stays open
+    // Toolbar buttons: prevent focus steal so the virtual keyboard stays open.
+    // Cancelling touchstart also cancels the click that would follow, so on touch the
+    // action runs on touchend; click is what a mouse or a keyboard produces.
     document.querySelectorAll('.toolbar-btn[data-format]').forEach(btn => {
       btn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+      btn.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        this.applyFormat(btn.dataset.format);
+      }, { passive: false });
       btn.addEventListener('mousedown', (e) => e.preventDefault());
-      btn.addEventListener('click', () => {
-        const format = btn.dataset.format;
-        const formats = {
-          bold: ['**', '**'],
-          italic: ['_', '_'],
-          heading: ['## ', ''],
-          link: ['[', '](url)'],
-          list: ['- ', ''],
-          checklist: ['- [ ] ', ''],
-          code: ['`', '`'],
-          quote: ['> ', ''],
-        };
-        const [prefix, suffix] = formats[format] || ['', ''];
-        this.insertFormatting(prefix, suffix);
-      });
+      btn.addEventListener('click', () => this.applyFormat(btn.dataset.format));
     });
 
     // Keyboard shortcuts

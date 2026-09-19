@@ -626,6 +626,12 @@ body[data-view="preview"] #btn-save {
   flex-shrink: 0;
 }
 
+/* The title of an open note is tappable: rename */
+body:not([data-view="welcome"]) .file-name {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
 /* ── Utilities ── */
 
 .hidden {
