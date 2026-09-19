@@ -1148,5 +1148,42 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     App.sketchClose();
   }
 
+  console.log('32. Desenho: o voltar do sistema fecha a tela, e nao joga fora sem perguntar');
+  {
+    const { App, drive, w } = await boot({ watcher: true });
+    drive.put('A', 'a.md', 'linha um');
+    await App.openFile('A', 'a.md');
+    App.setMode('edit');
+    const confirmOverlay = w.document.getElementById('confirm-overlay');
+    const openSketch = () => w.document.querySelector('.toolbar-btn[data-sketch]').click();
+    const scribble = () => {
+      const c = App.sketch.canvas;
+      c.dispatchEvent(new w.PointerEvent('pointerdown', { clientX: 30, clientY: 30, pointerId: 1, bubbles: true, cancelable: true }));
+      c.dispatchEvent(new w.PointerEvent('pointerup', { clientX: 30, clientY: 30, pointerId: 1, bubbles: true, cancelable: true }));
+    };
+
+    openSketch();
+    check('com a tela aberta existe um watcher pra segurar o voltar', w.__watchers.length > 0);
+    w.__back();
+    await sleep(10);
+    check('tela em branco: o voltar fecha sem perguntar', !App.sketch && !confirmOverlay.classList.contains('visible'));
+
+    openSketch();
+    scribble();
+    w.__back();
+    await sleep(10);
+    check('com desenho na tela, o voltar pergunta antes', !!App.sketch && confirmOverlay.classList.contains('visible'));
+
+    w.__back();
+    await sleep(10);
+    check('o voltar de novo e "continuar desenhando": some o dialogo, fica a tela', !!App.sketch && !confirmOverlay.classList.contains('visible') && App.sketch.strokes.length === 1);
+
+    w.__back();
+    await sleep(10);
+    w.document.getElementById('confirm-ok').click();
+    await sleep(10);
+    check('descartar fecha a tela e nao mexe na nota', !App.sketch && App.getContent() === 'linha um' && !App.isDirty);
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });

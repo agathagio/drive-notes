@@ -1329,7 +1329,7 @@ const App = {
       With none active, the system back button leaves the app, which is what the welcome screen wants. */
   armWatcher() {
     if (!this.useWatcher) return;
-    const needed = this.navStack.length > 0 || !!document.querySelector('.modal-overlay.visible');
+    const needed = this.navStack.length > 0 || !!this.sketch || !!document.querySelector('.modal-overlay.visible');
     if (needed && !this._watcher) {
       try {
         const watcher = new CloseWatcher();
@@ -1348,11 +1348,13 @@ const App = {
     }
   },
 
-  /** One step back: close the dialog on top, or else return to the previous view */
+  /** One step back: close the dialog on top, or leave the drawing screen, or else return to the previous view */
   handleBack() {
     const dismiss = document.querySelector('.modal-overlay.visible [data-dismiss]');
     if (dismiss) {
       dismiss.click();
+    } else if (this.sketch) {
+      this.sketchCancel();
     } else if (this.navStack.length) {
       this.show(this.navStack.pop());
     } else {
@@ -2373,6 +2375,18 @@ const App = {
     this.log('sketch: close');
   },
 
+  /** ✕ and the system back button. A drawing with ink in it is never thrown away without asking;
+      an untouched screen just closes. */
+  async sketchCancel() {
+    if (!this.sketch) return;
+    if (this.sketchBounds(this.sketch.strokes)) {
+      const discard = await this.confirmDialog('Descartar o desenho?', 'O desenho não vai pra nota.', 'Descartar');
+      // Back may have been pressed again while the dialog was up
+      if (!discard || !this.sketch) return;
+    }
+    this.sketchClose();
+  },
+
   /** Size the backing store in device pixels and repaint. Without the dpr the stroke comes out
       jagged on a phone and the 3px one nearly disappears. Setting canvas.width wipes the context
       state, so the scale and the round caps are set again every time. Also the rotation handler:
@@ -2621,7 +2635,7 @@ const App = {
     pencil?.addEventListener('mousedown', (e) => e.preventDefault());
     pencil?.addEventListener('click', () => this.sketchOpen());
 
-    this.els.sketchCancel.addEventListener('click', () => this.sketchClose());
+    this.els.sketchCancel.addEventListener('click', () => this.sketchCancel());
     this.els.sketchColors.addEventListener('click', (e) => {
       const color = e.target.dataset?.sketchColor;
       if (!color || !this.sketch) return;
