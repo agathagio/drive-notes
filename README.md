@@ -27,6 +27,7 @@ Então fiz o meu. Hoje é por ele que eu leio e escrevo no vault quando estou lo
 - Nota do Drive abre formatada, em modo leitura. Um toque alterna pra edição.
 - Entende o markdown do Obsidian: o frontmatter vira um bloco "Propriedades" recolhido, `[[wikilinks]]` abrem a nota certa (inclusive `[[nota#título]]`), callouts ganham cor por tipo, tabela larga rola de lado, imagem embutida (`![[foto.jpg]]`) aparece na nota.
 - Navegador de pastas próprio, na mesma ordem do Obsidian (`2-x` antes de `10-x`), com a data da última edição.
+- Busca na tela de pastas: o que se digita filtra a pasta aberta na hora, sem rede e sem ligar pra acento, e depois de uma pausa procura no vault inteiro, por nome e pelo texto das notas. Cada resultado mostra a pasta onde a nota mora.
 
 **Escrever**
 
@@ -54,7 +55,7 @@ Foi a parte que mais deu trabalho, e a que mais importa num app de notas.
 - **PWA:** instala na tela inicial do celular, abre em tela cheia, e o service worker guarda o app e as bibliotecas pra abrir sem rede.
 - **Google Drive API com OAuth** (Google Identity Services). Não tem servidor: o navegador fala direto com o Drive, e o token fica só no aparelho.
 - **Bibliotecas, via CDN com versão fixa:** [TinyMDE](https://github.com/jefago/tiny-markdown-editor) no editor, [marked](https://github.com/markedjs/marked) pra renderizar e [DOMPurify](https://github.com/cure53/DOMPurify) pra sanitizar o HTML, já que o login dá acesso ao Drive inteiro.
-- **Testes:** o `app.js` real roda no jsdom contra um Google Drive falso em memória (28 cenários, 178 checagens). O que o jsdom não enxerga (ditado por voz, o gesto de voltar, a barra de formatação no editor de verdade, a redução da foto) roda num Chrome ou Edge headless pelo protocolo de depuração. Um terceiro script tira os prints de todas as telas em tamanho de celular. Detalhes em [`tests/README.md`](tests/README.md).
+- **Testes:** o `app.js` real roda no jsdom contra um Google Drive falso em memória (31 cenários, 228 checagens). O que o jsdom não enxerga (ditado por voz, o gesto de voltar, a barra de formatação no editor de verdade, a redução da foto) roda num Chrome ou Edge headless pelo protocolo de depuração. Um terceiro script tira os prints de todas as telas em tamanho de celular. Detalhes em [`tests/README.md`](tests/README.md).
 
 Construído com IA: eu defino o problema, decido o comportamento e testo no aparelho; o código é escrito em sessões com o [Claude Code](https://claude.com/claude-code).
 

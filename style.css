@@ -675,19 +675,77 @@ body {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-.browser-path {
+/* Path and search stay in sight while the list scrolls */
+.browser-top {
   position: sticky;
   top: 0;
-  padding: 8px 16px;
-  font-size: 12px;
-  color: var(--text-secondary);
+  z-index: 1;
   background: var(--bg-primary);
   border-bottom: 1px solid var(--border);
+}
+
+.browser-path {
+  padding: 8px 16px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   direction: rtl; /* a long path keeps its end, the current folder, in sight */
   text-align: left;
+}
+
+.browser-search {
+  position: relative;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 8px 16px;
+}
+
+.browser-search input {
+  width: 100%;
+  padding: 9px 36px 9px 12px;
+  font: inherit;
+  font-size: 16px; /* under 16px some phones zoom into the field */
+  color: var(--text-primary);
+  background: var(--bg-editor);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.browser-search input:focus {
+  border-color: var(--accent);
+}
+
+.browser-search input::placeholder {
+  color: var(--text-secondary);
+}
+
+/* The field has its own clear button, the same on every browser */
+.browser-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.browser-search-clear {
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 36px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.browser-search input:placeholder-shown + .browser-search-clear {
+  display: none;
 }
 
 .browser-list {
@@ -733,6 +791,33 @@ body {
   flex-shrink: 0;
   font-size: 11px;
   color: var(--text-secondary);
+}
+
+/* Search results from the whole vault: the note, and under it the folder it lives in */
+.browser-section {
+  padding: 16px 16px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.browser-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.browser-main .browser-name {
+  display: block;
+}
+
+.browser-where {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .browser-message {

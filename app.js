@@ -14,6 +14,8 @@ const CONFIG = {
   // Notes that keep their dates as they are: the same exceptions as the vault's own date automation
   NO_DATES_FOLDERS: ['.obsidian', '.claude', '_media', '_tasknotes', '_archive', '_templates', '_source-docs', '_evernote', 'referencia-cnd'],
   NO_DATES_FILES: ['claude.md', 'skill.md'],
+  // Pause in the typing, in ms, before a search goes to the Drive
+  SEARCH_DELAY: 500,
 };
 
 const SCOPES = 'https://www.googleapis.com/auth/drive';
@@ -46,9 +48,17 @@ const App = {
   // Pictures shown under their ![[...]] line while editing: file name -> { url, width, height },
   // or null while it is on its way (or was not found: not asked again until another note is opened)
   _embedInfo: new Map(),
-  // Whether notes in a folder get their dates kept up: folder ID -> true/false, or a promise of it.
-  // New notes are born in the default folder, so that one never costs a request
-  _datedFolders: new Map([[CONFIG.VAULT_FOLDER_ID, true], [CONFIG.DEFAULT_FOLDER_ID, true]]),
+  // Where a folder sits in the vault: folder ID -> (a promise of) the folder names from the vault root
+  // down to it, or null for a folder outside the vault. Used by the dates and by the search.
+  _folderTrails: new Map([[CONFIG.VAULT_FOLDER_ID, []]]),
+  // What is on screen in the file browser: { folder, items, message }
+  _listing: null,
+  // Search of the whole vault for the text in the search field: { query, results, failed }, results being
+  // null while the Drive has not answered. Answers are kept for the session, by query.
+  _search: null,
+  _searchCache: new Map(),
+  _searchTimer: null,
+  _searchSeq: 0,
   // "Back" without the history stack (see Navigation): views left behind, and the active CloseWatcher
   useWatcher: false,
   navStack: [],
@@ -67,6 +77,7 @@ const App = {
       btnNew: document.getElementById('btn-new'),
       btnOpen: document.getElementById('btn-open'),
       btnSave: document.getElementById('btn-save'),
+      browserSearch: document.getElementById('browser-search'),
       btnPreview: document.getElementById('btn-preview'),
       photoInput: document.getElementById('photo-input'),
       editorContainer: document.getElementById('editor-container'),
@@ -354,6 +365,10 @@ const App = {
     this.currentFile = null;
     this.isDirty = false;
     this.folder = folder;
+    // The browser only walks down from the vault root, so it knows where this folder sits without asking
+    if (!this._folderTrails.has(folder.id)) this._folderTrails.set(folder.id, [...folder.path, folder.name].slice(1));
+    this.els.browserSearch.value = folder.query || '';
+    this.searchVault();
     this.updateFileNameDisplay();
     this.setSaveStatus('', '');
     this.showBrowser();
@@ -375,50 +390,172 @@ const App = {
   },
 
   renderBrowser(folder, items, message) {
+    this._listing = { folder, items, message };
+    this.drawBrowser();
+  },
+
+  /** Draw the folder through the search field: what matches in the folder itself, then in the whole vault */
+  drawBrowser() {
+    const { folder, items, message } = this._listing;
     const pathEl = document.getElementById('browser-path');
     const list = document.getElementById('browser-list');
     // The element is right-to-left so a long path is cut at the start; the marks keep the text itself left-to-right
     pathEl.textContent = `‎${[...folder.path, folder.name].join(' / ')}‎`;
     list.innerHTML = '';
 
-    (items || []).forEach(item => {
-      const li = document.createElement('li');
-      li.className = 'browser-item' + (item.isFolder ? ' is-folder' : '');
+    const words = this.searchWords(folder.query).map(w => this.plain(w));
+    const shown = (items || []).filter(item => words.every(w => this.plain(item.name).includes(w)));
+    shown.forEach(item => list.appendChild(this.browserRow(item, folder)));
 
-      const icon = document.createElement('span');
-      icon.className = 'browser-icon';
-      icon.textContent = item.isFolder ? '\u{1F4C1}' : '';
-      li.appendChild(icon);
-
-      const name = document.createElement('span');
-      name.className = 'browser-name';
-      name.textContent = item.isFolder ? item.name : item.name.replace(/\.md$/i, '');
-      li.appendChild(name);
-
-      if (!item.isFolder) {
-        const when = document.createElement('span');
-        when.className = 'browser-meta';
-        when.textContent = this.shortDate(item.modifiedTime);
-        li.appendChild(when);
-      }
-
-      li.addEventListener('click', () => {
-        if (item.isFolder) {
-          this.beginNav();
-          this.openFolder({ id: item.id, name: item.name, path: [...folder.path, folder.name] });
-        } else {
-          this.navigateTo(item.id, item.name);
-        }
-      });
-      list.appendChild(li);
-    });
-
-    if (message) {
+    const say = (text) => {
       const li = document.createElement('li');
       li.className = 'browser-message';
-      li.textContent = message;
+      li.textContent = text;
       list.appendChild(li);
+    };
+    if (!words.length || !items) {
+      if (message) say(message);
+      return;
     }
+
+    const search = this._search;
+    if (!search) {
+      if (!shown.length) say('Nada nesta pasta com esse nome. Com 3 letras ou mais, a busca vai pro vault inteiro.');
+      return;
+    }
+    if (search.failed) {
+      say('Não deu pra buscar no vault inteiro. Sem conexão?');
+      return;
+    }
+    const here = new Set(shown.map(item => item.id));
+    const found = (search.results || []).filter(item => !here.has(item.id));
+    if (search.results && !found.length) {
+      if (!shown.length) say('Nada encontrado, nem nesta pasta nem no resto do vault.');
+      return;
+    }
+
+    const title = document.createElement('li');
+    title.className = 'browser-section';
+    title.textContent = 'No vault inteiro';
+    list.appendChild(title);
+    if (!search.results) say('Buscando...');
+    found.forEach(item => list.appendChild(this.browserRow(item, folder)));
+  },
+
+  /** One line of the browser. A search result (`item.where`) also says which folder the note lives in. */
+  browserRow(item, folder) {
+    const li = document.createElement('li');
+    li.className = 'browser-item' + (item.isFolder ? ' is-folder' : '') + (item.where ? ' is-result' : '');
+
+    const icon = document.createElement('span');
+    icon.className = 'browser-icon';
+    icon.textContent = item.isFolder ? '\u{1F4C1}' : '';
+    li.appendChild(icon);
+
+    const name = document.createElement('span');
+    name.className = 'browser-name';
+    name.textContent = item.isFolder ? item.name : item.name.replace(/\.md$/i, '');
+    if (item.where) {
+      const main = document.createElement('span');
+      main.className = 'browser-main';
+      const where = document.createElement('span');
+      where.className = 'browser-where';
+      where.textContent = item.where;
+      main.append(name, where);
+      li.appendChild(main);
+    } else {
+      li.appendChild(name);
+    }
+
+    if (!item.isFolder) {
+      const when = document.createElement('span');
+      when.className = 'browser-meta';
+      when.textContent = this.shortDate(item.modifiedTime);
+      li.appendChild(when);
+    }
+
+    li.addEventListener('click', () => {
+      if (item.isFolder) {
+        this.beginNav();
+        this.openFolder({ id: item.id, name: item.name, path: [...folder.path, folder.name] });
+      } else {
+        this.navigateTo(item.id, item.name);
+      }
+    });
+    return li;
+  },
+
+  // ── Search ──
+  // One field, two reaches. The open folder is filtered as the text is typed, on the device. After a pause
+  // the same text goes to the Drive, which looks at names and at the text of the notes; only notes inside
+  // the vault are shown, each with the folder it lives in.
+
+  /** Lower case, no accents: "Relatório" is found by "relatorio" */
+  plain(text) {
+    return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  },
+
+  searchWords(query) {
+    return (query || '').trim().split(/\s+/).filter(Boolean).slice(0, 6);
+  },
+
+  onSearchInput() {
+    if (!this.folder || this.currentFile) return;
+    this.folder.query = this.els.browserSearch.value;
+    this.syncHistory(); // "back" from a result returns to this search
+    this.searchVault();
+    this.drawBrowser();
+  },
+
+  /** Line up the vault search for the text in the field. `now` skips the pause (the search key was pressed). */
+  searchVault({ now = false } = {}) {
+    clearTimeout(this._searchTimer);
+    const seq = ++this._searchSeq;
+    const words = this.searchWords(this.folder?.query);
+    const query = words.join(' ').toLowerCase();
+    if (query.length < 3) {
+      this._search = null;
+      return;
+    }
+    if (this._searchCache.has(query)) {
+      this._search = { query, results: this._searchCache.get(query) };
+      return;
+    }
+
+    this._search = { query, results: null };
+    this._searchTimer = setTimeout(async () => {
+      let results = null;
+      try {
+        results = await this.findNotes(words);
+        this._searchCache.set(query, results);
+      } catch (e) {
+        console.error('Vault search failed:', e);
+      }
+      if (seq !== this._searchSeq) return; // the text has changed since
+      this._search = { query, results, failed: !results };
+      if (this.folder && !this.currentFile) this.drawBrowser();
+    }, now ? 0 : CONFIG.SEARCH_DELAY);
+  },
+
+  /** Notes of the vault with every word in the name or in the text: name matches first */
+  async findNotes(words) {
+    const files = (await this.driveSearch(words)).filter(f => this.isNote(f));
+    const placed = await Promise.all(files.map(async (f) => {
+      const parent = f.parents?.[0];
+      const trail = parent ? await Promise.resolve(this.folderTrail(parent)).catch(() => null) : null;
+      return { f, trail };
+    }));
+
+    const plainWords = words.map(w => this.plain(w));
+    return placed
+      // Outside the vault, or inside a dot-folder (.obsidian, .trash): not a note of the vault
+      .filter(({ trail }) => trail && !trail.some(name => name.startsWith('.')))
+      .map(({ f, trail }) => {
+        const inName = plainWords.every(w => this.plain(f.name).includes(w));
+        const where = trail.join(' / ') || CONFIG.VAULT_NAME;
+        return { id: f.id, name: f.name, isFolder: false, modifiedTime: f.modifiedTime, inName, where: inName ? where : `${where} · no texto` };
+      })
+      .sort((a, b) => b.inName - a.inName);
   },
 
   /** "14:32" for today, "19 set" for this year, "19/09/25" before that */
@@ -568,19 +705,40 @@ const App = {
       if (!pageToken) break;
     }
 
-    const isNote = (f) => /\.(md|markdown|txt)$/i.test(f.name) || (f.mimeType || '').startsWith('text/');
     return found
       // Dot-folders (.obsidian, .trash) stay hidden, as in Obsidian
-      .filter(f => !f.name.startsWith('.') && (f.mimeType === FOLDER || isNote(f)))
+      .filter(f => !f.name.startsWith('.') && (f.mimeType === FOLDER || this.isNote(f)))
       .map(f => ({ id: f.id, name: f.name, isFolder: f.mimeType === FOLDER, modifiedTime: f.modifiedTime }))
       .sort((a, b) => (b.isFolder - a.isFolder)
         || a.name.localeCompare(b.name, 'pt-BR', { numeric: true, sensitivity: 'base' }));
   },
 
+  isNote(f) {
+    return /\.(md|markdown|txt)$/i.test(f.name) || (f.mimeType || '').startsWith('text/');
+  },
+
+  /** A string inside a Drive query */
+  driveQuote(s) {
+    return `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  },
+
+  /** Files with every word in the name or in the text, anywhere in Drive, in the Drive's own order of relevance.
+      The name is matched on the start of a word and minds accents; the text is matched on whole words and
+      does not, and it includes the name: between the two, "relat" and "relatorio" both find "Relatório". */
+  async driveSearch(words) {
+    const has = (w) => `(name contains ${this.driveQuote(w)} or fullText contains ${this.driveQuote(w)})`;
+    const params = new URLSearchParams({
+      q: `${words.map(has).join(' and ')} and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
+      fields: 'files(id,name,parents,mimeType,modifiedTime)',
+      pageSize: '50',
+    });
+    const response = await this.driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
+    return (await response.json()).files || [];
+  },
+
   /** Files with exactly one of these names, anywhere in Drive, newest first */
   async driveFindByName(names) {
-    const quote = (s) => `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
-    const q = `(${names.map(n => `name = ${quote(n)}`).join(' or ')}) and trashed = false`;
+    const q = `(${names.map(n => `name = ${this.driveQuote(n)}`).join(' or ')}) and trashed = false`;
     const params = new URLSearchParams({
       q,
       fields: 'files(id,name,parents,mimeType)',
@@ -1120,7 +1278,7 @@ const App = {
       if (state.id !== this.currentFile?.id) this.openFile(state.id, state.name);
     } else if (state?.view === 'browse') {
       if (this.currentFile || this.folder?.id !== state.id) {
-        this.openFolder({ id: state.id, name: state.name, path: state.path || [] });
+        this.openFolder({ id: state.id, name: state.name, path: state.path || [], query: state.query || '' });
       }
     } else if (this.currentFile || this.folder || document.body.dataset.view !== 'welcome') {
       // (already there when a failed navigation is being undone: its error message stays on screen)
@@ -1554,18 +1712,26 @@ const App = {
     }
   },
 
-  /** True for a folder inside the vault and outside NO_DATES_FOLDERS. Walks up the Drive once per folder. */
-  folderKeepsDates(folderId) {
-    if (!this._datedFolders.has(folderId)) {
-      const answer = this.driveGetFileMeta(folderId, 'name,parents').then((folder) => {
-        if (CONFIG.NO_DATES_FOLDERS.includes(folder.name)) return false;
+  /** True for a folder inside the vault and outside NO_DATES_FOLDERS */
+  async folderKeepsDates(folderId) {
+    if (folderId === CONFIG.DEFAULT_FOLDER_ID) return true; // new notes are born here: never costs a request
+    const trail = await this.folderTrail(folderId);
+    return !!trail && !trail.some(name => CONFIG.NO_DATES_FOLDERS.includes(name));
+  },
+
+  /** The folder names from the vault root down to this folder, or null outside the vault.
+      Walks up the Drive, one request per level, once per folder. */
+  folderTrail(folderId) {
+    if (!this._folderTrails.has(folderId)) {
+      const trail = this.driveGetFileMeta(folderId, 'name,parents').then(async (folder) => {
         const parent = folder.parents?.[0];
-        return parent ? this.folderKeepsDates(parent) : false; // top of the Drive: not in the vault
+        const above = parent ? await this.folderTrail(parent) : null; // top of the Drive: not in the vault
+        return above && [...above, folder.name];
       });
-      this._datedFolders.set(folderId, answer);
-      answer.catch(() => this._datedFolders.delete(folderId));
+      this._folderTrails.set(folderId, trail);
+      trail.catch(() => this._folderTrails.delete(folderId));
     }
-    return this._datedFolders.get(folderId);
+    return this._folderTrails.get(folderId);
   },
 
   /** Set `updated` to `today` in the note's properties, adding the line (or the whole block) when missing.
@@ -2194,6 +2360,20 @@ const App = {
     this.els.btnSave?.addEventListener('mousedown', (e) => e.preventDefault());
     this.els.btnSave?.addEventListener('click', () => this.save({ manual: true }));
     this.els.btnPreview.addEventListener('click', () => this.togglePreview());
+
+    // Search field of the file browser
+    this.els.browserSearch.addEventListener('input', () => this.onSearchInput());
+    this.els.browserSearch.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      this.els.browserSearch.blur(); // the keyboard gets out of the way of the results
+      this.searchVault({ now: true });
+      this.drawBrowser();
+    });
+    document.getElementById('browser-search-clear').addEventListener('click', () => {
+      this.els.browserSearch.value = '';
+      this.onSearchInput();
+      this.els.browserSearch.focus();
+    });
 
     // Tap the title to rename the open note
     this.els.fileName.addEventListener('click', () => this.promptRename());

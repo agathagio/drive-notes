@@ -36,6 +36,13 @@ const SETUP = `
       const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600"><rect width="1200" height="600" fill="#2d2d52"/><circle cx="300" cy="300" r="160" fill="#bb86fc"/><rect x="620" y="160" width="400" height="280" rx="24" fill="#03dac6"/></svg>';
       return { ok: true, status: 200, blob: async () => new Blob([svg], { type: 'image/svg+xml' }) };
     }
+    // Search of the whole vault, and the folders its results live in
+    if ((u.searchParams.get('q') || '').includes(' contains ')) return ok({ files: [
+      { id: 's1', name: 'guia-de-voz-onryo.md', parents: ['d5'], mimeType: 'text/markdown', modifiedTime: new Date(now - 9e8).toISOString() },
+      { id: 's2', name: 'Reunião 17 set.md', parents: ['d4'], mimeType: 'text/markdown', modifiedTime: new Date(now - 2e8).toISOString() },
+    ] });
+    const dir = /files\\/d(\\d)$/.exec(u.pathname);
+    if (dir) return ok({ id: 'd' + dir[1], name: folders[dir[1]], parents: ['ROOT'] });
     if (u.searchParams.get('alt') === 'media') return ok(${JSON.stringify(NOTE)});
     if (/files\\/[^/]+$/.test(u.pathname)) return ok({ id: 'N', name: 'Relatório semanal.md', modifiedTime: 't', parents: ['ROOT'] });
     return ok({ files: [
@@ -67,6 +74,10 @@ const SETUP = `
     await shot('1-inicio');
     await js(`__App.browseVault().then(() => 'ok')`);
     await shot('2-pastas');
+    await js(`__App.els.browserSearch.value = 'voz'; __App.onSearchInput(); 'ok'`);
+    await sleep(800);
+    await shot('2b-busca');
+    await js(`__App.els.browserSearch.value = ''; __App.onSearchInput(); 'ok'`);
     await js(`__App.navigateTo('N', 'Relatório semanal.md').then(() => 'ok')`);
     await shot('3-leitura');
     await js(`document.querySelector('details.frontmatter').open = true; __App.els.previewContainer.scrollTop = 0; 'ok'`);

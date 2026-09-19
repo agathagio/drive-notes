@@ -64,7 +64,14 @@
 
   <!-- ── File browser ── -->
   <div id="browser" class="browser hidden">
-    <div id="browser-path" class="browser-path"></div>
+    <div class="browser-top">
+      <div id="browser-path" class="browser-path"></div>
+      <div class="browser-search">
+        <input id="browser-search" type="search" placeholder="Buscar nesta pasta e no vault" aria-label="Buscar"
+               enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button id="browser-search-clear" class="browser-search-clear" title="Limpar busca" aria-label="Limpar busca">&#10005;</button>
+      </div>
+    </div>
     <ul id="browser-list" class="browser-list"></ul>
   </div>
 

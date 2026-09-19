@@ -41,6 +41,17 @@ function makeDrive() {
           .map(f => ({ id: f.id, name: f.name, mimeType: f.mimeType || 'text/markdown', modifiedTime: f.modifiedTime }));
         return json({ files });
       }
+      if (q.includes(' contains ')) {
+        // Search, the way the Drive does it: a name matches on the start of a word, the text on a whole word
+        drive.log.push(`SEARCH ${q}`);
+        if (drive.failReads) return json({}, 500);
+        const words = [...q.matchAll(/name contains '((?:[^'\\]|\\.)*)'/g)].map(x => x[1].replace(/\\(.)/g, '$1').toLowerCase());
+        const tokens = (s) => String(s).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+        const hit = (f, word) => tokens(f.name).some(t => t.startsWith(word)) || f.name.toLowerCase().startsWith(word) || tokens(f.content).includes(word);
+        const files = [...drive.files.values()].filter(f => f.mimeType !== FOLDER && words.every(word => hit(f, word)))
+          .map(f => ({ id: f.id, name: f.name, parents: f.parents, mimeType: f.mimeType || 'text/markdown', modifiedTime: f.modifiedTime }));
+        return json({ files });
+      }
       const names = [...q.matchAll(/name = '((?:[^'\\]|\\.)*)'/g)].map(x => x[1].replace(/\\(.)/g, '$1'));
       const files = [...drive.files.values()].filter(f => names.includes(f.name))
         .sort((a, b) => b.modifiedTime.localeCompare(a.modifiedTime))
@@ -118,7 +129,7 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
   for (const [k, v] of Object.entries(seedStorage)) w.localStorage.setItem(k, v);
   w.eval(fs.readFileSync(LIBS.marked, 'utf8'));
   w.eval(fs.readFileSync(LIBS.purify, 'utf8'));
-  w.eval(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8') + ';window.__App = App;');
+  w.eval(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8') + ';window.__App = App; window.__CONFIG = CONFIG;');
   await new Promise(r => w.document.readyState === 'complete' ? r() : w.addEventListener('load', r));
   const App = w.__App;
   if (auth) {
@@ -923,6 +934,77 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     await sleep(30); await App._saveChain;
     check('toque no salvar: o comeco do toque e cancelado (teclado fica) e o fim salva', start.defaultPrevented && drive.files.get('A').content === 'texto editado 2', drive.files.get('A').content);
     check('um toque, uma escrita', drive.count('PATCH') === 2, drive.log);
+  }
+
+  console.log('28. Busca: filtra a pasta aberta e procura no vault inteiro');
+  {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    const d = w.document;
+    w.__CONFIG.SEARCH_DELAY = 40;
+    const dir = (id, name, parent) => { drive.put(id, name, '', parent ? [parent] : []); drive.files.get(id).mimeType = FOLDER; };
+    dir('d-cli', 'clientes', 'd-proj'); dir('d-fora', 'documentos', null);
+    drive.put('n-deep', 'Relatório do funil.md', 'texto sobre vendas', ['d-cli']);
+    drive.put('n-text', 'reuniao.md', 'falamos do funil de conversão', ['d-10']);
+    drive.put('x-out', 'Funil pessoal.md', 'x', ['d-fora']);
+    drive.put('x-obs', 'funil-config.md', 'x', ['d-obs']);
+    drive.put('x-xlsx', 'Funil.xlsx', 'x', [VAULT]); drive.files.get('x-xlsx').mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    drive.put('n-quote', "d'água.md", 'x', ['d-10']);
+
+    const input = d.getElementById('browser-search');
+    const search = (text) => { input.value = text; input.dispatchEvent(new w.Event('input')); };
+    const local = () => [...d.querySelectorAll('#browser-list .browser-item:not(.is-result)')].map(li => li.querySelector('.browser-name').textContent);
+    const found = () => [...d.querySelectorAll('#browser-list .browser-item.is-result')].map(li =>
+      [li.querySelector('.browser-name').textContent, li.querySelector('.browser-where').textContent]);
+    const searches = () => drive.count('SEARCH');
+
+    d.getElementById('welcome-open').click(); await sleep(80);
+    check('campo de busca na tela de pastas, vazio', !!input && input.value === '' && local().length === 8);
+
+    search('ab'); await sleep(100);
+    check('digitar filtra a pasta aberta na hora', JSON.stringify(local()) === JSON.stringify(['Abacaxi']), local());
+    check('com menos de 3 letras nao procura no Drive', searches() === 0 && found().length === 0, drive.log);
+    search('EMILE'); await sleep(10);
+    check('sem ligar pra acento nem maiuscula', JSON.stringify(local()) === JSON.stringify(['émile']), local());
+    search('proj 20'); await sleep(10);
+    check('palavras em qualquer ordem; pasta tambem entra no filtro', JSON.stringify(local()) === JSON.stringify(['20-projetos']), local());
+
+    for (const partial of ['fun', 'funi', 'funil']) { search(partial); await sleep(10); }
+    check('nada na pasta aberta com esse nome', local().length === 0, local());
+    await sleep(200);
+    check('uma busca so no Drive, depois que a digitacao para', searches() === 1, drive.log);
+    check('resultados do vault inteiro: nome primeiro, depois o que bate so no texto, cada um com a pasta',
+      JSON.stringify(found()) === JSON.stringify([['Relatório do funil', '20-projetos / clientes'], ['reuniao', '10-areas · no texto']]), found());
+    check('ficam de fora: fora do vault, pasta com ponto, o que nao e nota', !d.getElementById('browser-list').textContent.match(/pessoal|config|xlsx/i));
+    check('titulo da secao', d.querySelector('#browser-list .browser-section')?.textContent === 'No vault inteiro');
+
+    d.querySelector('.browser-item.is-result').click(); await sleep(80);
+    check('tocar no resultado abre a nota', App.currentFile?.id === 'n-deep' && d.body.dataset.view === 'preview');
+    App.els.btnBack.click(); await sleep(120);
+    check('voltar: a busca continua como estava', d.body.dataset.view === 'browse' && input.value === 'funil' && found().length === 2, [input.value, found()]);
+    check('... sem perguntar de novo ao Drive', searches() === 1, drive.log);
+
+    d.getElementById('browser-search-clear').click(); await sleep(10);
+    check('o X limpa: a pasta inteira volta e a secao some', input.value === '' && local().length === 8 && found().length === 0 && !d.querySelector('.browser-section'));
+
+    search('zebra'); await sleep(200);
+    check('nota que ja aparece na pasta aberta nao repete nos resultados', JSON.stringify(local()) === JSON.stringify(['zebra']) && found().length === 0, found());
+
+    search("d'água"); await sleep(200);
+    check('apostrofo na busca nao quebra a consulta', found()[0]?.[0] === "d'água", [found(), drive.log.at(-1)]);
+
+    search('');
+    [...d.querySelectorAll('.browser-item')].find(li => li.textContent.includes('20-projetos')).click(); await sleep(80);
+    check('entrar numa pasta comeca com a busca vazia', input.value === '' && local()[0] === 'clientes', local());
+    search('funil'); await sleep(200);
+    check('dentro de uma subpasta a busca tambem cobre o vault inteiro', found().length === 2 && searches() === 3, [found(), searches()]);
+
+    drive.failReads = true;
+    search('inexistente'); await sleep(200);
+    check('sem rede: avisa, e o filtro da pasta segue funcionando', /não deu/i.test(d.querySelector('.browser-message')?.textContent || ''), d.getElementById('browser-list').textContent);
+    drive.failReads = false;
+    search('inexistente'); await sleep(10); search('inexistentes'); await sleep(200);
+    check('nada encontrado: diz que nao achou', /nada/i.test(d.querySelector('.browser-message')?.textContent || ''), d.getElementById('browser-list').textContent);
   }
 
   done();

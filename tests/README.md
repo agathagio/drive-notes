@@ -4,7 +4,7 @@ O app não tem build. O `package.json` da raiz existe só pra estes testes. Uma 
 
 ## `npm test`
 
-`app.test.js`: roda o `app.js` real dentro do jsdom contra um Google Drive falso em memória. Cobre save e fila de escrita, conflito, rascunhos, modo leitura (frontmatter, wikilinks, imagens embutidas, callouts, tabelas), foto na nota (upload pro `_media`), navegação e botão voltar, renomear, login expirado, formatação, navegador de pastas e as datas `created` / `updated` (incluindo o que fica de fora: `_templates`, `CLAUDE.md`, `-antigo`, `.txt`, fora do vault). Leva uns 20 segundos.
+`app.test.js`: roda o `app.js` real dentro do jsdom contra um Google Drive falso em memória. Cobre save e fila de escrita, conflito, rascunhos, modo leitura (frontmatter, wikilinks, imagens embutidas, callouts, tabelas), foto na nota (upload pro `_media`), navegação e botão voltar, renomear, login expirado, formatação, navegador de pastas, busca (filtro da pasta aberta, vault inteiro, o que fica de fora, voltar de um resultado) e as datas `created` / `updated` (incluindo o que fica de fora: `_templates`, `CLAUDE.md`, `-antigo`, `.txt`, fora do vault). Leva uns 20 segundos.
 
 O editor aqui é o textarea de fallback, porque o TinyMDE precisa de um navegador de verdade.
 
