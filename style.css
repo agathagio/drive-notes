@@ -353,6 +353,24 @@ body {
   justify-content: flex-end;
 }
 
+.modal-text {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+
+.modal-actions-stacked {
+  flex-direction: column;
+}
+
+.modal-actions-stacked .btn {
+  justify-content: center;
+  padding: 10px 12px;
+  font-size: 14px;
+  white-space: normal;
+}
+
 /* ── Welcome screen ── */
 
 .welcome {
@@ -398,6 +416,10 @@ body {
   letter-spacing: 0.5px;
   color: var(--text-secondary);
   margin-bottom: 8px;
+}
+
+.drafts-list h3 {
+  color: var(--warning);
 }
 
 .recents-list ul {

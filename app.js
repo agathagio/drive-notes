@@ -20,7 +20,9 @@ const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/drive/v3/res
 const App = {
   // State
   editor: null,
-  currentFile: null,   // { id, name } — id is Drive file ID
+  // { id, name, draftKey, modifiedTime, parents, lastSavedContent }
+  // id is the Drive file ID (null until created); modifiedTime is the Drive version our edits are based on
+  currentFile: null,
   isDirty: false,
   mode: 'edit',
   autoSaveTimer: null,
@@ -28,8 +30,11 @@ const App = {
   tokenClient: null,
   gapiLoaded: false,
   gisLoaded: false,
-  // Tracks an in-flight driveCreateFile so concurrent saves don't duplicate the file on Drive
-  _pendingCreate: null,
+  // All Drive writes run through this chain, one at a time, so a create and a save
+  // (or two saves) of the same file can never race and duplicate or reorder content
+  _saveChain: Promise.resolve(),
+  // Bumped on every file open; a slow load that lost the race is discarded
+  _loadSeq: 0,
 
   // DOM refs
   els: {},
@@ -50,12 +55,18 @@ const App = {
       modalInput: document.getElementById('modal-input'),
       modalCancel: document.getElementById('modal-cancel'),
       modalConfirm: document.getElementById('modal-confirm'),
+      conflict: document.getElementById('conflict-overlay'),
+      conflictText: document.getElementById('conflict-text'),
     };
+
+    // Pointer used by older versions; drafts are now found by scanning their keys
+    localStorage.removeItem('drivenotes_draft_latest');
 
     this.initEditor();
     this.bindEvents();
     this.initToolbarKeyboardHandler();
     this.showWelcome();
+    this.renderDrafts();
     this.renderRecents();
   },
 
@@ -124,6 +135,10 @@ const App = {
       client_id: CONFIG.CLIENT_ID,
       scope: SCOPES,
       callback: '', // set dynamically
+      // Popup blocked or closed: fail the pending request instead of leaving it hanging
+      error_callback: (err) => {
+        if (this._authReject) this._authReject(err);
+      },
     });
     this.gisLoaded = true;
     this.checkReady();
@@ -146,6 +161,30 @@ const App = {
 
     // Schedule silent refresh 5 minutes before expiry
     this.scheduleTokenRefresh(expiresAt);
+    this.rememberLoginHint();
+  },
+
+  /** Learn the account email once, so later logins skip the account chooser.
+      Kept in localStorage only: the repo is public, so it must not live in CONFIG. */
+  async rememberLoginHint() {
+    if (localStorage.getItem('drivenotes_login_hint')) return;
+    try {
+      const response = await fetch(
+        'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)',
+        { headers: { 'Authorization': `Bearer ${this.accessToken}` } }
+      );
+      if (!response.ok) return;
+      const email = (await response.json()).user?.emailAddress;
+      if (email) localStorage.setItem('drivenotes_login_hint', email);
+    } catch {
+      // ignore: the hint is a convenience
+    }
+  },
+
+  /** Options for tokenClient.requestAccessToken */
+  tokenRequest(prompt) {
+    const hint = localStorage.getItem('drivenotes_login_hint');
+    return hint ? { prompt, login_hint: hint } : { prompt };
   },
 
   /** Restore token from localStorage if still valid. Falls back to legacy sessionStorage. */
@@ -198,7 +237,7 @@ const App = {
       gapi.client.setToken({ access_token: response.access_token });
       console.log('Drive Notes: token refreshed silently');
     };
-    this.tokenClient.requestAccessToken({ prompt: '' });
+    this.tokenClient.requestAccessToken(this.tokenRequest(''));
   },
 
   /** Ensure we have a valid access token. Returns a promise. */
@@ -213,10 +252,22 @@ const App = {
       return this.accessToken;
     }
 
-    // Token missing or expiring — request new one
+    // Token missing or expiring: request a new one
     this.accessToken = null;
+    return this.requestToken('');
+  },
+
+  /** Ask Google for a token. Always settles: a blocked popup, an error or 3 minutes of silence reject,
+      so a save waiting on it falls back to the local draft instead of hanging. */
+  requestToken(prompt) {
     return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('auth timeout')), 180000);
+      this._authReject = (err) => {
+        clearTimeout(timer);
+        reject(err);
+      };
       this.tokenClient.callback = (response) => {
+        clearTimeout(timer);
         if (response.error) {
           reject(response);
           return;
@@ -225,7 +276,7 @@ const App = {
         gapi.client.setToken({ access_token: response.access_token });
         resolve(this.accessToken);
       };
-      this.tokenClient.requestAccessToken({ prompt: '' });
+      this.tokenClient.requestAccessToken(this.tokenRequest(prompt));
     });
   },
 
@@ -237,18 +288,7 @@ const App = {
     sessionStorage.removeItem('drivenotes_token');
     sessionStorage.removeItem('drivenotes_token_expires');
 
-    return new Promise((resolve, reject) => {
-      this.tokenClient.callback = (response) => {
-        if (response.error) {
-          reject(response);
-          return;
-        }
-        this.saveToken(response.access_token, response.expires_in);
-        gapi.client.setToken({ access_token: response.access_token });
-        resolve(this.accessToken);
-      };
-      this.tokenClient.requestAccessToken({ prompt: 'consent' });
-    });
+    return this.requestToken('consent');
   },
 
   // ── Google Picker ──
@@ -294,63 +334,122 @@ const App = {
     }
 
     const doc = data[google.picker.Response.DOCUMENTS][0];
-    const fileId = doc[google.picker.Document.ID];
-    const fileName = doc[google.picker.Document.NAME];
+    this.openFile(doc[google.picker.Document.ID], doc[google.picker.Document.NAME]);
+  },
 
-    this.currentFile = { id: fileId, name: fileName };
-    this.updateFileNameDisplay();
-    this.setSaveStatus('saving', 'Carregando...');
+  /** Open a Drive file in the editor. Shared by the Picker and the recents list. */
+  async openFile(fileId, fileName) {
+    const draftKey = `drivenotes_draft_${fileId}`;
 
     try {
-      const content = await this.driveGetFileContent(fileId);
-      this.setContent(content);
-      this.showEditor();
-      this.setSaveStatus('saved', 'Carregado');
-      this.saveToRecents(fileId, fileName);
-      setTimeout(() => this.setSaveStatus('', ''), 2000);
+      await this.ensureAuth();
+    } catch {
+      // No login (offline, popup blocked): unsynced local edits of this file are still reachable
+      if (!this.openDraft(draftKey)) this.setSaveStatus('error', 'Faça login primeiro');
+      return;
+    }
+
+    // Whatever is open gets saved before it is replaced
+    this.flushCurrent();
+
+    const seq = ++this._loadSeq;
+    this.setSaveStatus('saving', 'Carregando...');
+
+    let meta, content;
+    try {
+      // Metadata first: if the file changes between the two requests we end up with an
+      // older modifiedTime than the content, which errs towards a false conflict, never a missed one
+      meta = await this.driveGetFileMeta(fileId);
+      content = await this.driveGetFileContent(fileId);
     } catch (e) {
       console.error('Failed to load file:', e);
-      this.setSaveStatus('error', 'Erro ao carregar');
+      if (seq !== this._loadSeq) return;
+      // Offline or Drive error: unsynced local edits of this file are still reachable
+      if (!this.openDraft(draftKey)) this.setSaveStatus('error', 'Erro ao carregar');
+      return;
     }
+    if (seq !== this._loadSeq) return; // another file was opened meanwhile
+
+    const file = {
+      id: fileId,
+      name: meta.name || fileName,
+      draftKey,
+      modifiedTime: meta.modifiedTime,
+      parents: meta.parents,
+    };
+
+    // Unsynced local edits win over the Drive copy; the conflict check on save arbitrates
+    const draft = this.readDraft(draftKey);
+    if (draft && draft.content !== content) {
+      file.modifiedTime = draft.baseModifiedTime;
+      this.currentFile = file;
+      this.setContent(draft.content);
+      this.isDirty = true;
+      this.updateFileNameDisplay();
+      this.showEditor();
+      this.setSaveStatus('', 'Rascunho não sincronizado');
+    } else {
+      if (draft) localStorage.removeItem(draftKey);
+      this.currentFile = file;
+      this.setContent(content);
+      // What the editor gives back for an untouched file, so opening never counts as a change
+      file.lastSavedContent = this.getContent();
+      this.showEditor();
+      this.setSaveStatus('saved', 'Carregado');
+      setTimeout(() => {
+        if (this.currentFile === file) this.setSaveStatus('', '');
+      }, 2000);
+    }
+    this.saveToRecents(fileId, file.name);
   },
 
   // ── Google Drive API ──
 
-  /** Fetch file content by ID */
-  async driveGetFileContent(fileId) {
-    const response = await gapi.client.drive.files.get({
-      fileId: fileId,
-      alt: 'media',
+  /** fetch with the access token; on 401 re-authenticates and retries once */
+  async driveFetch(url, options = {}, retried = false) {
+    const response = await fetch(url, {
+      ...options,
+      headers: { ...options.headers, 'Authorization': `Bearer ${this.accessToken}` },
     });
-    return response.body;
-  },
 
-  /** Update existing file content */
-  async driveUpdateFile(fileId, content) {
-    // gapi.client doesn't support media upload well,
-    // so we use a raw fetch with the access token
-    const response = await fetch(
-      `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
-      {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${this.accessToken}`,
-          'Content-Type': 'text/plain',
-        },
-        body: content,
-      }
-    );
-
-    if (response.status === 401) {
-      // Token expired — re-auth and retry
+    if (response.status === 401 && !retried) {
       await this.reAuth();
-      return this.driveUpdateFile(fileId, content);
+      return this.driveFetch(url, options, true);
     }
 
     if (!response.ok) {
-      throw new Error(`Drive update failed: ${response.status}`);
+      throw new Error(`Drive request failed: ${response.status}`);
     }
 
+    return response;
+  },
+
+  /** Fetch file metadata by ID */
+  async driveGetFileMeta(fileId, fields = 'id,name,modifiedTime,parents') {
+    const response = await this.driveFetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?fields=${fields}`
+    );
+    return response.json();
+  },
+
+  /** Fetch file content by ID */
+  async driveGetFileContent(fileId) {
+    const response = await this.driveFetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`
+    );
+    return response.text();
+  },
+
+  /** Update existing file content. Resolves to { id, modifiedTime }. */
+  async driveUpdateFile(fileId, content) {
+    const response = await this.driveFetch(
+      `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=id,modifiedTime`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'text/plain' },
+        body: content,
+      }
+    );
     return response.json();
   },
 
@@ -375,27 +474,14 @@ const App = {
       `${content}\r\n` +
       `--${boundary}--`;
 
-    const response = await fetch(
-      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,parents',
+    const response = await this.driveFetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,parents,modifiedTime',
       {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.accessToken}`,
-          'Content-Type': `multipart/related; boundary=${boundary}`,
-        },
+        headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
         body: body,
       }
     );
-
-    if (response.status === 401) {
-      await this.reAuth();
-      return this.driveCreateFile(name, content, folderId);
-    }
-
-    if (!response.ok) {
-      throw new Error(`Drive create failed: ${response.status}`);
-    }
-
     return response.json();
   },
 
@@ -447,7 +533,7 @@ const App = {
       const nameSpan = document.createElement('span');
       nameSpan.className = 'recent-name';
       nameSpan.textContent = r.name;
-      nameSpan.addEventListener('click', () => this.openRecent(r.id, r.name));
+      nameSpan.addEventListener('click', () => this.openFile(r.id, r.name));
       li.appendChild(nameSpan);
 
       // Relative time
@@ -472,33 +558,6 @@ const App = {
 
       ul.appendChild(li);
     });
-  },
-
-  async openRecent(fileId, fileName) {
-    if (!this.accessToken) {
-      try {
-        await this.ensureAuth();
-      } catch {
-        this.setSaveStatus('error', 'Faça login primeiro');
-        return;
-      }
-    }
-
-    this.currentFile = { id: fileId, name: fileName };
-    this.updateFileNameDisplay();
-    this.setSaveStatus('saving', 'Carregando...');
-
-    try {
-      const content = await this.driveGetFileContent(fileId);
-      this.setContent(content);
-      this.showEditor();
-      this.setSaveStatus('saved', 'Carregado');
-      this.saveToRecents(fileId, fileName);
-      setTimeout(() => this.setSaveStatus('', ''), 2000);
-    } catch (e) {
-      console.error('Failed to load recent file:', e);
-      this.setSaveStatus('error', 'Erro ao carregar');
-    }
   },
 
   removeFromRecents(fileId) {
@@ -545,7 +604,15 @@ const App = {
 
     if (mode === 'preview') {
       const content = this.getContent();
-      this.els.previewContainer.innerHTML = marked.parse(content);
+      // The token in this page has full Drive scope, so rendered HTML is never trusted:
+      // without the sanitizer the note is shown as plain text instead
+      const sanitized = typeof DOMPurify !== 'undefined';
+      if (sanitized) {
+        this.els.previewContainer.innerHTML = DOMPurify.sanitize(marked.parse(content));
+      } else {
+        this.els.previewContainer.textContent = content;
+      }
+      this.els.previewContainer.style.whiteSpace = sanitized ? '' : 'pre-wrap';
       this.els.editorContainer.classList.add('hidden');
       this.els.previewContainer.classList.add('visible');
       this.els.btnPreview.classList.add('active');
@@ -597,45 +664,35 @@ const App = {
     return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}.md`;
   },
 
-  async newFile() {
+  newFile() {
+    // Whatever is open gets saved before it is replaced
+    this.flushCurrent();
+    this._loadSeq++; // a file still loading must not land on top of the new note
+
     const name = this.generateFileName();
-    const file = { id: null, name: name };
+    // The draft key is fixed for the life of the note, so the draft is still found
+    // (and cleared) after the note gets its Drive ID
+    const file = { id: null, name: name, draftKey: `drivenotes_draft_new_${Date.now()}` };
     this.currentFile = file;
     this.setContent('');
     this.showEditor();
     this.updateFileNameDisplay();
     this.focusEditor();
 
-    // Create on Drive in background
+    // Create on Drive in background, not awaited, so the user can type immediately.
+    // If it fails, the first save creates the file instead.
     if (this.accessToken) {
       this.setSaveStatus('saving', 'Criando no Drive...');
-      this._pendingCreate = (async () => {
-        try {
-          const result = await this.driveCreateFile(name, '', CONFIG.DEFAULT_FOLDER_ID);
-          file.id = result.id;
-          // Only update UI if user hasn't navigated to a different file
-          if (this.currentFile === file) {
-            this.saveToRecents(result.id, name);
-            this.setSaveStatus('saved', 'Criado no Drive');
-            setTimeout(() => {
-              if (this.currentFile === file) this.setSaveStatus('', '');
-            }, 2000);
-          }
-          return result;
-        } catch (e) {
-          console.error('Failed to create on Drive:', e);
-          if (this.currentFile === file) {
-            this.setSaveStatus('error', 'Erro — salvo local');
-            this.saveDraft();
-          }
-          throw e;
-        } finally {
-          this._pendingCreate = null;
-        }
-      })();
-      // Don't await — let user type immediately
-    } else {
-      this.saveDraft();
+      this.enqueue(() => this.createOnDrive(file, '')).then(() => {
+        if (this.currentFile !== file) return;
+        this.setSaveStatus('saved', 'Criado no Drive');
+        setTimeout(() => {
+          if (this.currentFile === file) this.setSaveStatus('', '');
+        }, 2000);
+      }).catch((e) => {
+        console.error('Failed to create on Drive:', e);
+        if (this.currentFile === file) this.setSaveStatus('error', 'Erro ao criar no Drive');
+      });
     }
   },
 
@@ -651,109 +708,338 @@ const App = {
     }
   },
 
-  async save() {
-    if (!this.isDirty) return;
+  /** Run a Drive write after every write queued before it */
+  enqueue(task) {
+    const run = this._saveChain.then(task);
+    this._saveChain = run.catch(() => {});
+    return run;
+  },
 
-    // If a create is in flight (from newFile), wait for it so we don't duplicate.
-    if (this._pendingCreate) {
-      try { await this._pendingCreate; }
-      catch { /* create failed — fall through, we'll try again below */ }
+  /** Save the open file. `manual` is a tap on save: the only thing that reopens a pending conflict dialog. */
+  save({ manual = false } = {}) {
+    const file = this.currentFile;
+    if (!file || !this.isDirty) return Promise.resolve();
+    clearTimeout(this.autoSaveTimer);
+
+    if (file.conflict) {
+      // Never write over a Drive version the user hasn't ruled on; keep the text safe locally
+      this.saveDraft();
+      if (manual) this.showConflict(file);
+      return Promise.resolve();
     }
 
     const content = this.getContent();
+    return this.enqueue(() => this.saveSnapshot(file, content));
+  },
 
-    // If we have a Drive file ID, save to Drive
-    if (this.currentFile && this.currentFile.id && this.accessToken) {
-      this.setSaveStatus('saving', 'Salvando...');
-      try {
-        await this.driveUpdateFile(this.currentFile.id, content);
-        this.isDirty = false;
-        this.updateFileNameDisplay();
-        this.setSaveStatus('saved', 'Salvo no Drive');
-        this.clearDraft(); // synced — drop local backup
-        setTimeout(() => this.setSaveStatus('', ''), 3000);
-      } catch (e) {
-        console.error('Drive save failed:', e);
-        this.setSaveStatus('error', 'Erro ao salvar');
-        this.saveDraft();
-      }
-    } else if (this.currentFile && !this.currentFile.id && this.accessToken) {
-      // New file not yet on Drive — create it, tracked to prevent concurrent duplicates
-      const file = this.currentFile;
-      this.setSaveStatus('saving', 'Criando no Drive...');
-      this._pendingCreate = (async () => {
-        const result = await this.driveCreateFile(file.name, content, CONFIG.DEFAULT_FOLDER_ID);
-        file.id = result.id;
-        return result;
-      })().finally(() => { this._pendingCreate = null; });
+  /** Called before the editor switches to another file: the open one is saved in the background.
+      The draft is written first, synchronously, so the text survives whatever happens to the request. */
+  flushCurrent() {
+    clearTimeout(this.autoSaveTimer);
+    const file = this.currentFile;
+    if (!file || !this.isDirty) return;
 
-      try {
-        await this._pendingCreate;
-        this.saveToRecents(file.id, file.name);
-        this.isDirty = false;
-        this.updateFileNameDisplay();
-        this.setSaveStatus('saved', 'Salvo no Drive');
-        this.clearDraft();
-        setTimeout(() => this.setSaveStatus('', ''), 3000);
-      } catch (e) {
-        console.error('Drive create failed:', e);
-        this.setSaveStatus('error', 'Erro — salvo local');
-        this.saveDraft();
-      }
-    } else {
-      // No auth — save locally
-      this.saveDraft();
-      this.isDirty = false;
-      this.updateFileNameDisplay();
-      this.setSaveStatus('saved', 'Rascunho salvo');
-      setTimeout(() => this.setSaveStatus('', ''), 3000);
+    const content = this.getContent();
+    this.saveDraft(file, content);
+    if (file.conflict) return; // stays as a draft; the dialog comes back when it is reopened
+    this.enqueue(() => this.saveSnapshot(file, content));
+  },
+
+  /** Write one snapshot of one file to Drive. The file may no longer be the open one,
+      so the UI is only touched while it still is. Never throws: on failure the snapshot becomes a draft. */
+  async saveSnapshot(file, content) {
+    const isCurrent = () => this.currentFile === file;
+
+    if (file.conflict) {
+      // Queued behind a save of the same file that hit a conflict
+      this.saveDraft(file, content);
+      return;
     }
-  },
 
-  // Drafts are keyed per-file so saving file B doesn't overwrite an unsaved draft of file A.
-  draftKey() {
-    return this.currentFile?.id
-      ? `drivenotes_draft_${this.currentFile.id}`
-      : 'drivenotes_draft_new';
-  },
-
-  saveDraft() {
-    const draft = {
-      name: this.currentFile ? this.currentFile.name : 'sem-titulo.md',
-      content: this.getContent(),
-      timestamp: Date.now(),
-      fileId: this.currentFile ? this.currentFile.id : null,
-    };
-    const key = this.draftKey();
-    localStorage.setItem(key, JSON.stringify(draft));
-    localStorage.setItem('drivenotes_draft_latest', key);
-  },
-
-  clearDraft() {
-    localStorage.removeItem(this.draftKey());
-    if (localStorage.getItem('drivenotes_draft_latest') === this.draftKey()) {
-      localStorage.removeItem('drivenotes_draft_latest');
+    if (content === file.lastSavedContent) {
+      this.settleSaved(file, content);
+      return;
     }
-  },
 
-  loadDraft() {
+    if (!this.accessToken) {
+      // No auth: keep it locally. It stays flagged as unsaved because it is not on Drive.
+      this.saveDraft(file, content);
+      if (isCurrent()) {
+        this.setSaveStatus('saved', 'Rascunho salvo');
+        setTimeout(() => {
+          if (isCurrent()) this.setSaveStatus('', '');
+        }, 3000);
+      }
+      return;
+    }
+
+    if (isCurrent()) {
+      this.setSaveStatus('saving', file.id ? 'Salvando...' : 'Criando no Drive...');
+    }
+
     try {
-      // Prefer latest per-file key; fall back to legacy single-key draft
-      const latestKey = localStorage.getItem('drivenotes_draft_latest');
-      const raw = (latestKey && localStorage.getItem(latestKey))
-        || localStorage.getItem('drivenotes_draft');
-      if (!raw) return false;
+      if (file.id) {
+        // Someone else (the PC, another device) may have written the file since we opened it
+        const remote = await this.driveGetFileMeta(file.id, 'modifiedTime');
+        if (remote.modifiedTime !== file.modifiedTime) {
+          file.conflict = true;
+          file.remoteModifiedTime = remote.modifiedTime;
+          this.saveDraft(file, content);
+          if (isCurrent()) {
+            this.setSaveStatus('error', 'Conflito com o Drive');
+            this.showConflict(file);
+          } else {
+            this.setSaveStatus('error', `Conflito em ${file.name}: rascunho guardado`);
+          }
+          return;
+        }
 
-      const draft = JSON.parse(raw);
-      this.currentFile = { id: draft.fileId, name: draft.name };
-      this.setContent(draft.content);
-      this.showEditor();
-      // Draft exists precisely because it wasn't synced — flag as unsaved
-      this.isDirty = true;
-      this.updateFileNameDisplay();
-      return true;
+        const result = await this.driveUpdateFile(file.id, content);
+        file.modifiedTime = result.modifiedTime;
+        file.lastSavedContent = content;
+      } else {
+        await this.createOnDrive(file, content);
+      }
+    } catch (e) {
+      console.error('Drive save failed:', e);
+      this.saveDraft(file, content);
+      if (isCurrent()) {
+        this.setSaveStatus('error', 'Erro: salvo local');
+      } else {
+        this.setSaveStatus('error', `Erro ao salvar ${file.name}: rascunho guardado`);
+      }
+      return;
+    }
+
+    this.settleSaved(file, content);
+    if (isCurrent()) {
+      this.setSaveStatus('saved', 'Salvo no Drive');
+      setTimeout(() => {
+        if (isCurrent()) this.setSaveStatus('', '');
+      }, 3000);
+    }
+  },
+
+  /** Bookkeeping after `content` is known to be on Drive */
+  settleSaved(file, content) {
+    if (this.currentFile !== file) {
+      this.clearDraft(file);
+      return;
+    }
+
+    // Text typed while the request was in flight is not on Drive yet
+    const changed = this.getContent() !== content;
+    this.isDirty = changed;
+    this.updateFileNameDisplay();
+    if (changed) {
+      this.scheduleAutoSave();
+    } else {
+      this.clearDraft(file);
+    }
+  },
+
+  /** Create `file` on Drive and record its ID and version on the file object */
+  async createOnDrive(file, content) {
+    const folderId = file.parents?.[0] || CONFIG.DEFAULT_FOLDER_ID;
+    const result = await this.driveCreateFile(file.name, content, folderId);
+    file.id = result.id;
+    file.modifiedTime = result.modifiedTime;
+    file.parents = result.parents;
+    file.lastSavedContent = content;
+
+    // A draft written while the create was in flight still says "not on Drive";
+    // opening it later would create the file a second time
+    const draft = this.readDraft(file.draftKey);
+    if (draft) {
+      draft.fileId = file.id;
+      draft.baseModifiedTime = file.modifiedTime;
+      draft.parents = file.parents;
+      localStorage.setItem(file.draftKey, JSON.stringify(draft));
+    }
+
+    this.saveToRecents(file.id, file.name);
+  },
+
+  // ── Drafts (localStorage) ──
+  // One draft per file, under file.draftKey. A draft means "text that is not on Drive yet".
+
+  saveDraft(file = this.currentFile, content = this.getContent()) {
+    if (!file) return;
+    const draft = {
+      name: file.name,
+      content: content,
+      timestamp: Date.now(),
+      fileId: file.id,
+      // Drive version the text was based on, so the conflict check still works after a restart
+      baseModifiedTime: file.modifiedTime,
+      parents: file.parents,
+    };
+    try {
+      localStorage.setItem(file.draftKey, JSON.stringify(draft));
+    } catch (e) {
+      console.error('Failed to save draft:', e);
+    }
+  },
+
+  clearDraft(file = this.currentFile) {
+    if (file) localStorage.removeItem(file.draftKey);
+  },
+
+  readDraft(key) {
+    try {
+      const draft = JSON.parse(localStorage.getItem(key));
+      return draft && typeof draft.content === 'string' ? draft : null;
     } catch {
-      return false;
+      return null;
+    }
+  },
+
+  /** All non-empty drafts, newest first. Includes keys written by older versions of the app. */
+  listDrafts() {
+    const drafts = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key.startsWith('drivenotes_draft') || key === 'drivenotes_draft_latest') continue;
+      const draft = this.readDraft(key);
+      if (draft && draft.content.trim()) drafts.push({ key, ...draft });
+    }
+    return drafts.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  },
+
+  openDraft(key) {
+    const draft = this.readDraft(key);
+    if (!draft) return false;
+
+    this.flushCurrent();
+    this._loadSeq++;
+
+    this.currentFile = {
+      id: draft.fileId || null,
+      name: draft.name || 'sem-titulo.md',
+      draftKey: key,
+      modifiedTime: draft.baseModifiedTime,
+      parents: draft.parents,
+    };
+    this.setContent(draft.content);
+    this.showEditor();
+    // Draft exists precisely because it wasn't synced: flag as unsaved
+    this.isDirty = true;
+    this.updateFileNameDisplay();
+    this.setSaveStatus('', 'Rascunho não sincronizado');
+    return true;
+  },
+
+  renderDrafts() {
+    const drafts = this.listDrafts();
+    const container = document.getElementById('drafts-list');
+    const ul = document.getElementById('drafts-ul');
+    if (!container || !ul) return;
+
+    container.classList.toggle('hidden', !drafts.length);
+    ul.innerHTML = '';
+
+    drafts.forEach(d => {
+      const li = document.createElement('li');
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'recent-name';
+      nameSpan.textContent = d.name || 'sem-titulo.md';
+      nameSpan.addEventListener('click', () => this.openDraft(d.key));
+      li.appendChild(nameSpan);
+
+      const ago = this.timeAgo(d.timestamp);
+      if (ago) {
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'recent-time';
+        timeSpan.textContent = ago;
+        li.appendChild(timeSpan);
+      }
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'recent-remove';
+      removeBtn.textContent = '×';
+      removeBtn.title = 'Descartar rascunho';
+      removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!confirm(`Descartar o rascunho de "${d.name}"? O texto que não está no Drive será perdido.`)) return;
+        localStorage.removeItem(d.key);
+        this.renderDrafts();
+      });
+      li.appendChild(removeBtn);
+
+      ul.appendChild(li);
+    });
+  },
+
+  // ── Conflict with Drive ──
+
+  showConflict(file) {
+    this._conflictFile = file;
+    this.els.conflictText.textContent =
+      `"${file.name}" mudou no Drive depois que você abriu. Sua versão está guardada neste aparelho.`;
+    this.els.conflict.classList.add('visible');
+  },
+
+  conflictCopyName(name) {
+    const stamp = this.generateFileName().replace(/\.md$/, '');
+    const dot = name.lastIndexOf('.');
+    const base = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : '';
+    return `${base} (conflito ${stamp})${ext}`;
+  },
+
+  async resolveConflict(action) {
+    const file = this._conflictFile;
+    this._conflictFile = null;
+    this.els.conflict.classList.remove('visible');
+    if (!file || this.currentFile !== file) return;
+
+    if (action === 'later') {
+      this.setSaveStatus('error', 'Conflito pendente: toque em salvar');
+      return;
+    }
+
+    if (action === 'overwrite') {
+      // Accept the Drive version as seen; if it changes yet again, the check fires again
+      file.modifiedTime = file.remoteModifiedTime;
+      file.conflict = false;
+      this.isDirty = true;
+      await this.save();
+      return;
+    }
+
+    if (action === 'reload') {
+      this.clearDraft(file);
+      file.conflict = false;
+      this.isDirty = false;
+      await this.openFile(file.id, file.name);
+      return;
+    }
+
+    if (action === 'copy') {
+      const content = this.getContent();
+      const copy = {
+        id: null,
+        name: this.conflictCopyName(file.name),
+        draftKey: `drivenotes_draft_new_${Date.now()}`,
+        parents: file.parents,
+      };
+      this.setSaveStatus('saving', 'Salvando cópia...');
+      try {
+        await this.enqueue(() => this.createOnDrive(copy, content));
+      } catch (e) {
+        // Conflict stays pending and the draft stays in place
+        console.error('Failed to save conflict copy:', e);
+        this.setSaveStatus('error', 'Erro ao salvar cópia');
+        return;
+      }
+      if (this.currentFile !== file) return;
+
+      this.clearDraft(file);
+      file.conflict = false;
+      this.currentFile = copy;
+      this.settleSaved(copy, content);
+      this.setSaveStatus('saved', 'Cópia salva no Drive');
     }
   },
 
@@ -836,8 +1122,13 @@ const App = {
     // Header buttons
     this.els.btnNew.addEventListener('click', () => this.newFile());
     this.els.btnOpen.addEventListener('click', () => this.openPicker());
-    this.els.btnSave?.addEventListener('click', () => this.save());
+    this.els.btnSave?.addEventListener('click', () => this.save({ manual: true }));
     this.els.btnPreview.addEventListener('click', () => this.togglePreview());
+
+    // Conflict dialog
+    document.querySelectorAll('[data-conflict]').forEach(btn => {
+      btn.addEventListener('click', () => this.resolveConflict(btn.dataset.conflict));
+    });
 
     // Modal
     this.els.modalCancel.addEventListener('click', () => this.hideModal());
@@ -874,7 +1165,7 @@ const App = {
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
-        this.save();
+        this.save({ manual: true });
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
         e.preventDefault();
@@ -885,11 +1176,6 @@ const App = {
     // Welcome buttons
     document.getElementById('welcome-new')?.addEventListener('click', () => this.newFile());
     document.getElementById('welcome-open')?.addEventListener('click', () => this.openPicker());
-    document.getElementById('welcome-draft')?.addEventListener('click', () => {
-      if (this.loadDraft()) {
-        this.setSaveStatus('', 'Rascunho carregado');
-      }
-    });
 
     // Flush on hide/close — mobile users switch apps constantly.
     // saveDraft is sync (localStorage) so it always runs; save() is async best-effort.
