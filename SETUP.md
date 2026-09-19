@@ -1,4 +1,4 @@
-# Drive Notes — Setup do Google Cloud
+# Drive Notes: setup do Google Cloud
 
 Guia passo a passo pra configurar a integração com o Google Drive.
 Você só precisa fazer isso **uma vez**.
@@ -92,7 +92,7 @@ Depois de ativar o GitHub Pages, volte ao Google Cloud Console:
 ## 9. Instalar no celular
 
 1. Abra a URL do GitHub Pages no Chrome do celular
-2. Na primeira vez, faça login com Google (vai aparecer tela "App não verificado" — clique "Avançado" → "Acessar")
+2. Na primeira vez, faça login com Google (vai aparecer tela "App não verificado": clique "Avançado" → "Acessar")
 3. Toque no menu do Chrome (⋮) → **Adicionar à tela inicial**
 4. O app aparece como ícone no celular e abre fullscreen
 
@@ -100,7 +100,7 @@ Depois de ativar o GitHub Pages, volte ao Google Cloud Console:
 
 ## Troubleshooting
 
-- **"This app isn't verified"**: Normal pra projetos em Testing mode. Clique "Advanced" → "Go to Drive Notes (unsafe)". É seguro — é o seu próprio app.
+- **"This app isn't verified"**: Normal pra projetos em Testing mode. Clique "Advanced" → "Go to Drive Notes (unsafe)". É seguro: é o seu próprio app.
 - **Pasta não carrega**: Verifique se a Google Drive API está ativada e se `VAULT_FOLDER_ID` é o ID da pasta certa.
 - **Botão voltar do celular não funciona**: na tela inicial, toque 5 vezes no título "Drive Notes". Abre um painel de diagnóstico com o modo de navegação em uso e o log dos últimos eventos.
 - **401 Unauthorized**: Token expirou. Recarregue a página e faça login novamente.
