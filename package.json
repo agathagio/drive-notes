@@ -1,0 +1,17 @@
+{
+  "name": "drive-notes",
+  "private": true,
+  "description": "Drive Notes: PWA pessoal de notas em markdown no Google Drive. Este package.json existe só para os testes; o app não tem build.",
+  "scripts": {
+    "test": "node tests/app.test.js",
+    "test:browser": "node tests/browser.test.js",
+    "test:all": "node tests/app.test.js && node tests/browser.test.js",
+    "screenshots": "node tests/screenshots.js"
+  },
+  "devDependencies": {
+    "dompurify": "3.2.6",
+    "jsdom": "30.1.0",
+    "marked": "15.0.7",
+    "tiny-markdown-editor": "0.1.8"
+  }
+}
