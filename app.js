@@ -2375,10 +2375,22 @@ const App = {
     this.log('sketch: close');
   },
 
+  /** This screen covers the app header, which is where setSaveStatus writes, so it has to carry its
+      own "sending" state: without it a tap on ✓ looks like nothing happened, and the next tap starts
+      a second upload. Everything on the screen stops taking taps, including the canvas, so a
+      frustrated tap does not turn into a stroke. */
+  sketchBusy(on) {
+    this.els.sketchScreen.classList.toggle('sketch-sending', on);
+    this.els.sketchDone.disabled = on;
+    this.els.sketchCancel.disabled = on;
+    document.querySelector('.sketch-title').textContent = on ? 'Enviando...' : 'Desenho';
+  },
+
   /** ✕ and the system back button. A drawing with ink in it is never thrown away without asking;
       an untouched screen just closes. */
   async sketchCancel() {
-    if (!this.sketch) return;
+    // The back button reaches this without going through the (disabled) ✕
+    if (!this.sketch || this.sketch.busy) return;
     if (this.sketchBounds(this.sketch.strokes)) {
       const discard = await this.confirmDialog('Descartar o desenho?', 'O desenho não vai pra nota.', 'Descartar');
       // Back may have been pressed again while the dialog was up
@@ -2523,12 +2535,16 @@ const App = {
       drawing still on it, because a drawing cannot be picked again. */
   async sketchFinish() {
     const s = this.sketch;
-    if (!s) return;
+    // Upload takes seconds on a phone. Without this guard every extra tap in that window starts
+    // another upload, and the note ends up with the same drawing embedded several times over.
+    if (!s || s.busy) return;
     const out = this.sketchExport();
     if (!out) { this.sketchClose(); return; }
 
     const file = this.currentFile;
     const at = s.at;
+    s.busy = true;
+    this.sketchBusy(true);
     this.setSaveStatus('saving', 'Enviando desenho...');
 
     let name;
@@ -2551,6 +2567,11 @@ const App = {
       localStorage.removeItem('drivenotes_media_folder');
       this.setSaveStatus('error', 'Erro ao enviar o desenho');
       return;
+    } finally {
+      // Every failure leaves the screen open, so it has to be usable again: locked for good would
+      // mean not even being able to leave
+      s.busy = false;
+      this.sketchBusy(false);
     }
 
     this.sketchClose();

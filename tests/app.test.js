@@ -1238,5 +1238,59 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     check('tentar de novo com a rede de volta sobe o mesmo desenho', uploaded().length === 2 && !App.sketch && /!\[\[desenho-/.test(ta.value));
   }
 
+  console.log('34. Desenho: toque repetido no pronto nao sobe o desenho varias vezes');
+  {
+    const { App, drive, w } = await boot();
+    w.URL.createObjectURL = () => 'blob:fake/sketch';
+    drive.put('media', '_media', '', [VAULT]); drive.files.get('media').mimeType = FOLDER;
+    drive.put('A', 'a.md', 'nota');
+    await App.openFile('A', 'a.md');
+    App.setMode('edit');
+    const ta = App.els.editorElement;
+    const btnDone = w.document.getElementById('sketch-done');
+    const btnCancel = w.document.getElementById('sketch-cancel');
+    const title = w.document.querySelector('.sketch-title');
+    const uploaded = () => [...drive.files.values()].filter(f => /^desenho-/.test(f.name));
+    const embeds = () => (ta.value.match(/!\[\[desenho-/g) || []).length;
+    const openSketch = () => w.document.querySelector('.toolbar-btn[data-sketch]').click();
+    const scribble = () => {
+      const c = App.sketch.canvas;
+      for (const type of ['pointerdown', 'pointerup']) {
+        c.dispatchEvent(new w.PointerEvent(type, { clientX: 40, clientY: 40, pointerId: 1, bubbles: true, cancelable: true }));
+      }
+    };
+
+    // A rede de verdade nao responde na hora: e essa janela que deixava o segundo toque entrar
+    drive.delay = 50;
+    openSketch();
+    scribble();
+    const first = App.sketchFinish();
+    check('enquanto sobe, a tela avisa e trava o pronto e o sair', title.textContent === 'Enviando...' && btnDone.disabled && btnCancel.disabled, [title.textContent, btnDone.disabled, btnCancel.disabled]);
+    const repeated = [App.sketchFinish(), App.sketchFinish()];
+    await Promise.all([first, ...repeated]);
+    check('tres toques no mesmo segundo sobem UM desenho so', uploaded().length === 1, uploaded().map(f => f.name));
+    check('e escrevem UM embed so na nota', embeds() === 1, ta.value);
+    check('a tela volta ao normal depois de fechar', title.textContent === 'Desenho' && !btnDone.disabled && !btnCancel.disabled);
+
+    // O voltar do sistema nao passa por cima da trava: ele chama sketchCancel direto
+    openSketch();
+    scribble();
+    const inFlight = App.sketchFinish();
+    App.sketchCancel();
+    check('o voltar durante o envio nao abandona a tela', !!App.sketch);
+    await inFlight;
+    check('e o envio terminou normalmente', uploaded().length === 2 && embeds() === 2, ta.value);
+
+    // Falhar nao pode deixar a tela travada pra sempre: senao nao da nem pra sair
+    drive.failWrites = true;
+    openSketch();
+    scribble();
+    await App.sketchFinish();
+    check('upload que falha destrava a tela de novo', !!App.sketch && !btnDone.disabled && !btnCancel.disabled && title.textContent === 'Desenho', [btnDone.disabled, title.textContent]);
+    drive.failWrites = false;
+    await App.sketchFinish();
+    check('e dai da pra tentar de novo', uploaded().length === 3 && embeds() === 3 && !App.sketch);
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });

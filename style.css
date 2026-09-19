@@ -979,3 +979,15 @@ body[data-view="preview"] .file-name {
 }
 
 .sketch-gap { width: 12px; }
+
+/* While the drawing is going up: nothing on the screen takes a tap, the canvas included, so an
+   impatient tap neither starts a second upload nor leaves a stray stroke behind */
+.sketch-screen.sketch-sending .sketch-bar,
+.sketch-screen.sketch-sending .sketch-canvas {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.sketch-top .btn:disabled {
+  opacity: 0.4;
+}
