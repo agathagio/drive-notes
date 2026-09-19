@@ -89,9 +89,11 @@
     <button class="toolbar-btn" data-format="link" title="Link">🔗</button>
     <button class="toolbar-btn" data-format="code" title="Código">&lt;/&gt;</button>
     <div class="toolbar-separator"></div>
-    <button class="toolbar-btn" id="btn-photo" title="Foto">📷</button>
+    <button class="toolbar-btn" data-photo="camera" title="Tirar foto">📷</button>
+    <button class="toolbar-btn" data-photo="gallery" title="Foto da galeria">🖼️</button>
   </nav>
-  <!-- No "capture": Android then offers both the camera and the gallery -->
+  <!-- Recent Android opens the system photo picker for image/*, which has no camera:
+       the camera button sets "capture" on this input before opening it -->
   <input id="photo-input" type="file" accept="image/*" hidden>
 
   <!-- Spacer to compensate for fixed toolbar -->

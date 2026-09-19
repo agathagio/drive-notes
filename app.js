@@ -58,7 +58,6 @@ const App = {
       btnOpen: document.getElementById('btn-open'),
       btnSave: document.getElementById('btn-save'),
       btnPreview: document.getElementById('btn-preview'),
-      btnPhoto: document.getElementById('btn-photo'),
       photoInput: document.getElementById('photo-input'),
       editorContainer: document.getElementById('editor-container'),
       editorElement: document.getElementById('editor'),
@@ -1836,10 +1835,14 @@ const App = {
 
   // ── Photo into the note ──
 
-  /** Tap on the camera button. The picker takes the focus away, so the cursor position is kept for later. */
-  pickPhoto() {
+  /** Tap on a photo button: `source` is 'camera' or 'gallery'. The picker takes the focus away,
+      so the cursor position is kept for later. */
+  pickPhoto(source) {
     if (this.mode !== 'edit') return;
     this._photoAt = this.editor ? this.editor.getSelection(false) : null;
+    // With "capture" Android goes straight to the camera; without it, to the photo picker
+    if (source === 'camera') this.els.photoInput.setAttribute('capture', 'environment');
+    else this.els.photoInput.removeAttribute('capture');
     this.els.photoInput.value = '';
     this.els.photoInput.click();
   },
@@ -2026,15 +2029,17 @@ const App = {
       btn.addEventListener('click', () => this.applyFormat(btn.dataset.format));
     });
 
-    // Photo button: same touch handling as the formatting buttons. The file picker only opens from
+    // Photo buttons: same touch handling as the formatting buttons. The file picker only opens from
     // inside a tap, and touchend counts as one.
-    this.els.btnPhoto.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
-    this.els.btnPhoto.addEventListener('touchend', (e) => {
-      e.preventDefault();
-      this.pickPhoto();
-    }, { passive: false });
-    this.els.btnPhoto.addEventListener('mousedown', (e) => e.preventDefault());
-    this.els.btnPhoto.addEventListener('click', () => this.pickPhoto());
+    document.querySelectorAll('.toolbar-btn[data-photo]').forEach(btn => {
+      btn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+      btn.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        this.pickPhoto(btn.dataset.photo);
+      }, { passive: false });
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.addEventListener('click', () => this.pickPhoto(btn.dataset.photo));
+    });
     this.els.photoInput.addEventListener('change', () => {
       const picked = this.els.photoInput.files[0];
       if (picked) this.insertPhoto(picked);

@@ -489,10 +489,15 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     const photo = () => new w.File(['bytes-da-foto'], 'IMG_1234.JPG', { type: 'image/jpeg' });
     const uploaded = () => [...drive.files.values()].filter(f => /^foto-/.test(f.name));
 
-    let opened = 0;
-    App.els.photoInput.click = () => { opened++; };
-    App.els.btnPhoto.click();
-    check('botao da camera abre o seletor de arquivo', opened === 1);
+    const opened = [];
+    App.els.photoInput.click = () => { opened.push(App.els.photoInput.getAttribute('capture')); };
+    w.document.querySelector('[data-photo="camera"]').click();
+    w.document.querySelector('[data-photo="gallery"]').click();
+    check('botao da camera pede a camera, o da galeria nao', opened.length === 2 && opened[0] === 'environment' && opened[1] === null, opened);
+    App.setMode('preview');
+    w.document.querySelector('[data-photo="camera"]').click();
+    check('fora da edicao os botoes nao fazem nada', opened.length === 2);
+    App.setMode('edit');
 
     ta.selectionStart = ta.selectionEnd = 'linha um'.length;
     await App.insertPhoto(photo());
