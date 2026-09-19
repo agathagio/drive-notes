@@ -321,6 +321,40 @@ const FAKE_DRIVE = `
     check('a borracha apagou pra transparente, nao pra preto', sketch.erased[3] === 0, sketch.erased);
     check('o PNG sai no tamanho do recorte vezes o dpr', sketch.out[0] === sketch.expected[0] && sketch.out[1] === sketch.expected[1], sketch);
     check('e e um PNG de verdade', sketch.type === 'image/png' && sketch.png.slice(0, 4).join() === '137,80,78,71', sketch);
+
+    // ── O dialogo de descartar precisa receber o dedo, nao so ficar "visible" ──
+    console.log('8. Desenho: o dialogo de descartar e alcancavel pelo dedo');
+    await open(buildPage('sketch-dialogo', currentApp));
+    await js(FAKE_DRIVE);
+    await editNote('linha um\n', 0, 8);
+    const dialogo = JSON.parse(await js(`(() => {
+      __App.setMode('edit');
+      document.querySelector('.toolbar-btn[data-sketch]').click();
+      const c = __App.sketch.canvas;
+      const r = c.getBoundingClientRect();
+      for (const type of ['pointerdown', 'pointerup']) {
+        c.dispatchEvent(new PointerEvent(type, { clientX: 100, clientY: r.top + 100, pointerId: 1, bubbles: true, cancelable: true }));
+      }
+      document.getElementById('sketch-cancel').click();
+
+      // elementFromPoint responde o que o dedo acertaria de verdade, e nao o que a classe diz
+      const hit = (el) => {
+        const b = el.getBoundingClientRect();
+        const top = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+        return el === top || el.contains(top);
+      };
+      const ok = document.getElementById('confirm-ok');
+      const cancel = document.getElementById('confirm-cancel');
+      return JSON.stringify({
+        visivel: document.getElementById('confirm-overlay').classList.contains('visible'),
+        okAlcancavel: hit(ok),
+        cancelarAlcancavel: hit(cancel),
+        porCimaDoOk: (() => { const b = ok.getBoundingClientRect(); const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); return t ? (t.id || t.className || t.tagName) : null; })(),
+      });
+    })()`));
+    check('o dialogo abre', dialogo.visivel, dialogo);
+    check('o dedo alcanca o "Descartar"', dialogo.okAlcancavel, dialogo);
+    check('o dedo alcanca o "Cancelar"', dialogo.cancelarAlcancavel, dialogo);
   } finally {
     browser.close();
   }

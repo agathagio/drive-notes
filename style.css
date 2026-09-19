@@ -447,7 +447,9 @@ body {
   display: none;
   align-items: center;
   justify-content: center;
-  z-index: 100;
+  /* Above every view, including the full-screen drawing one (200). A dialog that a view paints
+     over is worse than invisible: the tap goes to whatever is on top (see drive-notes-aprendizados) */
+  z-index: 300;
   padding: 20px;
 }
 
