@@ -981,9 +981,14 @@ body[data-view="preview"] .file-name {
 .sketch-gap { width: 12px; }
 
 /* While the drawing is going up: nothing on the screen takes a tap, the canvas included, so an
-   impatient tap neither starts a second upload nor leaves a stray stroke behind */
-.sketch-screen.sketch-sending .sketch-bar,
+   impatient tap neither starts a second upload nor leaves a stray stroke behind. The drawing
+   itself keeps its colours: fading it out right when the person is unsure whether it saved
+   reads as losing it. */
 .sketch-screen.sketch-sending .sketch-canvas {
+  pointer-events: none;
+}
+
+.sketch-screen.sketch-sending .sketch-bar {
   opacity: 0.4;
   pointer-events: none;
 }
