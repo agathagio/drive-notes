@@ -269,6 +269,58 @@ const FAKE_DRIVE = `
     await js(`document.getElementById('btn-save').click(); 'ok'`);
     await sleep(300);
     check('... salva dali mesmo e some de novo', Number(await js('window.__written.length')) === 2 && await saveShown() === false, await js('window.__written.length'));
+
+    // ── Desenho: canvas de verdade, com dpr, ponta redonda, borracha e recorte ──
+    console.log('7. Desenho no canvas de verdade');
+    await open(buildPage('sketch', currentApp));
+    await js(FAKE_DRIVE);
+    await editNote('linha um\n', 0, 8);
+    const sketch = JSON.parse(await js(`(async () => {
+      __App.setMode('edit');
+      document.querySelector('.toolbar-btn[data-sketch]').click();
+      const s = __App.sketch;
+      const c = s.canvas;
+      const move = (type, x, y) => c.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, pointerId: 1, bubbles: true, cancelable: true }));
+      // The canvas sits under the 48px top bar, so a point on screen is not a point on the canvas.
+      // Reading the pixel under where the finger actually was is what proves the app converts it.
+      const rect = c.getBoundingClientRect();
+      const under = (x, y) => [...s.ctx.getImageData(Math.round((x - rect.left) * s.dpr), Math.round((y - rect.top) * s.dpr), 1, 1).data];
+
+      // A green stroke, then an eraser stroke over its middle
+      document.querySelector('[data-sketch-color="#369680"]').click();
+      document.querySelector('[data-sketch-width="12"]').click();
+      move('pointerdown', 120, 200); move('pointermove', 220, 200); move('pointerup', 220, 200);
+      const painted = under(170, 200);
+      const offBy = under(170, 200 + Math.round(rect.top));
+
+      document.getElementById('sketch-erase').click();
+      move('pointerdown', 170, 190); move('pointermove', 170, 210); move('pointerup', 170, 210);
+      const erased = under(170, 200);
+
+      const out = __App.sketchExport();
+      const blob = await new Promise(r => out.toBlob(r, 'image/png'));
+      const head = new Uint8Array(await blob.slice(0, 8).arrayBuffer());
+      const box = __App.sketchBounds(s.strokes);
+      return JSON.stringify({
+        dpr: s.dpr,
+        backing: [c.width, c.height],
+        cssSize: [c.clientWidth, c.clientHeight],
+        cap: s.ctx.lineCap, join: s.ctx.lineJoin,
+        painted, erased, offBy, top: rect.top,
+        out: [out.width, out.height],
+        expected: [Math.round(box.width * s.dpr), Math.round(box.height * s.dpr)],
+        png: [...head],
+        type: blob.type,
+      });
+    })()`));
+
+    check('canvas guarda o backing store em pixels do aparelho', sketch.backing[0] === Math.round(sketch.cssSize[0] * sketch.dpr), sketch);
+    check('ponta e junta do traco sao redondas', sketch.cap === 'round' && sketch.join === 'round', sketch);
+    check('o traco verde pintou de verde opaco', sketch.painted[3] > 200 && sketch.painted[1] > sketch.painted[0], sketch.painted);
+    check('e pintou sob o dedo, nao deslocado pela faixa do topo', sketch.top > 0 && sketch.offBy[3] === 0, [sketch.top, sketch.offBy]);
+    check('a borracha apagou pra transparente, nao pra preto', sketch.erased[3] === 0, sketch.erased);
+    check('o PNG sai no tamanho do recorte vezes o dpr', sketch.out[0] === sketch.expected[0] && sketch.out[1] === sketch.expected[1], sketch);
+    check('e e um PNG de verdade', sketch.type === 'image/png' && sketch.png.slice(0, 4).join() === '137,80,78,71', sketch);
   } finally {
     browser.close();
   }
