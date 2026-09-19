@@ -2502,6 +2502,67 @@ const App = {
     for (const stroke of s.strokes) this.sketchPaintStroke(stroke);
   },
 
+  /** The PNG that goes to the vault: only the part with ink on it, at the screen's pixel density.
+      Null when nothing was drawn. */
+  sketchExport() {
+    const s = this.sketch;
+    const box = s && this.sketchBounds(s.strokes);
+    if (!box) return null;
+    const out = document.createElement('canvas');
+    out.width = Math.round(box.width * s.dpr);
+    out.height = Math.round(box.height * s.dpr);
+    // The source canvas holds its backing store in device pixels, so the shift is in device pixels
+    // too. Drawing the whole source at an offset (rather than cropping with the nine-argument
+    // drawImage) is what lets the box hang off the edge into the negative.
+    out.getContext('2d')?.drawImage(s.canvas, Math.round(-box.x * s.dpr), Math.round(-box.y * s.dpr));
+    return out;
+  },
+
+  /** ✓: crop, upload to the vault's attachment folder, and only then write ![[name]] into the note,
+      the same order as a photo. What differs: a failed upload leaves the screen open with the
+      drawing still on it, because a drawing cannot be picked again. */
+  async sketchFinish() {
+    const s = this.sketch;
+    if (!s) return;
+    const out = this.sketchExport();
+    if (!out) { this.sketchClose(); return; }
+
+    const file = this.currentFile;
+    const at = s.at;
+    this.setSaveStatus('saving', 'Enviando desenho...');
+
+    let name;
+    try {
+      await this.ensureAuth();
+      const folderId = await this.getMediaFolderId();
+      if (!folderId) {
+        this.setSaveStatus('error', `Pasta ${CONFIG.MEDIA_FOLDER} não encontrada no vault`);
+        return;
+      }
+      const blob = await new Promise(resolve => out.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('canvas produced no blob');
+      name = this.mediaName(blob, null, 'desenho');
+      await this.driveUploadBlob(name, blob, folderId);
+      // The reading view shows it straight from here, without asking Drive for it back
+      this._embedUrls.set(name, Promise.resolve(URL.createObjectURL(blob)));
+    } catch (e) {
+      console.error('Sketch upload failed:', e);
+      // In case it was the remembered folder that went away: look it up again next time
+      localStorage.removeItem('drivenotes_media_folder');
+      this.setSaveStatus('error', 'Erro ao enviar o desenho');
+      return;
+    }
+
+    this.sketchClose();
+    if (this.currentFile !== file) {
+      this.setSaveStatus('error', `Desenho salvo, mas a nota mudou: ${name}`);
+      return;
+    }
+    this.insertOnOwnLine(`![[${name}]]`, at);
+    this.markDirty();
+    this.setSaveStatus('saved', 'Desenho inserido');
+  },
+
   // ── Events ──
 
   scrollCaretIntoView() {
@@ -2660,6 +2721,7 @@ const App = {
     this.els.sketchCanvas.addEventListener('pointerup', (e) => this.sketchUp(e));
     this.els.sketchCanvas.addEventListener('pointercancel', (e) => this.sketchUp(e));
     this.els.sketchUndo.addEventListener('click', () => this.sketchUndo());
+    this.els.sketchDone.addEventListener('click', () => this.sketchFinish());
     // A rotated phone changes the canvas size
     window.addEventListener('resize', () => this.sketchResize());
 

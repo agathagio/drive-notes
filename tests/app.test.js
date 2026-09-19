@@ -1185,5 +1185,58 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     check('descartar fecha a tela e nao mexe na nota', !App.sketch && App.getContent() === 'linha um' && !App.isDirty);
   }
 
+  console.log('33. Desenho: o pronto recorta, sobe pro _media e so entao entra na nota');
+  {
+    const { App, drive, w } = await boot();
+    w.URL.createObjectURL = () => 'blob:fake/sketch';
+    w.devicePixelRatio = 2;
+    drive.put('media', '_media', '', [VAULT]); drive.files.get('media').mimeType = FOLDER;
+    drive.put('A', 'a.md', 'linha um\nlinha dois');
+    await App.openFile('A', 'a.md');
+    App.setMode('edit');
+    const ta = App.els.editorElement;
+    const uploaded = () => [...drive.files.values()].filter(f => /^desenho-/.test(f.name));
+    const openSketch = () => w.document.querySelector('.toolbar-btn[data-sketch]').click();
+    const scribble = (from, to) => {
+      const c = App.sketch.canvas;
+      c.dispatchEvent(new w.PointerEvent('pointerdown', { clientX: from.x, clientY: from.y, pointerId: 1, bubbles: true, cancelable: true }));
+      c.dispatchEvent(new w.PointerEvent('pointermove', { clientX: to.x, clientY: to.y, pointerId: 1, bubbles: true, cancelable: true }));
+      c.dispatchEvent(new w.PointerEvent('pointerup', { clientX: to.x, clientY: to.y, pointerId: 1, bubbles: true, cancelable: true }));
+    };
+
+    openSketch();
+    await App.sketchFinish();
+    check('tela em branco: o pronto so fecha, sem subir nada', !App.sketch && uploaded().length === 0 && ta.value === 'linha um\nlinha dois');
+
+    ta.selectionStart = ta.selectionEnd = 'linha um'.length;
+    openSketch();
+    scribble({ x: 100, y: 50 }, { x: 140, y: 90 });
+    await App.sketchFinish();
+    const up = uploaded()[0];
+    check('desenho no _media, com nome desenho-data-hora.png', uploaded().length === 1 && up.parents[0] === 'media' && /^desenho-\d{4}-\d{2}-\d{2}-\d{6}\.png$/.test(up.name), up);
+    check('o PNG sai do tamanho do recorte, em pixels do aparelho', up.content === `png ${(40 + 6 + 32) * 2}x${(40 + 6 + 32) * 2}`, up.content);
+    check('embed em linha propria, onde o cursor estava', ta.value === `linha um\n![[${up.name}]]\n\nlinha dois`, ta.value);
+    check('tela fechada e nota suja pra salvar', !App.sketch && App.isDirty && App.els.saveStatus.textContent === 'Desenho inserido');
+
+    const gets = drive.count('GET content');
+    App.setMode('preview');
+    await sleep(40);
+    check('modo leitura mostra o desenho sem baixar de volta', App.els.previewContainer.querySelector('img')?.getAttribute('src') === 'blob:fake/sketch' && drive.count('GET content') === gets);
+    App.setMode('edit');
+    await App.save(); await App._saveChain;
+
+    drive.failWrites = true;
+    const before = ta.value;
+    openSketch();
+    scribble({ x: 10, y: 10 }, { x: 60, y: 60 });
+    await App.sketchFinish();
+    check('upload falhou: a tela FICA aberta com o desenho, e nada entra na nota',
+      !!App.sketch && App.sketch.strokes.length === 1 && ta.value === before && uploaded().length === 1 && App.els.saveStatus.textContent === 'Erro ao enviar o desenho', App.els.saveStatus.textContent);
+
+    drive.failWrites = false;
+    await App.sketchFinish();
+    check('tentar de novo com a rede de volta sobe o mesmo desenho', uploaded().length === 2 && !App.sketch && /!\[\[desenho-/.test(ta.value));
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });
