@@ -98,6 +98,7 @@
     <div class="toolbar-separator"></div>
     <button class="toolbar-btn" data-photo="camera" title="Tirar foto">📷</button>
     <button class="toolbar-btn" data-photo="gallery" title="Foto da galeria">🖼️</button>
+    <button class="toolbar-btn" data-sketch="open" title="Desenhar">✏️</button>
   </nav>
   <!-- Recent Android opens the system photo picker for image/*, which has no camera:
        the camera button sets "capture" on this input before opening it -->
@@ -105,6 +106,25 @@
 
   <!-- Spacer to compensate for fixed toolbar -->
   <div class="toolbar-spacer"></div>
+
+  <!-- ── Tela de desenho (por cima do editor). As cores nascem do SKETCH_COLORS do app.js ── -->
+  <div id="sketch-screen" class="sketch-screen">
+    <div class="sketch-top">
+      <button id="sketch-cancel" class="btn btn-icon" title="Sair" aria-label="Sair do desenho">&#10005;</button>
+      <span class="sketch-title">Desenho</span>
+      <button id="sketch-done" class="btn btn-icon sketch-active" title="Pronto" aria-label="Pronto">&#10003;</button>
+    </div>
+    <canvas id="sketch-canvas" class="sketch-canvas"></canvas>
+    <div id="sketch-colors" class="sketch-bar"></div>
+    <div class="sketch-bar">
+      <button class="sketch-tool" data-sketch-width="3" aria-label="Traço fino"><i style="width:4px;height:4px"></i></button>
+      <button class="sketch-tool" data-sketch-width="6" aria-label="Traço médio"><i style="width:8px;height:8px"></i></button>
+      <button class="sketch-tool" data-sketch-width="12" aria-label="Traço grosso"><i style="width:14px;height:14px"></i></button>
+      <span class="sketch-gap"></span>
+      <button id="sketch-erase" class="sketch-tool" aria-label="Borracha">&#9003;</button>
+      <button id="sketch-undo" class="sketch-tool" aria-label="Desfazer">&#8630;</button>
+    </div>
+  </div>
 
   <!-- In every dialog, the button marked data-dismiss is what the system back button presses -->
 

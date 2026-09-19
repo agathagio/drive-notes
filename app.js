@@ -63,6 +63,10 @@ const App = {
   useWatcher: false,
   navStack: [],
   _watcher: null,
+  // The drawing screen while it is open: { canvas, ctx, dpr, strokes, stroke, color, width, erase, at }.
+  // `strokes` is the whole drawing (painting works from it, never from the pixels on screen) and
+  // `at` is where the caret was in the note. Null while the screen is closed.
+  sketch: null,
   // Recent navigation events, for the hidden diagnostics panel
   _log: [],
 
@@ -91,6 +95,13 @@ const App = {
       conflict: document.getElementById('conflict-overlay'),
       conflictText: document.getElementById('conflict-text'),
       browser: document.getElementById('browser'),
+      sketchScreen: document.getElementById('sketch-screen'),
+      sketchCanvas: document.getElementById('sketch-canvas'),
+      sketchColors: document.getElementById('sketch-colors'),
+      sketchCancel: document.getElementById('sketch-cancel'),
+      sketchDone: document.getElementById('sketch-done'),
+      sketchErase: document.getElementById('sketch-erase'),
+      sketchUndo: document.getElementById('sketch-undo'),
     };
 
     // Pointer used by older versions; drafts are now found by scanning their keys
@@ -2334,6 +2345,78 @@ const App = {
     return { x: box.left - m, y: box.top - m, width: (box.right - box.left) + m * 2, height: (box.bottom - box.top) + m * 2 };
   },
 
+  /** Open the drawing screen over the editor. Only from the edit view, with a note open. */
+  sketchOpen() {
+    if (this.mode !== 'edit' || !this.currentFile || this.sketch) return;
+    // getSelection returns null once the focus is gone, so the caret is read before the blur
+    const at = this.editor ? this.editor.getSelection(false) : null;
+    // Without the blur the keyboard sits over half the canvas
+    document.activeElement?.blur?.();
+
+    this.sketch = {
+      canvas: this.els.sketchCanvas, ctx: null, dpr: 1,
+      strokes: [], stroke: null,
+      color: this.SKETCH_COLORS[0], width: 6, erase: false, at,
+    };
+    this.els.sketchScreen.classList.add('visible');
+    this.sketchResize();
+    this.sketchRenderTools();
+    this.armWatcher();
+    this.log('sketch: open');
+  },
+
+  /** Leave the screen. Nothing here touches the note: that is sketchFinish's job. */
+  sketchClose() {
+    this.els.sketchScreen.classList.remove('visible');
+    this.sketch = null;
+    this.armWatcher();
+    this.log('sketch: close');
+  },
+
+  /** Size the backing store in device pixels and repaint. Without the dpr the stroke comes out
+      jagged on a phone and the 3px one nearly disappears. Setting canvas.width wipes the context
+      state, so the scale and the round caps are set again every time. Also the rotation handler:
+      the strokes are repainted at the new size, with their coordinates untouched. */
+  sketchResize() {
+    const s = this.sketch;
+    if (!s) return;
+    s.dpr = window.devicePixelRatio || 1;
+    const width = s.canvas.clientWidth || window.innerWidth;
+    const height = s.canvas.clientHeight || window.innerHeight;
+    s.canvas.width = Math.round(width * s.dpr);
+    s.canvas.height = Math.round(height * s.dpr);
+    s.ctx = s.canvas.getContext('2d');
+    if (s.ctx) {
+      s.ctx.scale(s.dpr, s.dpr);
+      s.ctx.lineCap = 'round';
+      s.ctx.lineJoin = 'round';
+    }
+    this.sketchRepaint();
+  },
+
+  /** The colour row is built from SKETCH_COLORS, so the palette is written down in one place only */
+  sketchRenderTools() {
+    const s = this.sketch;
+    if (!s) return;
+    const row = this.els.sketchColors;
+    if (!row.children.length) {
+      for (const color of this.SKETCH_COLORS) {
+        const btn = document.createElement('button');
+        btn.className = 'sketch-swatch';
+        btn.style.background = color;
+        btn.dataset.sketchColor = color;
+        btn.setAttribute('aria-label', `Cor ${color}`);
+        row.appendChild(btn);
+      }
+    }
+    for (const btn of row.children) btn.classList.toggle('sketch-active', !s.erase && btn.dataset.sketchColor === s.color);
+    for (const btn of document.querySelectorAll('[data-sketch-width]')) btn.classList.toggle('sketch-active', Number(btn.dataset.sketchWidth) === s.width);
+    this.els.sketchErase.classList.toggle('sketch-active', s.erase);
+  },
+
+  /** Nothing to paint yet: the strokes arrive in the next task */
+  sketchRepaint() {},
+
   // ── Events ──
 
   scrollCaretIntoView() {
@@ -2458,6 +2541,37 @@ const App = {
       const picked = this.els.photoInput.files[0];
       if (picked) this.insertPhoto(picked);
     });
+
+    // Drawing: the pencil sits with the photo buttons and gets the same touch handling, because it
+    // is tapped with the keyboard open (see the toolbar note above)
+    const pencil = document.querySelector('.toolbar-btn[data-sketch]');
+    pencil?.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+    pencil?.addEventListener('touchend', (e) => { e.preventDefault(); this.sketchOpen(); }, { passive: false });
+    pencil?.addEventListener('mousedown', (e) => e.preventDefault());
+    pencil?.addEventListener('click', () => this.sketchOpen());
+
+    this.els.sketchCancel.addEventListener('click', () => this.sketchClose());
+    this.els.sketchColors.addEventListener('click', (e) => {
+      const color = e.target.dataset?.sketchColor;
+      if (!color || !this.sketch) return;
+      this.sketch.color = color;
+      this.sketch.erase = false;
+      this.sketchRenderTools();
+    });
+    document.querySelectorAll('[data-sketch-width]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (!this.sketch) return;
+        this.sketch.width = Number(btn.dataset.sketchWidth);
+        this.sketchRenderTools();
+      });
+    });
+    this.els.sketchErase.addEventListener('click', () => {
+      if (!this.sketch) return;
+      this.sketch.erase = !this.sketch.erase;
+      this.sketchRenderTools();
+    });
+    // A rotated phone changes the canvas size
+    window.addEventListener('resize', () => this.sketchResize());
 
     // Pictures in the editor are sized to the line: a rotated phone changes that
     window.addEventListener('resize', () => this.scheduleEmbedDecoration());

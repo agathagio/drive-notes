@@ -107,6 +107,26 @@ function makeDrive() {
   return drive;
 }
 
+/** Stands in for the 2d context jsdom does not have: records what was painted, in order.
+    Kept on the canvas so a resize (which really would reset the context) does not lose the log. */
+function fakeCtx(canvas) {
+  if (canvas.__ctx) return canvas.__ctx;
+  const ops = [];
+  const ctx = {
+    ops, canvas,
+    lineCap: '', lineJoin: '', lineWidth: 0, strokeStyle: '', globalCompositeOperation: 'source-over',
+    scale: (x, y) => ops.push(`scale ${x},${y}`),
+    clearRect: (x, y, w, h) => ops.push(`clear ${x},${y},${w},${h}`),
+    beginPath: () => ops.push('begin'),
+    moveTo: (x, y) => ops.push(`move ${x},${y}`),
+    lineTo: (x, y) => ops.push(`line ${x},${y}`),
+    stroke() { ops.push(`stroke ${this.strokeStyle} w=${this.lineWidth} ${this.globalCompositeOperation}`); },
+    drawImage: (src, x, y) => ops.push(`drawImage ${src.width}x${src.height} at ${x},${y}`),
+  };
+  canvas.__ctx = ctx;
+  return ctx;
+}
+
 async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const dom = new JSDOM(html, { url: 'http://localhost:8000/', runScripts: 'outside-only', pretendToBeVisual: true });
@@ -125,6 +145,11 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
   w.fetch = drive.fetch;
   w.confirm = () => true;
   w.HTMLElement.prototype.scrollIntoView = function () {};
+  // jsdom has no canvas and no pointer capture: see drive-notes-aprendizados
+  w.HTMLCanvasElement.prototype.getContext = function () { return fakeCtx(this); };
+  w.HTMLCanvasElement.prototype.toBlob = function (cb, type) { cb(new w.Blob([`png ${this.width}x${this.height}`], { type: type || 'image/png' })); };
+  w.Element.prototype.setPointerCapture = function () {};
+  w.Element.prototype.releasePointerCapture = function () {};
   w.console = { log() {}, warn() {}, error() {} };
   for (const [k, v] of Object.entries(seedStorage)) w.localStorage.setItem(k, v);
   w.eval(fs.readFileSync(LIBS.marked, 'utf8'));
@@ -1030,6 +1055,44 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
 
     const edge = App.sketchBounds([line(3, [{ x: 2, y: 2 }])]);
     check('traco na borda deixa a caixa entrar no negativo', edge.x === 2 - 1.5 - 16 && edge.y === 2 - 1.5 - 16, edge);
+  }
+
+  console.log('30. Desenho: a tela abre a partir da edicao e fecha sem mexer na nota');
+  {
+    const { App, drive, w } = await boot();
+    w.devicePixelRatio = 3;
+    drive.put('A', 'a.md', 'linha um');
+    await App.openFile('A', 'a.md');
+    const screen = w.document.getElementById('sketch-screen');
+    const pencil = w.document.querySelector('.toolbar-btn[data-sketch]');
+
+    App.setMode('preview');
+    pencil.click();
+    check('fora da edicao o lapis nao abre nada', !App.sketch && !screen.classList.contains('visible'));
+
+    App.setMode('edit');
+    pencil.click();
+    check('na edicao o lapis abre a tela', !!App.sketch && screen.classList.contains('visible'));
+    check('comeca no cinza, 6px, sem borracha', App.sketch.color === '#9b94a6' && App.sketch.width === 6 && App.sketch.erase === false, App.sketch);
+    check('canvas dimensionado pelo devicePixelRatio', App.sketch.canvas.width === w.innerWidth * 3 && App.sketch.dpr === 3, [App.sketch.canvas.width, App.sketch.dpr]);
+    check('contexto sai com ponta redonda', App.sketch.ctx.lineCap === 'round' && App.sketch.ctx.lineJoin === 'round');
+
+    const swatches = [...w.document.getElementById('sketch-colors').children];
+    check('seis bolinhas, uma por cor da paleta', swatches.length === 6 && swatches.map(b => b.dataset.sketchColor).join() === App.SKETCH_COLORS.join());
+    check('a cor ativa e a unica marcada', swatches.filter(b => b.classList.contains('sketch-active')).length === 1 && swatches[0].classList.contains('sketch-active'));
+
+    swatches[2].click();
+    check('tocar numa cor troca a cor ativa', App.sketch.color === '#e0645c' && swatches[2].classList.contains('sketch-active') && !swatches[0].classList.contains('sketch-active'));
+    w.document.querySelector('[data-sketch-width="12"]').click();
+    check('tocar na espessura troca e marca', App.sketch.width === 12 && w.document.querySelector('[data-sketch-width="12"]').classList.contains('sketch-active'));
+    w.document.getElementById('sketch-erase').click();
+    check('borracha liga e desmarca a cor', App.sketch.erase === true && !swatches[2].classList.contains('sketch-active'));
+    swatches[1].click();
+    check('tocar numa cor desliga a borracha', App.sketch.erase === false && App.sketch.color === '#8b6cef');
+
+    const before = App.getContent();
+    App.sketchClose();
+    check('fechar tira a tela e o estado, sem tocar na nota', !App.sketch && !screen.classList.contains('visible') && App.getContent() === before && !App.isDirty);
   }
 
   done();
