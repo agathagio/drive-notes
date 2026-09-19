@@ -9,6 +9,8 @@ const CONFIG = {
   // Root of the file browser
   VAULT_FOLDER_ID: '1xJYm3FFeafY1IAcvAHuQ5BaMX7KxRM-K',
   VAULT_NAME: 'vault',
+  // Attachment folder at the vault root (Obsidian's attachmentFolderPath)
+  MEDIA_FOLDER: '_media',
 };
 
 const SCOPES = 'https://www.googleapis.com/auth/drive';
@@ -35,6 +37,8 @@ const App = {
   folder: null,
   // Folder listings seen in this session, by folder ID
   _folderCache: new Map(),
+  // Embedded images fetched in this session: file name -> promise of a blob URL (null when not found)
+  _embedUrls: new Map(),
   // "Back" without the history stack (see Navigation): views left behind, and the active CloseWatcher
   useWatcher: false,
   navStack: [],
@@ -54,6 +58,8 @@ const App = {
       btnOpen: document.getElementById('btn-open'),
       btnSave: document.getElementById('btn-save'),
       btnPreview: document.getElementById('btn-preview'),
+      btnPhoto: document.getElementById('btn-photo'),
+      photoInput: document.getElementById('photo-input'),
       editorContainer: document.getElementById('editor-container'),
       editorElement: document.getElementById('editor'),
       previewContainer: document.getElementById('preview-container'),
@@ -573,6 +579,17 @@ const App = {
     return (await response.json()).files || [];
   },
 
+  /** ID of the vault's attachment folder, or null. Looked up once per device. */
+  async getMediaFolderId() {
+    const cached = localStorage.getItem('drivenotes_media_folder');
+    if (cached) return cached;
+    const folder = (await this.driveFindByName([CONFIG.MEDIA_FOLDER])).find(f =>
+      f.mimeType === 'application/vnd.google-apps.folder' && f.parents?.includes(CONFIG.VAULT_FOLDER_ID));
+    if (!folder) return null;
+    localStorage.setItem('drivenotes_media_folder', folder.id);
+    return folder.id;
+  },
+
   /** Fetch file content by ID */
   async driveGetFileContent(fileId) {
     const response = await this.driveFetch(
@@ -630,6 +647,30 @@ const App = {
 
     const response = await this.driveFetch(
       'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,parents,modifiedTime',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+        body: body,
+      }
+    );
+    return response.json();
+  },
+
+  /** Upload a binary file (a photo) into a folder. Resolves to { id, name }. */
+  async driveUploadBlob(name, blob, folderId) {
+    const boundary = '---drivenotes' + Date.now();
+    const body = new Blob([
+      `--${boundary}\r\n` +
+      `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+      `${JSON.stringify({ name, parents: [folderId] })}\r\n` +
+      `--${boundary}\r\n` +
+      `Content-Type: ${blob.type || 'application/octet-stream'}\r\n\r\n`,
+      blob,
+      `\r\n--${boundary}--`,
+    ]);
+
+    const response = await this.driveFetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',
       {
         method: 'POST',
         headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
@@ -799,6 +840,7 @@ const App = {
 
     container.innerHTML = DOMPurify.sanitize(marked.parse(body));
     this.decoratePreview(container);
+    this.loadEmbeds(container);
 
     if (frontmatter) {
       // YAML properties: out of the way, one tap to see. Shown raw, never parsed.
@@ -850,6 +892,44 @@ const App = {
       quote.classList.add('callout');
       quote.dataset.callout = type;
     });
+  },
+
+  /** ![[foto.jpg]]: Drive only hands the file over with the login, so an <img> cannot point at it.
+      The image is fetched here and given to the <img> as a blob. No image, no login: back to a label. */
+  loadEmbeds(container) {
+    container.querySelectorAll('img[data-embed]').forEach(async (img) => {
+      const name = img.dataset.embed.split('/').pop().trim();
+      if (!this._embedUrls.has(name)) {
+        this._embedUrls.set(name, this.fetchEmbed(name).catch(() => null));
+      }
+      const url = await this._embedUrls.get(name);
+      if (url) {
+        img.src = url;
+        return;
+      }
+      // Not cached, so the next render tries again (the photo may still be syncing)
+      this._embedUrls.delete(name);
+      const label = document.createElement('span');
+      label.className = 'wikilink-file';
+      label.textContent = img.alt;
+      img.replaceWith(label);
+    });
+  },
+
+  /** Blob URL for an image found by file name, or null. Never opens a login popup just for a picture. */
+  async fetchEmbed(name) {
+    if (!this.hasValidToken()) return null;
+    const images = (await this.driveFindByName([name])).filter(f => (f.mimeType || '').startsWith('image/'));
+    if (!images.length) return null;
+
+    // Same name in more than one place: the one in the attachment folder wins, then the newest
+    let pick = images[0];
+    if (images.length > 1) {
+      const media = await this.getMediaFolderId().catch(() => null);
+      pick = images.find(f => media && f.parents?.includes(media)) || pick;
+    }
+    const response = await this.driveFetch(`https://www.googleapis.com/drive/v3/files/${pick.id}?alt=media`);
+    return URL.createObjectURL(await response.blob());
   },
 
   /** Taps inside the reading view: wikilinks and relative .md links open notes, the rest leaves the app */
@@ -1754,6 +1834,111 @@ const App = {
     ta.focus();
   },
 
+  // ── Photo into the note ──
+
+  /** Tap on the camera button. The picker takes the focus away, so the cursor position is kept for later. */
+  pickPhoto() {
+    if (this.mode !== 'edit') return;
+    this._photoAt = this.editor ? this.editor.getSelection(false) : null;
+    this.els.photoInput.value = '';
+    this.els.photoInput.click();
+  },
+
+  /** Shrink, upload to the vault's attachment folder, and only then write ![[name]] into the note:
+      a failed upload leaves no broken embed behind */
+  async insertPhoto(picked) {
+    const file = this.currentFile;
+    this.setSaveStatus('saving', 'Enviando foto...');
+
+    let name;
+    try {
+      await this.ensureAuth();
+      const folderId = await this.getMediaFolderId();
+      if (!folderId) {
+        this.setSaveStatus('error', `Pasta ${CONFIG.MEDIA_FOLDER} não encontrada no vault`);
+        return;
+      }
+      const photo = await this.shrinkPhoto(picked);
+      name = this.photoName(photo, picked.name);
+      await this.driveUploadBlob(name, photo, folderId);
+      // The reading view shows it straight from here, without asking Drive for it back
+      this._embedUrls.set(name, Promise.resolve(URL.createObjectURL(photo)));
+    } catch (e) {
+      console.error('Photo upload failed:', e);
+      // In case it was the remembered folder that went away: look it up again next time
+      localStorage.removeItem('drivenotes_media_folder');
+      this.setSaveStatus('error', 'Erro ao enviar a foto');
+      return;
+    }
+
+    if (this.currentFile !== file) {
+      this.setSaveStatus('error', `Foto salva, mas a nota mudou: ${name}`);
+      return;
+    }
+    this.insertOnOwnLine(`![[${name}]]`, this._photoAt);
+    this.markDirty();
+    this.setSaveStatus('saved', 'Foto inserida');
+  },
+
+  PHOTO_MAX_SIDE: 2000,
+
+  /** Phone photos are 4 to 8 MB and everything in the vault syncs to the computer: anything larger than
+      PHOTO_MAX_SIDE is scaled down. What the browser cannot decode or redraw goes up as it is. */
+  async shrinkPhoto(file) {
+    // Not GIF (would lose the animation) nor SVG (no pixels to scale)
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type) || typeof createImageBitmap !== 'function') return file;
+    try {
+      const bitmap = await createImageBitmap(file);
+      const scale = this.PHOTO_MAX_SIDE / Math.max(bitmap.width, bitmap.height);
+      if (scale >= 1) return file;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(bitmap.width * scale);
+      canvas.height = Math.round(bitmap.height * scale);
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      // PNG stays PNG (screenshots, transparency); the rest becomes JPEG
+      const type = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, type, 0.85));
+      return blob && blob.size < file.size ? blob : file;
+    } catch (e) {
+      console.warn('Photo not resized:', e);
+      return file;
+    }
+  },
+
+  /** foto-2026-09-19-153012.jpg: the vault's kebab-case, and unique to the second */
+  photoName(blob, originalName) {
+    const two = (n) => String(n).padStart(2, '0');
+    const d = new Date();
+    const stamp = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
+    const fromType = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg' }[blob.type];
+    const ext = fromType || (/\.([a-z0-9]+)$/i.exec(originalName || '')?.[1] || 'jpg').toLowerCase();
+    return `foto-${stamp}.${ext}`;
+  },
+
+  /** Insert `text` as a line of its own: at the cursor, or where it was (`at`) when the editor lost the focus,
+      or at the end. The cursor ends on a fresh line below. */
+  insertOnOwnLine(text, at) {
+    if (this.editor) {
+      const ed = this.editor;
+      const last = ed.lines.length - 1;
+      const wanted = ed.getSelection(false) || at || { row: last, col: ed.lines[last].length };
+      // The note may have got shorter while the photo was going up
+      const row = Math.min(wanted.row, last);
+      const pos = { row, col: Math.min(wanted.col, ed.lines[row].length) };
+      const before = ed.lines[row].slice(0, pos.col).trim() ? '\n' : '';
+      ed.paste(`${before}${text}\n`, pos, { ...pos });
+      return;
+    }
+
+    const ta = this.els.editorElement;
+    const value = ta.value;
+    const index = ta.selectionStart;
+    const before = index > 0 && value[index - 1] !== '\n' ? '\n' : '';
+    ta.value = value.slice(0, index) + before + text + '\n' + value.slice(index);
+    ta.selectionStart = ta.selectionEnd = index + before.length + text.length + 1;
+  },
+
   // ── Events ──
 
   scrollCaretIntoView() {
@@ -1841,6 +2026,20 @@ const App = {
       btn.addEventListener('click', () => this.applyFormat(btn.dataset.format));
     });
 
+    // Photo button: same touch handling as the formatting buttons. The file picker only opens from
+    // inside a tap, and touchend counts as one.
+    this.els.btnPhoto.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+    this.els.btnPhoto.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      this.pickPhoto();
+    }, { passive: false });
+    this.els.btnPhoto.addEventListener('mousedown', (e) => e.preventDefault());
+    this.els.btnPhoto.addEventListener('click', () => this.pickPhoto());
+    this.els.photoInput.addEventListener('change', () => {
+      const picked = this.els.photoInput.files[0];
+      if (picked) this.insertPhoto(picked);
+    });
+
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -1916,8 +2115,13 @@ const wikilinkExtension = {
     const escape = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     const label = token.alias
       || [token.target, token.heading].filter(Boolean).join(' > ');
-    // Embedded images and PDFs are not fetched: shown as a plain label
-    if (token.embed && /\.(png|jpe?g|gif|webp|svg|pdf|mp3|mp4|canvas)$/i.test(token.target)) {
+    // Embedded images get their src after sanitizing (see loadEmbeds). ![[foto.jpg|300]] sets the width.
+    if (token.embed && /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(token.target)) {
+      const width = /^\d+/.exec(token.alias)?.[0];
+      return `<img class="embed-img" data-embed="${escape(token.target)}" alt="${escape(width ? token.target : label)}"${width ? ` width="${width}"` : ''}>`;
+    }
+    // PDFs, audio and the like are not fetched: shown as a plain label
+    if (token.embed && /\.(pdf|mp3|mp4|canvas)$/i.test(token.target)) {
       return `<span class="wikilink-file">${escape(label)}</span>`;
     }
     return `<a href="#" class="wikilink" data-target="${escape(token.target)}" data-heading="${escape(token.heading)}">${escape(label)}</a>`;

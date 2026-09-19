@@ -30,6 +30,12 @@ const SETUP = `
   const notes = ['00-estado-projeto.md', '01-core.md', 'guia-voz-geral.md', 'Uma nota com um nome bem comprido pra ver como a linha quebra no celular.md', 'voz-blue.md'];
   window.fetch = async (url) => {
     const u = new URL(url); const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o });
+    // The embedded image of the sample note: found by name, then downloaded as a blob
+    if ((u.searchParams.get('q') || '').includes("name = 'diagrama.png'")) return ok({ files: [{ id: 'IMG', name: 'diagrama.png', mimeType: 'image/png', parents: ['d2'] }] });
+    if (u.pathname.endsWith('/IMG')) {
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600"><rect width="1200" height="600" fill="#2d2d52"/><circle cx="300" cy="300" r="160" fill="#bb86fc"/><rect x="620" y="160" width="400" height="280" rx="24" fill="#03dac6"/></svg>';
+      return { ok: true, status: 200, blob: async () => new Blob([svg], { type: 'image/svg+xml' }) };
+    }
     if (u.searchParams.get('alt') === 'media') return ok(${JSON.stringify(NOTE)});
     if (/files\\/[^/]+$/.test(u.pathname)) return ok({ id: 'N', name: 'Relatório semanal.md', modifiedTime: 't', parents: ['ROOT'] });
     return ok({ files: [
@@ -65,6 +71,8 @@ const SETUP = `
     await shot('3-leitura');
     await js(`document.querySelector('details.frontmatter').open = true; __App.els.previewContainer.scrollTop = 0; 'ok'`);
     await shot('4-leitura-propriedades');
+    await js(`__App.els.previewContainer.scrollTop = 1e6; 'ok'`);
+    await shot('4b-leitura-imagem');
     await js(`__App.setMode('edit'); 'ok'`);
     await shot('5-edicao');
     await js(`__App.promptRename(); 'ok'`);

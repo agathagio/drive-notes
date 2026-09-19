@@ -4,7 +4,7 @@ O app não tem build. O `package.json` da raiz existe só pra estes testes. Uma 
 
 ## `npm test`
 
-`app.test.js`: roda o `app.js` real dentro do jsdom contra um Google Drive falso em memória. Cobre save e fila de escrita, conflito, rascunhos, modo leitura (frontmatter, wikilinks, callouts, tabelas), navegação e botão voltar, renomear, login expirado, formatação e navegador de pastas. Leva uns 20 segundos.
+`app.test.js`: roda o `app.js` real dentro do jsdom contra um Google Drive falso em memória. Cobre save e fila de escrita, conflito, rascunhos, modo leitura (frontmatter, wikilinks, imagens embutidas, callouts, tabelas), foto na nota (upload pro `_media`), navegação e botão voltar, renomear, login expirado, formatação e navegador de pastas. Leva uns 20 segundos.
 
 O editor aqui é o textarea de fallback, porque o TinyMDE precisa de um navegador de verdade.
 
@@ -14,6 +14,7 @@ O editor aqui é o textarea de fallback, porque o TinyMDE precisa de um navegado
 
 - ditado por voz (composição de IME) no TinyMDE, com um controle que roda a versão antiga e confirma que o bug se reproduz nela;
 - barra de formatação no TinyMDE;
+- foto na nota: a redução por canvas de verdade e o `![[...]]` entrando no TinyMDE onde o cursor estava;
 - o CloseWatcher real, com a tecla Esc fazendo o papel do botão voltar do Android.
 
 Pra escolher o navegador: variável de ambiente `BROWSER_PATH`.

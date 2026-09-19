@@ -126,6 +126,48 @@ const FAKE_DRIVE = `
     await back(); v = await view();
     check('voltar 3: tela inicial', v.view === 'welcome' && v.stack === 0, v);
     check('historico do navegador nunca foi tocado', v.hist === hist0, [hist0, v.hist]);
+
+    // ── 4. Photo: the real canvas shrinks it, the real TinyMDE receives the embed ──
+    console.log('4. Foto na nota: reducao por canvas e insercao no TinyMDE');
+    await open(buildPage('current', currentApp));
+    await editNote('linha um\nlinha dois', 0, 8);
+    const photo = JSON.parse(await js(`(async () => {
+      localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
+      __App.accessToken = 'fake';
+      CONFIG.VAULT_FOLDER_ID = 'ROOT';
+      const posts = [];
+      window.fetch = async (url, opts = {}) => {
+        const ok = (o) => ({ ok: true, status: 200, json: async () => o });
+        if (opts.method === 'POST') { posts.push(opts.body); return ok({ id: 'P1', name: 'x' }); }
+        return ok({ files: [{ id: 'MEDIA', name: '_media', mimeType: 'application/vnd.google-apps.folder', parents: ['ROOT'] }] });
+      };
+      // A 12 MP "photo", noisy enough not to compress to nothing
+      const canvas = document.createElement('canvas'); canvas.width = 4000; canvas.height = 3000;
+      const ctx = canvas.getContext('2d');
+      for (let i = 0; i < 4000; i++) { ctx.fillStyle = 'hsl(' + (i * 37 % 360) + ',70%,' + (30 + i % 40) + '%)'; ctx.fillRect(Math.random() * 4000, Math.random() * 3000, 200, 200); }
+      const big = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.95));
+      const file = new File([big], 'IMG_0001.jpg', { type: 'image/jpeg' });
+
+      const small = await __App.shrinkPhoto(file);
+      const dims = await createImageBitmap(small);
+      const tiny = new File([await new Promise(r => { const c = document.createElement('canvas'); c.width = 800; c.height = 600; c.toBlob(r, 'image/png'); })], 'print.png', { type: 'image/png' });
+
+      // What the button does, then the picker taking the focus away
+      __App._photoAt = __App.editor.getSelection(false);
+      __App.editor.e.blur(); getSelection().removeAllRanges();
+      await __App.insertPhoto(file);
+      return JSON.stringify({
+        original: file.size, sent: posts[0]?.size, type: small.type, width: dims.width, height: dims.height,
+        untouched: (await __App.shrinkPhoto(tiny)) === tiny,
+        content: __App.getContent(), dirty: __App.isDirty, status: __App.els.saveStatus.textContent,
+      });
+    })()`));
+    console.log('     original', photo.original, 'bytes -> enviado', photo.sent, 'bytes,', photo.width + 'x' + photo.height);
+    check('foto de 4000x3000 sai com 2000 no lado maior, em JPEG', photo.width === 2000 && photo.height === 1500 && photo.type === 'image/jpeg', photo);
+    check('o que sobe e bem menor que o original', photo.sent > 0 && photo.sent < photo.original / 2, photo);
+    check('imagem pequena sobe como esta', photo.untouched === true);
+    check('embed entra onde o cursor estava antes do seletor abrir', /^linha um\n!\[\[foto-[\d-]+\.jpg\]\]\n\nlinha dois$/.test(photo.content), photo.content);
+    check('nota marcada como nao salva, aviso na tela', photo.dirty === true && photo.status === 'Foto inserida', photo);
   } finally {
     browser.close();
   }

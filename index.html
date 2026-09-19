@@ -88,7 +88,11 @@
     <div class="toolbar-separator"></div>
     <button class="toolbar-btn" data-format="link" title="Link">🔗</button>
     <button class="toolbar-btn" data-format="code" title="Código">&lt;/&gt;</button>
+    <div class="toolbar-separator"></div>
+    <button class="toolbar-btn" id="btn-photo" title="Foto">📷</button>
   </nav>
+  <!-- No "capture": Android then offers both the camera and the gallery -->
+  <input id="photo-input" type="file" accept="image/*" hidden>
 
   <!-- Spacer to compensate for fixed toolbar -->
   <div class="toolbar-spacer"></div>

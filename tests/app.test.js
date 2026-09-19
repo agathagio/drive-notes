@@ -9,6 +9,10 @@ const { ROOT, LIBS, sleep, cdnVersions, installedVersions, reporter } = require(
 
 const { check, done } = reporter();
 
+const FOLDER = 'application/vnd.google-apps.folder';
+// The browser and the attachment folder hang off whatever vault the app is configured with
+const VAULT = /VAULT_FOLDER_ID: '([^']+)'/.exec(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8'))[1];
+
 function makeDrive() {
   const drive = {
     files: new Map(), log: [], clock: 0, delay: 5, failWrites: false, failReads: false, nextId: 1,
@@ -47,7 +51,7 @@ function makeDrive() {
       if (!f) return json({}, 404);
       if (u.searchParams.get('alt') === 'media') {
         drive.log.push(`GET content ${f.id}`);
-        return { ok: true, status: 200, text: async () => f.content };
+        return { ok: true, status: 200, text: async () => f.content, blob: async () => ({ fake: 'blob', of: f.id }) };
       }
       drive.log.push(`GET meta ${f.id}`);
       return json({ id: f.id, name: f.name, modifiedTime: f.modifiedTime, parents: f.parents });
@@ -69,11 +73,18 @@ function makeDrive() {
     if (method === 'POST') {
       if (drive.failWrites) return json({}, 500);
       const boundary = opts.headers['Content-Type'].split('boundary=')[1];
-      const parts = opts.body.split(`--${boundary}`);
+      // A note goes up as a string, a photo as a Blob
+      const raw = typeof opts.body === 'string' ? opts.body : await new Promise(resolve => {
+        const reader = new drive.FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsText(opts.body);
+      });
+      const parts = raw.split(`--${boundary}`);
       const meta = JSON.parse(parts[1].split('\r\n\r\n')[1]);
       const content = parts[2].split('\r\n\r\n').slice(1).join('\r\n\r\n').replace(/\r\n$/, '');
+      const mimeType = /Content-Type: (\S+)/.exec(parts[2])[1];
       const id = 'new' + drive.nextId++;
-      drive.files.set(id, { id, name: meta.name, content, parents: meta.parents, modifiedTime: drive.tick() });
+      drive.files.set(id, { id, name: meta.name, content, mimeType, parents: meta.parents, modifiedTime: drive.tick() });
       drive.log.push(`POST ${id} ${meta.name}`);
       const f = drive.files.get(id);
       return json({ id, name: f.name, parents: f.parents, modifiedTime: f.modifiedTime });
@@ -97,6 +108,7 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     w.__back = () => { const top = w.__watchers.pop(); if (!top) return 'EXIT'; top.onclose(); return 'handled'; };
   }
   const drive = makeDrive();
+  drive.FileReader = w.FileReader;
   w.fetch = drive.fetch;
   w.confirm = () => true;
   w.HTMLElement.prototype.scrollIntoView = function () {};
@@ -420,8 +432,97 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     check('so titulo local', links[3].dataset.target === '' && links[3].dataset.heading === 'Local');
     check('dentro de tabela com \\|', links[4].textContent === 'na tabela' && links[4].dataset.target === 'Nota B' && !!links[4].closest('td'));
     check('codigo intocado', c.querySelector('p code').textContent === '[[nao link]]' && c.querySelector('pre code').textContent.includes('[[em bloco]]'));
-    check('embed de imagem vira rotulo', c.querySelector('.wikilink-file')?.textContent === 'foto.png');
-    check('HTML dentro de wikilink nao vira elemento', !c.querySelector('img'), c.innerHTML.slice(-200));
+    check('HTML dentro de wikilink nao vira elemento', !c.querySelector('img:not([data-embed])'), c.innerHTML.slice(-200));
+    await sleep(60);
+    check('embed de imagem que nao existe no Drive vira rotulo', !c.querySelector('img') && c.querySelector('.wikilink-file')?.textContent === 'foto.png', c.innerHTML.slice(0, 300));
+  }
+
+  console.log('16b. Imagem embutida: ![[foto.jpg]] carrega do Drive');
+  {
+    const { App, drive, w } = await boot();
+    const made = [];
+    w.URL.createObjectURL = (blob) => { made.push(blob.of); return `blob:fake/${blob.of}`; };
+    drive.put('media', '_media', '', [VAULT]); drive.files.get('media').mimeType = FOLDER;
+    const image = (id, name, parent, type = 'image/jpeg') => { drive.put(id, name, 'bin', [parent]); drive.files.get(id).mimeType = type; };
+    image('I1', 'foto.jpg', 'media');
+    image('D1', 'repetida.png', 'media', 'image/png');
+    image('D2', 'repetida.png', 'folderZ', 'image/png'); // mais nova: sem a regra do _media, ganharia
+    drive.put('P', 'doc.pdf', 'bin', ['media']); drive.files.get('P').mimeType = 'application/pdf';
+    drive.put('A', 'a.md', '![[foto.jpg]]\n\n![[foto.jpg|300]]\n\n![[_media/repetida.png|legenda]]\n\n![[doc.pdf]]\n\n![[sumiu.webp]]');
+    await App.openFile('A', 'a.md');
+    const c = App.els.previewContainer;
+    await sleep(120);
+    const imgs = [...c.querySelectorAll('img')];
+    check('3 imagens com src de blob', imgs.length === 3 && imgs.every(i => i.getAttribute('src')?.startsWith('blob:fake/')), c.innerHTML);
+    check('mesma foto duas vezes: baixada uma vez so', made.filter(id => id === 'I1').length === 1 && drive.count('GET content I1') === 1, made);
+    check('|300 vira largura, nao legenda', imgs[1].getAttribute('width') === '300' && imgs[1].alt === 'foto.jpg');
+    check('|texto vira legenda (alt)', imgs[2].alt === 'legenda' && !imgs[2].hasAttribute('width'));
+    check('nome repetido: ganha a que esta no _media', imgs[2].getAttribute('src') === 'blob:fake/D1', imgs[2].outerHTML);
+    check('pasta _media lembrada no aparelho', w.localStorage.getItem('drivenotes_media_folder') === 'media');
+    const labels = [...c.querySelectorAll('.wikilink-file')].map(l => l.textContent);
+    check('pdf e imagem sumida ficam como rotulo', labels.join('|') === 'doc.pdf|sumiu.webp', labels);
+
+    const gets = drive.count('GET content');
+    App.setMode('edit'); App.setMode('preview');
+    await sleep(60);
+    check('voltar pro modo leitura reaproveita as imagens ja baixadas', drive.count('GET content') === gets && c.querySelectorAll('img[src]').length === 3);
+
+    App.accessToken = null;
+    image('I2', 'outra.jpg', 'media');
+    App.currentFile = null; App.els.editorElement.value = '![[outra.jpg]]';
+    const lists = drive.count('LIST');
+    App.renderPreview();
+    await sleep(60);
+    check('sem login: nao procura nem abre popup, fica o rotulo', drive.count('LIST') === lists && c.querySelector('.wikilink-file')?.textContent === 'outra.jpg', c.innerHTML);
+  }
+
+  console.log('16c. Foto na nota: sobe pro _media e so depois entra o ![[...]]');
+  {
+    const { App, drive, w } = await boot();
+    w.URL.createObjectURL = () => 'blob:fake/local';
+    drive.put('media', '_media', '', [VAULT]); drive.files.get('media').mimeType = FOLDER;
+    drive.put('A', 'a.md', 'linha um\nlinha dois');
+    drive.put('B', 'b.md', 'outra nota');
+    await App.openFile('A', 'a.md');
+    App.setMode('edit');
+    const ta = App.els.editorElement;
+    const photo = () => new w.File(['bytes-da-foto'], 'IMG_1234.JPG', { type: 'image/jpeg' });
+    const uploaded = () => [...drive.files.values()].filter(f => /^foto-/.test(f.name));
+
+    let opened = 0;
+    App.els.photoInput.click = () => { opened++; };
+    App.els.btnPhoto.click();
+    check('botao da camera abre o seletor de arquivo', opened === 1);
+
+    ta.selectionStart = ta.selectionEnd = 'linha um'.length;
+    await App.insertPhoto(photo());
+    const up = uploaded()[0];
+    check('foto no _media, com nome foto-data-hora.jpg', uploaded().length === 1 && up.parents[0] === 'media' && /^foto-\d{4}-\d{2}-\d{2}-\d{6}\.jpg$/.test(up.name), up);
+    check('conteudo e tipo chegaram inteiros', up.content === 'bytes-da-foto' && up.mimeType === 'image/jpeg', up);
+    check('embed em linha propria, no cursor', ta.value === `linha um\n![[${up.name}]]\n\nlinha dois`, ta.value);
+    check('nota ficou suja pra salvar', App.isDirty && App.els.saveStatus.textContent === 'Foto inserida');
+    const gets = drive.count('GET content');
+    App.setMode('preview');
+    await sleep(40);
+    check('modo leitura mostra a foto sem baixar de volta', App.els.previewContainer.querySelector('img')?.getAttribute('src') === 'blob:fake/local' && drive.count('GET content') === gets);
+    await App.save(); await App._saveChain;
+
+    App.setMode('edit');
+    drive.failWrites = true;
+    const before = ta.value;
+    await App.insertPhoto(photo());
+    check('upload falhou: nada entra na nota, erro na tela', ta.value === before && uploaded().length === 1 && App.els.saveStatus.textContent === 'Erro ao enviar a foto', ta.value);
+    drive.failWrites = false;
+
+    const slow = App.insertPhoto(photo());
+    await App.openFile('B', 'b.md');
+    await slow;
+    check('trocou de nota durante o envio: a outra nota fica intacta', App.getContent() === 'outra nota' && uploaded().length === 2 && /mas a nota mudou/.test(App.els.saveStatus.textContent), App.els.saveStatus.textContent);
+
+    drive.files.delete('media'); w.localStorage.removeItem('drivenotes_media_folder');
+    App.setMode('edit');
+    await App.insertPhoto(photo());
+    check('sem pasta _media no vault: avisa e nao sobe', uploaded().length === 2 && /_media/.test(App.els.saveStatus.textContent), App.els.saveStatus.textContent);
   }
 
   console.log('17. Wikilinks: navegacao e voltar');
@@ -616,9 +717,6 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     await App._saveChain;
   }
 
-  const FOLDER = 'application/vnd.google-apps.folder';
-  // The browser starts at whatever folder the app is configured with
-  const VAULT = /VAULT_FOLDER_ID: '([^']+)'/.exec(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8'))[1];
   const seedVault = (drive) => {
     const dir = (id, name, parent) => { drive.put(id, name, '', [parent]); drive.files.get(id).mimeType = FOLDER; };
     dir('d-proj', '20-projetos', VAULT); dir('d-inbox', '_inbox', VAULT); dir('d-obs', '.obsidian', VAULT); dir('d-10', '10-areas', VAULT); dir('d-2', '2-rascunho', VAULT);
