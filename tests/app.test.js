@@ -1010,5 +1010,27 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     check('nada encontrado: diz que nao achou', /nada/i.test(d.querySelector('.browser-message')?.textContent || ''), d.getElementById('browser-list').textContent);
   }
 
+  console.log('29. Desenho: a caixa de recorte sai dos tracos, nao da tela');
+  {
+    const { App } = await boot();
+    const line = (width, points, erase = false) => ({ color: '#8b6cef', width, erase, points });
+
+    check('sem traco nenhum: sem caixa', App.sketchBounds([]) === null);
+    check('so borracha: sem caixa', App.sketchBounds([line(12, [{ x: 10, y: 10 }, { x: 90, y: 90 }], true)]) === null);
+
+    const one = App.sketchBounds([line(6, [{ x: 100, y: 50 }, { x: 140, y: 90 }])]);
+    check('caixa cobre o traco, mais meia espessura e a margem',
+      one.x === 100 - 3 - 16 && one.y === 50 - 3 - 16 && one.width === 40 + 6 + 32 && one.height === 40 + 6 + 32, one);
+
+    const far = App.sketchBounds([line(6, [{ x: 100, y: 50 }, { x: 140, y: 90 }]), line(12, [{ x: 900, y: 900 }], true)]);
+    check('borracha do outro lado da tela nao incha a caixa', far.width === one.width && far.height === one.height, far);
+
+    const thick = App.sketchBounds([line(12, [{ x: 200, y: 200 }])]);
+    check('traco grosso empurra a caixa pela metade da espessura', thick.width === 12 + 32 && thick.height === 12 + 32, thick);
+
+    const edge = App.sketchBounds([line(3, [{ x: 2, y: 2 }])]);
+    check('traco na borda deixa a caixa entrar no negativo', edge.x === 2 - 1.5 - 16 && edge.y === 2 - 1.5 - 16, edge);
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });

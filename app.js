@@ -2302,6 +2302,38 @@ const App = {
     ta.selectionStart = ta.selectionEnd = index + before.length + text.length + 1;
   },
 
+  // ── Sketch (the drawing screen) ──
+
+  // The palette lives here, not in the CSS, because the strokes are painted from it. The CSS only
+  // needs the purple, for the selected ring and the active button. See desenho-na-nota-design.
+  SKETCH_COLORS: ['#9b94a6', '#8b6cef', '#e0645c', '#c47f2e', '#369680', '#4b8fe3'],
+  SKETCH_WIDTHS: [3, 6, 12],
+  SKETCH_MARGIN: 16,
+
+  /** The box the exported PNG is cropped to: everything the ink touches, plus each stroke's half
+      width (its round cap sticks out that far) and a margin. Eraser strokes lay down no ink, so
+      they never grow the box. Null when nothing was drawn. Coordinates are screen points and may
+      go negative, for a stroke against the edge. */
+  sketchBounds(strokes) {
+    let box = null;
+    for (const stroke of strokes) {
+      if (stroke.erase) continue;
+      const pad = stroke.width / 2;
+      for (const p of stroke.points) {
+        if (!box) box = { left: p.x - pad, top: p.y - pad, right: p.x + pad, bottom: p.y + pad };
+        else {
+          box.left = Math.min(box.left, p.x - pad);
+          box.top = Math.min(box.top, p.y - pad);
+          box.right = Math.max(box.right, p.x + pad);
+          box.bottom = Math.max(box.bottom, p.y + pad);
+        }
+      }
+    }
+    if (!box) return null;
+    const m = this.SKETCH_MARGIN;
+    return { x: box.left - m, y: box.top - m, width: (box.right - box.left) + m * 2, height: (box.bottom - box.top) + m * 2 };
+  },
+
   // ── Events ──
 
   scrollCaretIntoView() {
