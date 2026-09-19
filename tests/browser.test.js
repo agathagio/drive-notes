@@ -253,11 +253,22 @@ const FAKE_DRIVE = `
     const dated = `---\ncreated: 2026-01-02\nupdated: ${today}\n---\n\ntexto novo`;
     check('o Drive recebe o updated de hoje', JSON.parse(await js('JSON.stringify(window.__written)'))[0] === dated, await js('JSON.stringify(window.__written)'));
     check('com o teclado aberto o editor fica como esta, cursor no lugar', await js('__App.getContent()') === dated.replace(today, '2026-01-03') && await js(`(({ row, col }) => row + ':' + col)(__App.editor.getSelection())`) === '5:10', await js('JSON.stringify(__App.editor.getSelection())'));
+    const saveShown = () => js(`getComputedStyle(document.getElementById('btn-save')).display !== 'none'`);
     await js(`__App.setMode('preview'); 'ok'`);
     await sleep(200);
+    check('leitura com tudo salvo: sem botao de salvar', await saveShown() === false);
     check('na leitura o editor alcanca o Drive e a nota segue limpa', await js('__App.getContent()') === dated && await js('__App.isDirty') === false, await js('__App.getContent()'));
     await js(`__App.save().then(() => 'ok')`);
     check('sem escrita extra', Number(await js('window.__written.length')) === 1);
+
+    await js(`__App.setMode('edit'); __App.editor.e.focus(); __App.editor.setSelection({ row: 5, col: 10 }); 'ok'`);
+    await send('Input.insertText', { text: '!' });
+    await sleep(200);
+    await js(`__App.setMode('preview'); 'ok'`);
+    check('leitura com texto por salvar: o botao de salvar aparece', await saveShown() === true);
+    await js(`document.getElementById('btn-save').click(); 'ok'`);
+    await sleep(300);
+    check('... salva dali mesmo e some de novo', Number(await js('window.__written.length')) === 2 && await saveShown() === false, await js('window.__written.length'));
   } finally {
     browser.close();
   }

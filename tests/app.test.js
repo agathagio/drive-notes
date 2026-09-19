@@ -898,5 +898,32 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     check('nota criada agora sem created ganha as duas', App.stampDates('ideia', today, true) === `---\ncreated: ${today}\nupdated: ${today}\n---\n\nideia`);
   }
 
+  console.log('27. Salvar a partir da leitura, e o botao de salvar sem roubar o foco');
+  {
+    const { App, drive, type, w } = await boot();
+    const d = w.document;
+    drive.put('A', 'a.md', 'texto');
+    await App.openFile('A', 'a.md');
+    check('nota aberta e limpa: nada por salvar', !d.body.classList.contains('unsaved'));
+    App.setMode('edit');
+    type('texto editado');
+    App.setMode('preview');
+    await sleep(30); await App._saveChain;
+    check('ir pra leitura nao salva por conta propria', drive.files.get('A').content === 'texto' && App.isDirty);
+    check('a leitura sabe que ha texto por salvar', d.body.dataset.view === 'preview' && d.body.classList.contains('unsaved'));
+    d.getElementById('btn-save').click();
+    await sleep(30); await App._saveChain;
+    check('salvar na leitura grava no Drive e a marca some', drive.files.get('A').content === 'texto editado' && !d.body.classList.contains('unsaved'), drive.files.get('A').content);
+
+    App.setMode('edit');
+    type('texto editado 2');
+    const start = new w.Event('touchstart', { cancelable: true });
+    d.getElementById('btn-save').dispatchEvent(start);
+    d.getElementById('btn-save').dispatchEvent(new w.Event('touchend', { cancelable: true }));
+    await sleep(30); await App._saveChain;
+    check('toque no salvar: o comeco do toque e cancelado (teclado fica) e o fim salva', start.defaultPrevented && drive.files.get('A').content === 'texto editado 2', drive.files.get('A').content);
+    check('um toque, uma escrita', drive.count('PATCH') === 2, drive.log);
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });

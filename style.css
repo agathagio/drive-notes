@@ -756,7 +756,8 @@ body[data-view="welcome"] #btn-save,
 body[data-view="browse"] .btn-mode,
 body[data-view="browse"] #btn-save,
 body[data-view="browse"] #btn-open,
-body[data-view="preview"] #btn-save,
+/* While reading, saving is only offered when something is unsaved: text the auto-save has not taken yet, a failed save, an expired login, a conflict */
+body[data-view="preview"]:not(.unsaved) #btn-save,
 /* Inside a note the title needs the room: a new note is one "back" away */
 body[data-view="edit"] #btn-new,
 body[data-view="preview"] #btn-new {

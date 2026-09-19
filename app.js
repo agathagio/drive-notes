@@ -1241,8 +1241,7 @@ const App = {
     this.folder = null;
     this.isDirty = false;
     this.syncHistory();
-    this.els.fileName.textContent = 'Drive Notes';
-    this.els.fileName.classList.remove('unsaved');
+    this.updateFileNameDisplay();
     this.setSaveStatus('', '');
     this.showWelcome();
     this.renderDrafts();
@@ -1268,6 +1267,8 @@ const App = {
     const name = this.currentFile ? this.currentFile.name : (this.folder ? this.folder.name : 'Drive Notes');
     this.els.fileName.textContent = name;
     this.els.fileName.classList.toggle('unsaved', this.isDirty);
+    // In reading view the save button only shows while there is something to save (see the stylesheet)
+    document.body.classList.toggle('unsaved', this.isDirty);
   },
 
   setSaveStatus(status, text) {
@@ -2183,6 +2184,14 @@ const App = {
     // Header buttons
     this.els.btnNew.addEventListener('click', () => this.newFile());
     this.els.btnOpen.addEventListener('click', () => this.browseVault());
+    // Save is tapped in the middle of writing: like the toolbar buttons below, it must not take the
+    // focus (and the keyboard, and the caret) away from the editor
+    this.els.btnSave?.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+    this.els.btnSave?.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      this.save({ manual: true });
+    }, { passive: false });
+    this.els.btnSave?.addEventListener('mousedown', (e) => e.preventDefault());
     this.els.btnSave?.addEventListener('click', () => this.save({ manual: true }));
     this.els.btnPreview.addEventListener('click', () => this.togglePreview());
 
