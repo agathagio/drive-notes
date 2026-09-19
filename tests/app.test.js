@@ -1095,5 +1095,58 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     check('fechar tira a tela e o estado, sem tocar na nota', !App.sketch && !screen.classList.contains('visible') && App.getContent() === before && !App.isDirty);
   }
 
+  console.log('31. Desenho: traco, borracha e desfazer');
+  {
+    const { App, drive, w } = await boot();
+    drive.put('A', 'a.md', 'linha um');
+    await App.openFile('A', 'a.md');
+    App.setMode('edit');
+    w.document.querySelector('.toolbar-btn[data-sketch]').click();
+    const canvas = App.sketch.canvas;
+    const ctx = App.sketch.ctx;
+    const send = (type, x, y) => canvas.dispatchEvent(new w.PointerEvent(type, { clientX: x, clientY: y, pointerId: 1, bubbles: true, cancelable: true }));
+    const drag = (points) => {
+      send('pointerdown', points[0].x, points[0].y);
+      for (const p of points.slice(1)) send('pointermove', p.x, p.y);
+      send('pointerup', points[points.length - 1].x, points[points.length - 1].y);
+    };
+
+    drag([{ x: 10, y: 10 }, { x: 20, y: 30 }, { x: 40, y: 30 }]);
+    check('um traco, com todos os pontos', App.sketch.strokes.length === 1 && App.sketch.strokes[0].points.length === 3, App.sketch.strokes);
+    check('o traco guarda a ferramenta da hora', App.sketch.strokes[0].color === '#9b94a6' && App.sketch.strokes[0].width === 6 && App.sketch.strokes[0].erase === false);
+    check('soltar fecha o traco', App.sketch.stroke === null);
+
+    send('pointerdown', 99, 99);
+    check('um toque so tambem vale traco', App.sketch.strokes.length === 2 && App.sketch.strokes[1].points.length === 1);
+    send('pointerup', 99, 99);
+
+    w.document.querySelector('[data-sketch-width="12"]').click();
+    w.document.getElementById('sketch-erase').click();
+    ctx.ops.length = 0;
+    drag([{ x: 15, y: 15 }, { x: 25, y: 25 }]);
+    check('a borracha e um traco como outro, so que erase', App.sketch.strokes.length === 3 && App.sketch.strokes[2].erase === true && App.sketch.strokes[2].width === 12);
+    check('a borracha pinta em destination-out', ctx.ops.some(o => o.includes('destination-out')), ctx.ops);
+    check('e a composicao volta ao normal depois', ctx.globalCompositeOperation === 'source-over');
+
+    ctx.ops.length = 0;
+    w.devicePixelRatio = 2;
+    w.dispatchEvent(new w.Event('resize'));
+    check('girar o aparelho nao perde traco: repinta a lista no tamanho novo',
+      App.sketch.strokes.length === 3 && App.sketch.dpr === 2 && App.sketch.canvas.width === w.innerWidth * 2
+      && ctx.ops.filter(o => o.startsWith('stroke')).length === 3, ctx.ops);
+
+    ctx.ops.length = 0;
+    w.document.getElementById('sketch-undo').click();
+    check('desfazer tira o ultimo traco', App.sketch.strokes.length === 2);
+    check('desfazer repinta a lista do zero, nao desenha por cima', ctx.ops[0]?.startsWith('clear') && ctx.ops.filter(o => o.startsWith('stroke')).length === 2, ctx.ops);
+
+    w.document.getElementById('sketch-undo').click();
+    w.document.getElementById('sketch-undo').click();
+    w.document.getElementById('sketch-undo').click();
+    check('desfazer no vazio nao quebra', App.sketch.strokes.length === 0);
+
+    App.sketchClose();
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });

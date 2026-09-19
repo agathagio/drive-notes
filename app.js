@@ -2414,8 +2414,79 @@ const App = {
     this.els.sketchErase.classList.toggle('sketch-active', s.erase);
   },
 
-  /** Nothing to paint yet: the strokes arrive in the next task */
-  sketchRepaint() {},
+  /** Where a pointer event lands on the canvas, in screen points (the context is already dpr-scaled) */
+  sketchPoint(e) {
+    const rect = this.sketch.canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  },
+
+  sketchDown(e) {
+    const s = this.sketch;
+    if (!s) return;
+    e.preventDefault();
+    // Keep the stroke fed even if the finger wanders off the canvas
+    s.canvas.setPointerCapture?.(e.pointerId);
+    s.stroke = { color: s.color, width: s.width, erase: s.erase, points: [this.sketchPoint(e)] };
+    s.strokes.push(s.stroke);
+    this.sketchPaintStroke(s.stroke);
+  },
+
+  sketchMove(e) {
+    const s = this.sketch;
+    if (!s || !s.stroke) return;
+    e.preventDefault();
+    const from = s.stroke.points.length;
+    // Android delivers the finger's points in batches and only the last of each frame reaches
+    // pointermove: without the swallowed ones a quick stroke comes out as a chain of straight lines.
+    // The list is empty in browsers that do not have it (and in jsdom), so the event itself is the fallback.
+    const batch = e.getCoalescedEvents?.() ?? [];
+    for (const point of (batch.length ? batch : [e])) s.stroke.points.push(this.sketchPoint(point));
+    this.sketchPaintStroke(s.stroke, from);
+  },
+
+  sketchUp(e) {
+    const s = this.sketch;
+    if (!s || !s.stroke) return;
+    s.canvas.releasePointerCapture?.(e.pointerId);
+    s.stroke = null;
+  },
+
+  /** Undo drops the last stroke and repaints the list. Painting from the list, and never from the
+      pixels already on screen, is what keeps undo right when an eraser stroke came before it. */
+  sketchUndo() {
+    const s = this.sketch;
+    if (!s || !s.strokes.length) return;
+    s.strokes.pop();
+    s.stroke = null;
+    this.sketchRepaint();
+  },
+
+  /** Paint one stroke from point `from` onwards. from = 0 paints it whole (a repaint); while a
+      stroke is being drawn only its new segment is painted, so a long drawing does not repaint
+      the whole list on every move. */
+  sketchPaintStroke(stroke, from = 0) {
+    const ctx = this.sketch?.ctx;
+    if (!ctx || !stroke.points.length) return;
+    ctx.globalCompositeOperation = stroke.erase ? 'destination-out' : 'source-over';
+    ctx.strokeStyle = stroke.color;
+    ctx.lineWidth = stroke.width;
+    ctx.beginPath();
+    const start = stroke.points[Math.max(0, from - 1)];
+    ctx.moveTo(start.x, start.y);
+    const rest = stroke.points.slice(Math.max(1, from));
+    // A single tap still has to leave a dot
+    if (!rest.length) ctx.lineTo(start.x, start.y);
+    for (const p of rest) ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    ctx.globalCompositeOperation = 'source-over';
+  },
+
+  sketchRepaint() {
+    const s = this.sketch;
+    if (!s?.ctx) return;
+    s.ctx.clearRect(0, 0, s.canvas.width / s.dpr, s.canvas.height / s.dpr);
+    for (const stroke of s.strokes) this.sketchPaintStroke(stroke);
+  },
 
   // ── Events ──
 
@@ -2570,6 +2641,11 @@ const App = {
       this.sketch.erase = !this.sketch.erase;
       this.sketchRenderTools();
     });
+    this.els.sketchCanvas.addEventListener('pointerdown', (e) => this.sketchDown(e));
+    this.els.sketchCanvas.addEventListener('pointermove', (e) => this.sketchMove(e));
+    this.els.sketchCanvas.addEventListener('pointerup', (e) => this.sketchUp(e));
+    this.els.sketchCanvas.addEventListener('pointercancel', (e) => this.sketchUp(e));
+    this.els.sketchUndo.addEventListener('click', () => this.sketchUndo());
     // A rotated phone changes the canvas size
     window.addEventListener('resize', () => this.sketchResize());
 
