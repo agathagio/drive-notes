@@ -75,6 +75,8 @@ const SETUP = `
     await shot('4b-leitura-imagem');
     await js(`__App.setMode('edit'); 'ok'`);
     await shot('5-edicao');
+    await js(`__App.editor.e.scrollTop = 1e6; 'ok'`);
+    await shot('5b-edicao-imagem');
     await js(`__App.promptRename(); 'ok'`);
     await shot('6-renomear');
     await js(`__App.hideModal(); __App.showConflict(__App.currentFile); 'ok'`);

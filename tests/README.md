@@ -15,6 +15,7 @@ O editor aqui é o textarea de fallback, porque o TinyMDE precisa de um navegado
 - ditado por voz (composição de IME) no TinyMDE, com um controle que roda a versão antiga e confirma que o bug se reproduz nela;
 - barra de formatação no TinyMDE;
 - foto na nota: a redução por canvas de verdade e o `![[...]]` entrando no TinyMDE onde o cursor estava;
+- imagem visível na edição: aparece só na linha que é só o embed, não muda o texto, sobrevive a digitação e sai quando a linha muda;
 - o CloseWatcher real, com a tecla Esc fazendo o papel do botão voltar do Android.
 
 Pra escolher o navegador: variável de ambiente `BROWSER_PATH`.

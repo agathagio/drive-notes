@@ -34,6 +34,7 @@ Então fiz o meu. Hoje é por ele que eu leio e escrevo no vault quando estou lo
 - Barra de formatação fixa acima do teclado virtual, sem fechar o teclado a cada toque.
 - Funciona com ditado por voz, e a página encolhe junto com o teclado pra ele não cobrir o texto.
 - Foto direto na nota, com um botão pra câmera e outro pra galeria: a imagem é reduzida no aparelho, sobe pra pasta de anexos do vault e entra como `![[foto-...jpg]]`, do jeito que o Obsidian espera.
+- Na edição o texto é markdown cru, mas a linha do `![[foto.jpg]]` mostra a imagem embaixo: dá pra escrever olhando pro que se está descrevendo.
 - Renomear tocando no título.
 - O gesto de voltar do Android fecha diálogo, sai da nota e volta de pasta, como em app nativo.
 

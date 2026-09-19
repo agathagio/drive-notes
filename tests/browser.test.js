@@ -168,6 +168,58 @@ const FAKE_DRIVE = `
     check('imagem pequena sobe como esta', photo.untouched === true);
     check('embed entra onde o cursor estava antes do seletor abrir', /^linha um\n!\[\[foto-[\d-]+\.jpg\]\]\n\nlinha dois$/.test(photo.content), photo.content);
     check('nota marcada como nao salva, aviso na tela', photo.dirty === true && photo.status === 'Foto inserida', photo);
+
+    // ── 5. Pictures while editing: a background of the line, never part of the text ──
+    console.log('5. Imagem visivel na edicao, embaixo da linha do ![[...]]');
+    await open(buildPage('current', currentApp));
+    await js(`(() => {
+      localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
+      __App.accessToken = 'fake';
+      window.__searches = 0;
+      const svg = (w, h) => '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '"><rect width="100%" height="100%" fill="#bb86fc"/></svg>';
+      window.fetch = async (url) => {
+        const u = new URL(url);
+        if (u.pathname.endsWith('/WIDE')) return { ok: true, status: 200, blob: async () => new Blob([svg(400, 100)], { type: 'image/svg+xml' }) };
+        if (u.pathname.endsWith('/TALL')) return { ok: true, status: 200, blob: async () => new Blob([svg(900, 2000)], { type: 'image/svg+xml' }) };
+        window.__searches++;
+        const q = u.searchParams.get('q') || '';
+        const hit = q.includes("'larga.png'") ? 'WIDE' : q.includes("'alta.png'") ? 'TALL' : null;
+        return { ok: true, status: 200, json: async () => ({ files: hit ? [{ id: hit, name: 'x.png', mimeType: 'image/png', parents: ['m'] }] : [] }) };
+      };
+      return 'ok';
+    })()`);
+    const NOTE = 'antes\n![[larga.png]]\nmeio ![[larga.png]] no meio da frase\n![[alta.png|300]]\n![[sumiu.png]]\nfim';
+    await editNote(NOTE, 0, 5);
+    await sleep(600);
+    const lines = () => js(`JSON.stringify([...__App.editor.lineElements].map(el => ({
+      on: el.classList.contains('embed-line'), pad: Math.round(parseFloat(getComputedStyle(el).paddingBottom)),
+      bg: getComputedStyle(el).backgroundImage.startsWith('url("blob:') })))`).then(JSON.parse);
+    let l = await lines();
+    const lineWidth = Number(await js('__App.editor.lineElements[1].clientWidth'));
+    check('linha que e so o embed ganha a imagem, na proporcao certa e sem esticar', l[1].on && l[1].bg && Math.abs(l[1].pad - (Math.round(Math.min(lineWidth, 400) / 4) + 8)) <= 1, [l[1], lineWidth]);
+    check('embed no meio de uma frase nao ganha', !l[2].on && !l[0].on && !l[5].on, l);
+    check('imagem alta para em 300px de altura', l[3].on && l[3].pad === 308, l[3]);
+    check('imagem que nao existe: linha normal', !l[4].on, l[4]);
+    check('o texto da nota nao muda e a nota nao fica suja', await js('__App.getContent()') === NOTE && await js('__App.isDirty') === false);
+
+    const searches = Number(await js('window.__searches'));
+    await js(`__App.editor.setSelection({ row: 5, col: 3 }); 'ok'`);
+    await send('Input.insertText', { text: ' da nota' });
+    await sleep(400);
+    l = await lines();
+    check('digitar em outra linha: imagens seguem la, texto certo', l[1].on && l[3].on && (await js('__App.getContent()')).endsWith('fim da nota'));
+    check('... sem procurar de novo no Drive (nem a que sumiu)', Number(await js('window.__searches')) === searches, [searches, await js('window.__searches')]);
+
+    await js(`__App.editor.setSelection({ row: 1, col: 0 }); 'ok'`);
+    await send('Input.insertText', { text: 'x ' });
+    await sleep(400);
+    l = await lines();
+    check('linha deixou de ser so o embed: imagem sai', !l[1].on && l[1].pad === 0 && l[3].on, l[1]);
+
+    await js(`__App.setMode('preview'); __App.setMode('edit'); 'ok'`);
+    await sleep(300);
+    l = await lines();
+    check('ir pro modo leitura e voltar mantem a imagem', l[3].on && l[3].bg, l[3]);
   } finally {
     browser.close();
   }

@@ -39,6 +39,9 @@ const App = {
   _folderCache: new Map(),
   // Embedded images fetched in this session: file name -> promise of a blob URL (null when not found)
   _embedUrls: new Map(),
+  // Pictures shown under their ![[...]] line while editing: file name -> { url, width, height },
+  // or null while it is on its way (or was not found: not asked again until another note is opened)
+  _embedInfo: new Map(),
   // "Back" without the history stack (see Navigation): views left behind, and the active CloseWatcher
   useWatcher: false,
   navStack: [],
@@ -158,6 +161,9 @@ const App = {
     }
     this.isDirty = false;
     this.updateFileNameDisplay();
+    // Another note: pictures that were not found get another chance
+    for (const [name, info] of this._embedInfo) if (!info) this._embedInfo.delete(name);
+    this.scheduleEmbedDecoration();
   },
 
   // ── Google Auth ──
@@ -819,6 +825,7 @@ const App = {
       this.els.editorContainer.classList.remove('hidden');
       this.els.previewContainer.classList.remove('visible');
       this.els.btnPreview.textContent = 'Ler';
+      this.decorateEditorEmbeds();
     }
   },
 
@@ -929,6 +936,79 @@ const App = {
     }
     const response = await this.driveFetch(`https://www.googleapis.com/drive/v3/files/${pick.id}?alt=media`);
     return URL.createObjectURL(await response.blob());
+  },
+
+  // ── Pictures while editing ──
+  // A line that is nothing but ![[image]] shows the picture right under it, so a note can be written
+  // while looking at what it talks about. The picture is a background of the line plus bottom padding:
+  // the text stays raw markdown and TinyMDE, which rebuilds a line from its text, never meets an <img>.
+
+  EMBED_LINE: /^\s*!\[\[([^\]\n|#]+\.(?:png|jpe?g|gif|webp|bmp|avif|svg))(?:\|[^\]\n]*)?\]\]\s*$/i,
+  EMBED_MAX_HEIGHT: 300,
+
+  scheduleEmbedDecoration() {
+    clearTimeout(this._embedTimer);
+    this._embedTimer = setTimeout(() => this.decorateEditorEmbeds(), 120);
+  },
+
+  decorateEditorEmbeds() {
+    if (!this.editor || this.mode !== 'edit') return;
+    const ed = this.editor;
+    let changed = false;
+
+    ed.lines.forEach((line, row) => {
+      const el = ed.lineElements[row];
+      if (!el?.style) return;
+      const name = this.EMBED_LINE.exec(line)?.[1].split('/').pop().trim();
+      const info = name ? this._embedInfo.get(name) : null;
+
+      if (!info) {
+        if (el.classList.contains('embed-line')) {
+          el.classList.remove('embed-line');
+          el.style.removeProperty('--embed');
+          el.style.removeProperty('--embed-h');
+          changed = true;
+        }
+        if (name && !this._embedInfo.has(name)) this.loadEmbedInfo(name);
+        return;
+      }
+
+      // As wide as the line at most, never blown up, and a tall screenshot does not take over the screen
+      const width = Math.min(el.clientWidth || info.width, info.width);
+      const height = `${Math.round(Math.min(width * info.height / info.width, this.EMBED_MAX_HEIGHT))}px`;
+      // TinyMDE wipes class and style whenever it redraws the line, so this is put back after every change
+      if (!el.classList.contains('embed-line') || el.style.getPropertyValue('--embed-h') !== height) {
+        el.classList.add('embed-line');
+        el.style.setProperty('--embed', `url("${info.url}")`);
+        el.style.setProperty('--embed-h', height);
+        changed = true;
+      }
+    });
+
+    // Lines got taller or shorter: the one being typed must stay above the keyboard
+    if (changed) this.scrollCaretIntoView();
+  },
+
+  async loadEmbedInfo(name) {
+    this._embedInfo.set(name, null);
+    if (!this._embedUrls.has(name)) {
+      this._embedUrls.set(name, this.fetchEmbed(name).catch(() => null));
+    }
+    const url = await this._embedUrls.get(name);
+    if (!url) {
+      this._embedUrls.delete(name);
+      return;
+    }
+    const img = new Image();
+    img.src = url;
+    try {
+      await img.decode();
+    } catch {
+      return;
+    }
+    if (!img.naturalWidth || !img.naturalHeight) return;
+    this._embedInfo.set(name, { url, width: img.naturalWidth, height: img.naturalHeight });
+    this.decorateEditorEmbeds();
   },
 
   /** Taps inside the reading view: wikilinks and relative .md links open notes, the rest leaves the app */
@@ -1173,6 +1253,7 @@ const App = {
     this.isDirty = true;
     this.updateFileNameDisplay();
     this.scheduleAutoSave();
+    this.scheduleEmbedDecoration();
   },
 
   updateFileNameDisplay() {
@@ -2044,6 +2125,9 @@ const App = {
       const picked = this.els.photoInput.files[0];
       if (picked) this.insertPhoto(picked);
     });
+
+    // Pictures in the editor are sized to the line: a rotated phone changes that
+    window.addEventListener('resize', () => this.scheduleEmbedDecoration());
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {

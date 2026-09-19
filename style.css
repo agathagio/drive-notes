@@ -183,6 +183,13 @@ body {
 .TinyMDE .TMMark { color: var(--text-secondary); }
 .TinyMDE .TMBlockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--text-secondary); }
 
+/* A line that is only ![[image]]: the picture sits under the text, as a background (see decorateEditorEmbeds) */
+.TinyMDE .embed-line {
+  background: var(--embed) no-repeat left bottom / auto var(--embed-h);
+  padding-bottom: calc(var(--embed-h) + 8px);
+  color: var(--text-secondary);
+}
+
 /* Fallback textarea (if TinyMDE fails to load) */
 .editor-fallback {
   flex: 1 1 0;
@@ -749,7 +756,10 @@ body[data-view="welcome"] #btn-save,
 body[data-view="browse"] .btn-mode,
 body[data-view="browse"] #btn-save,
 body[data-view="browse"] #btn-open,
-body[data-view="preview"] #btn-save {
+body[data-view="preview"] #btn-save,
+/* Inside a note the title needs the room: a new note is one "back" away */
+body[data-view="edit"] #btn-new,
+body[data-view="preview"] #btn-new {
   display: none;
 }
 
