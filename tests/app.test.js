@@ -10,6 +10,8 @@ const { ROOT, LIBS, sleep, cdnVersions, installedVersions, reporter } = require(
 const { check, done } = reporter();
 
 const FOLDER = 'application/vnd.google-apps.folder';
+// A note saved inside the vault goes up with its dates (scenario 26); the other scenarios look at the text under them
+const bodyOf = (content) => content.replace(/^---\n[\s\S]*?\n---\n\n?/, '');
 // The browser and the attachment folder hang off whatever vault the app is configured with
 const VAULT = /VAULT_FOLDER_ID: '([^']+)'/.exec(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8'))[1];
 
@@ -242,7 +244,7 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     App.accessToken = 'fake';
     App.els.fileName.ownerDocument.defaultView.localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
     await App.save();
-    check('criado uma vez no Drive', drive.count('POST') === 1 && [...drive.files.values()][0].content === 'ideia', drive.log);
+    check('criado uma vez no Drive', drive.count('POST') === 1 && bodyOf([...drive.files.values()][0].content) === 'ideia', drive.log);
     check('rascunho limpo depois de sincronizar', App.listDrafts().length === 0, App.listDrafts());
     type('ideia 2');
     await App.save();
@@ -262,7 +264,7 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     await Promise.all([p1, p2]); await App._saveChain;
     const all = [...drive.files.values()];
     check('um arquivo so', all.length === 1 && drive.count('POST') === 1, drive.log);
-    check('conteudo final e o mais novo', all[0].content === 't1 t2', all[0].content);
+    check('conteudo final e o mais novo', bodyOf(all[0].content) === 't1 t2', all[0].content);
     check('limpo, sem rascunho', !App.isDirty && App.listDrafts().length === 0, App.listDrafts());
   }
 
@@ -280,7 +282,7 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     a.App.currentFile = null; a.App.isDirty = false;
     a.App.openDraft(d.key);
     await a.App.save();
-    check('salvar o rascunho faz PATCH, nao um segundo POST', a.drive.count('POST') === 1 && a.drive.files.get('new1').content === 'texto', a.drive.log);
+    check('salvar o rascunho faz PATCH, nao um segundo POST', a.drive.count('POST') === 1 && bodyOf(a.drive.files.get('new1').content) === 'texto', a.drive.log);
     check('rascunho limpo', a.App.listDrafts().length === 0);
   }
 
@@ -801,13 +803,99 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
 
     App.els.btnPreview.click(); type('editado');
     w.__back(); await sleep(80); await App._saveChain;
-    check('voltar com edicao pendente salva antes', drive.files.get('L').content === 'editado' && d.body.dataset.view === 'welcome');
+    check('voltar com edicao pendente salva antes', bodyOf(drive.files.get('L').content) === 'editado' && d.body.dataset.view === 'welcome');
 
     for (let i = 0; i < 5; i++) d.querySelector('#welcome h2').click();
     const dbg = d.getElementById('debug-text').textContent;
     check('5 toques no titulo: painel de diagnostico com o modo e o log', d.getElementById('debug-overlay').classList.contains('visible') && dbg.includes('modo de voltar: CloseWatcher') && dbg.includes('watcher: close'));
     w.__back(); await sleep(20);
     check('voltar fecha o painel', !d.getElementById('debug-overlay').classList.contains('visible'));
+  }
+
+  console.log('26. created e updated: nota nova nasce com as duas, salvar troca o updated');
+  {
+    const { App, drive, type } = await boot();
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const born = `---\ncreated: ${today}\nupdated: ${today}\n---\n\n`;
+    drive.put('proj', 'projeto', '', [VAULT]);
+    drive.put('tpl', '_templates', '', [VAULT]);
+    drive.put('tplsub', 'diario', '', ['tpl']);
+    drive.put('fora', 'documentos', '', []);
+
+    App.newFile();
+    check('nota nova abre com created e updated de hoje', App.getContent() === born && !App.isDirty, App.getContent());
+    check('cursor depois das propriedades', App.els.editorElement.selectionStart === born.length, App.els.editorElement.selectionStart);
+    await App._saveChain;
+    check('e criada no Drive ja com as duas', drive.files.get('new1')?.content === born, drive.files.get('new1')?.content);
+    type(born + 'ideia');
+    await App.save();
+    check('salvar no mesmo dia nao mexe nas datas', drive.files.get('new1').content === born + 'ideia' && drive.count('POST') === 1, drive.files.get('new1').content);
+
+    const old = '---\ntags: [a]\ncreated: 2026-01-02\nupdated: 2026-01-03\n---\n\ntexto';
+    drive.put('A', 'a.md', old, ['proj']);
+    await App.openFile('A', 'a.md');
+    await App.save(); App.flushCurrent(); await App._saveChain;
+    check('abrir sem editar nao troca o updated', drive.files.get('A').content === old && drive.count('PATCH') === 1, drive.log);
+    App.setMode('edit'); // notes open in reading view
+    type(old + ' editado');
+    await App.save();
+    const saved = `---\ntags: [a]\ncreated: 2026-01-02\nupdated: ${today}\n---\n\ntexto editado`;
+    check('editar e salvar troca o updated, o resto fica', drive.files.get('A').content === saved, drive.files.get('A').content);
+    check('nota limpa, sem rascunho', !App.isDirty && App.listDrafts().length === 0, App.listDrafts());
+    check('na edicao o texto nao e trocado debaixo do teclado', App.getContent() === old + ' editado');
+    App.setMode('preview');
+    check('ao ir pra leitura o editor alcanca o Drive, sem sujar', App.getContent() === saved && !App.isDirty, App.getContent());
+    check('e as propriedades mostram a data nova', App.els.previewContainer.querySelector('details.frontmatter pre').textContent.includes(`updated: ${today}`));
+    const patches = drive.count('PATCH');
+    await App.save(); App.flushCurrent(); await App._saveChain;
+    check('alcancar o Drive nao gera outra escrita', drive.count('PATCH') === patches, drive.log);
+
+    App.setMode('edit');
+    drive.delay = 40;
+    type(saved + ' 1');
+    const p = App.save();
+    await sleep(20);
+    type(saved + ' 12');
+    await p;
+    check('texto digitado durante o save continua pendente', App.isDirty && drive.files.get('A').content === saved + ' 1');
+    await App.save();
+    check('e vai no save seguinte', !App.isDirty && drive.files.get('A').content === saved + ' 12');
+    drive.delay = 5;
+
+    const lookups = drive.log.filter(l => l === 'GET meta proj').length;
+    check('a pasta e conferida uma vez so', lookups === 1, lookups);
+
+    drive.put('B', 'b.md', '---\ntags: [a]\n---\ncorpo', ['proj']);
+    await App.openFile('B', 'b.md');
+    type('---\ntags: [a]\n---\ncorpo 2');
+    await App.save();
+    check('propriedades sem updated: ganha updated, nao inventa created', drive.files.get('B').content === `---\ntags: [a]\nupdated: ${today}\n---\ncorpo 2`, drive.files.get('B').content);
+
+    drive.put('C', 'c.md', 'so texto', ['proj']);
+    await App.openFile('C', 'c.md');
+    type('so texto 2');
+    await App.save();
+    check('nota sem propriedades: ganha so o updated', drive.files.get('C').content === `---\nupdated: ${today}\n---\n\nso texto 2`, drive.files.get('C').content);
+
+    const untouched = [
+      ['T', 'modelo.md', ['tplsub'], 'dentro de _templates'],
+      ['K', 'CLAUDE.md', ['proj'], 'CLAUDE.md'],
+      ['O', 'guia-antigo.md', ['proj'], 'arquivo -antigo'],
+      ['X', 'lista.txt', ['proj'], 'arquivo .txt'],
+      ['F', 'f.md', ['fora'], 'fora do vault'],
+    ];
+    for (const [id, name, parents, label] of untouched) {
+      drive.put(id, name, '---\nupdated: 2026-01-03\n---\nx', parents);
+      await App.openFile(id, name);
+      type('---\nupdated: 2026-01-03\n---\nx 2');
+      await App.save();
+      check(`${label}: updated fica como esta`, drive.files.get(id).content === '---\nupdated: 2026-01-03\n---\nx 2', drive.files.get(id).content);
+    }
+
+    check('regua no topo nao e propriedade', App.stampDates('---\num titulo solto\n---\ncorpo', today, false) === '---\num titulo solto\n---\ncorpo');
+    check('CRLF e preservado', App.stampDates('---\r\nupdated: 2026-01-03\r\n---\r\nx', today, false) === `---\r\nupdated: ${today}\r\n---\r\nx`);
+    check('nota criada agora sem created ganha as duas', App.stampDates('ideia', today, true) === `---\ncreated: ${today}\nupdated: ${today}\n---\n\nideia`);
   }
 
   done();

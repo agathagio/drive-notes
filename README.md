@@ -31,6 +31,7 @@ Então fiz o meu. Hoje é por ele que eu leio e escrevo no vault quando estou lo
 **Escrever**
 
 - Nota nova abre direto no editor, sem pedir nome antes. O nome sai do horário e o arquivo é criado no Drive em segundo plano.
+- Datas no padrão do vault: nota nova nasce com `created` e `updated` nas propriedades, e salvar uma edição troca o `updated` pra data do dia. `created` nunca é inventado em nota antiga, e pastas como `_templates` e `_archive` ficam de fora.
 - Barra de formatação fixa acima do teclado virtual, sem fechar o teclado a cada toque.
 - Funciona com ditado por voz, e a página encolhe junto com o teclado pra ele não cobrir o texto.
 - Foto direto na nota, com um botão pra câmera e outro pra galeria: a imagem é reduzida no aparelho, sobe pra pasta de anexos do vault e entra como `![[foto-...jpg]]`, do jeito que o Obsidian espera.

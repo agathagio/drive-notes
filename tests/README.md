@@ -4,7 +4,7 @@ O app não tem build. O `package.json` da raiz existe só pra estes testes. Uma 
 
 ## `npm test`
 
-`app.test.js`: roda o `app.js` real dentro do jsdom contra um Google Drive falso em memória. Cobre save e fila de escrita, conflito, rascunhos, modo leitura (frontmatter, wikilinks, imagens embutidas, callouts, tabelas), foto na nota (upload pro `_media`), navegação e botão voltar, renomear, login expirado, formatação e navegador de pastas. Leva uns 20 segundos.
+`app.test.js`: roda o `app.js` real dentro do jsdom contra um Google Drive falso em memória. Cobre save e fila de escrita, conflito, rascunhos, modo leitura (frontmatter, wikilinks, imagens embutidas, callouts, tabelas), foto na nota (upload pro `_media`), navegação e botão voltar, renomear, login expirado, formatação, navegador de pastas e as datas `created` / `updated` (incluindo o que fica de fora: `_templates`, `CLAUDE.md`, `-antigo`, `.txt`, fora do vault). Leva uns 20 segundos.
 
 O editor aqui é o textarea de fallback, porque o TinyMDE precisa de um navegador de verdade.
 
@@ -16,7 +16,8 @@ O editor aqui é o textarea de fallback, porque o TinyMDE precisa de um navegado
 - barra de formatação no TinyMDE;
 - foto na nota: a redução por canvas de verdade e o `![[...]]` entrando no TinyMDE onde o cursor estava;
 - imagem visível na edição: aparece só na linha que é só o embed, não muda o texto, sobrevive a digitação e sai quando a linha muda;
-- o CloseWatcher real, com a tecla Esc fazendo o papel do botão voltar do Android.
+- o CloseWatcher real, com a tecla Esc fazendo o papel do botão voltar do Android;
+- datas: o cursor da nota nova cai embaixo das propriedades, salvar não mexe no texto nem no cursor de quem está digitando, e o editor alcança o `updated` do Drive ao ir pro modo leitura.
 
 Pra escolher o navegador: variável de ambiente `BROWSER_PATH`.
 

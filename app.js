@@ -11,6 +11,9 @@ const CONFIG = {
   VAULT_NAME: 'vault',
   // Attachment folder at the vault root (Obsidian's attachmentFolderPath)
   MEDIA_FOLDER: '_media',
+  // Notes that keep their dates as they are: the same exceptions as the vault's own date automation
+  NO_DATES_FOLDERS: ['.obsidian', '.claude', '_media', '_tasknotes', '_archive', '_templates', '_source-docs', '_evernote', 'referencia-cnd'],
+  NO_DATES_FILES: ['claude.md', 'skill.md'],
 };
 
 const SCOPES = 'https://www.googleapis.com/auth/drive';
@@ -20,8 +23,9 @@ const SCOPES = 'https://www.googleapis.com/auth/drive';
 const App = {
   // State
   editor: null,
-  // { id, name, draftKey, modifiedTime, parents, lastSavedContent }
-  // id is the Drive file ID (null until created); modifiedTime is the Drive version our edits are based on
+  // { id, name, draftKey, modifiedTime, parents, lastSavedContent, driveContent }
+  // id is the Drive file ID (null until created); modifiedTime is the Drive version our edits are based on;
+  // driveContent is set while the Drive copy has dates the editor has not caught up with (see Dates)
   currentFile: null,
   isDirty: false,
   mode: 'edit',
@@ -42,6 +46,9 @@ const App = {
   // Pictures shown under their ![[...]] line while editing: file name -> { url, width, height },
   // or null while it is on its way (or was not found: not asked again until another note is opened)
   _embedInfo: new Map(),
+  // Whether notes in a folder get their dates kept up: folder ID -> true/false, or a promise of it.
+  // New notes are born in the default folder, so that one never costs a request
+  _datedFolders: new Map([[CONFIG.VAULT_FOLDER_ID, true], [CONFIG.DEFAULT_FOLDER_ID, true]]),
   // "Back" without the history stack (see Navigation): views left behind, and the active CloseWatcher
   useWatcher: false,
   navStack: [],
@@ -816,6 +823,7 @@ const App = {
     document.body.dataset.view = mode;
 
     if (mode === 'preview') {
+      this.showSavedDates();
       this.renderPreview();
       this.els.editorContainer.classList.add('hidden');
       this.els.previewContainer.classList.add('visible');
@@ -1297,16 +1305,19 @@ const App = {
     const file = { id: null, name: name, draftKey: `drivenotes_draft_new_${Date.now()}` };
     this.currentFile = file;
     this.syncHistory();
-    this.setContent('');
+    const today = this.today();
+    this.setContent(`---\ncreated: ${today}\nupdated: ${today}\n---\n\n`);
     this.showEditor();
     this.updateFileNameDisplay();
     this.focusEditor();
+    this.caretToEnd(); // typing starts below the properties
+    const born = this.getContent();
 
     // Create on Drive in background, not awaited, so the user can type immediately.
     // If it fails, the first save creates the file instead.
     if (this.hasValidToken()) {
       this.setSaveStatus('saving', 'Criando no Drive...');
-      this.enqueue(() => this.createOnDrive(file, '')).then(() => {
+      this.enqueue(() => this.createOnDrive(file, born)).then(() => {
         if (this.currentFile !== file) return;
         this.setSaveStatus('saved', 'Criado no Drive');
         setTimeout(() => {
@@ -1328,6 +1339,16 @@ const App = {
       else this.els.editorElement.focus();
     } else {
       this.els.editorElement.focus();
+    }
+  },
+
+  caretToEnd() {
+    if (this.editor) {
+      const row = this.editor.lines.length - 1;
+      this.editor.setSelection({ row, col: this.editor.lines[row].length });
+    } else {
+      const el = this.els.editorElement;
+      el.selectionStart = el.selectionEnd = el.value.length;
     }
   },
 
@@ -1417,6 +1438,9 @@ const App = {
     }
 
     try {
+      // What goes to the Drive carries today's `updated`; the editor's text is left alone (see Dates)
+      const dated = await this.withDates(file, content);
+
       if (file.id) {
         // Someone else (the PC, another device) may have written the file since we opened it
         const remote = await this.driveGetFileMeta(file.id, 'modifiedTime');
@@ -1433,12 +1457,14 @@ const App = {
           return;
         }
 
-        const result = await this.driveUpdateFile(file.id, content);
+        const result = await this.driveUpdateFile(file.id, dated);
         file.modifiedTime = result.modifiedTime;
-        file.lastSavedContent = content;
       } else {
-        await this.createOnDrive(file, content);
+        await this.createOnDrive(file, dated);
       }
+      // Saved text is compared with the editor's, so it is recorded the way the editor has it
+      file.lastSavedContent = content;
+      file.driveContent = dated === content ? null : dated;
     } catch (e) {
       console.error('Drive save failed:', e);
       this.saveDraft(file, content);
@@ -1474,6 +1500,7 @@ const App = {
       this.scheduleAutoSave();
     } else {
       this.clearDraft(file);
+      this.showSavedDates();
     }
   },
 
@@ -1498,6 +1525,91 @@ const App = {
 
     this.saveToRecents(file.id, file.name);
     if (this.currentFile === file) this.syncHistory(); // the entry can now name the note by ID
+  },
+
+  // ── Dates (created / updated) ──
+  // The vault keeps `created` and `updated` (YYYY-MM-DD) in the properties of its notes. A new note is born
+  // with both. After that, `updated` is set in the text on its way to the Drive, not in the editor: replacing
+  // the editor's text while the keyboard is up loses the caret and breaks dictation. The editor catches up
+  // when it is out of sight (showSavedDates).
+
+  today() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  },
+
+  /** `content` the way it goes to the Drive. Never throws: when in doubt, the note is saved as it is. */
+  async withDates(file, content) {
+    const name = file.name.toLowerCase();
+    if (!name.endsWith('.md') || name.includes('-antigo') || CONFIG.NO_DATES_FILES.includes(name)) return content;
+
+    try {
+      const dated = await this.folderKeepsDates(file.parents?.[0] || CONFIG.DEFAULT_FOLDER_ID);
+      return dated ? this.stampDates(content, this.today(), !file.id) : content;
+    } catch (e) {
+      console.warn('Could not tell where the note lives, dates left alone:', e);
+      return content;
+    }
+  },
+
+  /** True for a folder inside the vault and outside NO_DATES_FOLDERS. Walks up the Drive once per folder. */
+  folderKeepsDates(folderId) {
+    if (!this._datedFolders.has(folderId)) {
+      const answer = this.driveGetFileMeta(folderId, 'name,parents').then((folder) => {
+        if (CONFIG.NO_DATES_FOLDERS.includes(folder.name)) return false;
+        const parent = folder.parents?.[0];
+        return parent ? this.folderKeepsDates(parent) : false; // top of the Drive: not in the vault
+      });
+      this._datedFolders.set(folderId, answer);
+      answer.catch(() => this._datedFolders.delete(folderId));
+    }
+    return this._datedFolders.get(folderId);
+  },
+
+  /** Set `updated` to `today` in the note's properties, adding the line (or the whole block) when missing.
+      `created` is only ever added to a note that is being created: an old note never gets an invented one. */
+  stampDates(content, today, isNew) {
+    const bom = content.startsWith('﻿') ? '﻿' : '';
+    const text = content.slice(bom.length);
+    const eol = text.includes('\r\n') ? '\r\n' : '\n';
+    const lines = text.split(/\r?\n/);
+    const updated = `updated: ${today}`;
+
+    if (lines[0] !== '---') {
+      const props = isNew ? [`created: ${today}`, updated] : [updated];
+      return bom + ['---', ...props, '---', '', ...lines].join(eol);
+    }
+
+    const end = lines.indexOf('---', 1);
+    if (end === -1) return content;
+    const props = lines.slice(1, end);
+    // A leading `---` with no YAML under it is a horizontal rule, not properties
+    const isYaml = props.every((l) => l.trim() === '' || /^\s*#/.test(l) || /^\s+\S/.test(l) || /^\s*- /.test(l) || /^[^\s:#][^:]*:(\s|$)/.test(l));
+    if (!isYaml) return content;
+
+    const needsCreated = isNew && !props.some((l) => /^created:/.test(l));
+    let at = props.findIndex((l) => /^updated:/.test(l));
+    if (at !== -1 && props[at].trim() === updated && !needsCreated) return content;
+
+    if (at === -1) at = props.push(updated) - 1;
+    else props[at] = updated;
+    if (needsCreated) props.splice(at, 0, `created: ${today}`);
+    return bom + ['---', ...props, ...lines.slice(end)].join(eol);
+  },
+
+  /** Bring the editor up to the dates that went to the Drive. Only in reading view, with nothing unsaved. */
+  showSavedDates() {
+    const file = this.currentFile;
+    if (!file || !file.driveContent || this.isDirty || this.mode !== 'preview') return;
+
+    if (this.getContent() === file.lastSavedContent) {
+      this.setContent(file.driveContent);
+      file.lastSavedContent = this.getContent();
+      const shown = this.els.previewContainer.querySelector('details.frontmatter pre');
+      if (shown) shown.textContent = this.splitFrontmatter(this.getContent()).frontmatter;
+    }
+    file.driveContent = null;
   },
 
   // ── Drafts (localStorage) ──

@@ -84,6 +84,9 @@ const SETUP = `
     await js(`__App.resolveConflict('later'); __App.goHome();
       __App.confirmDialog('Descartar rascunho', '"2026-08-14-1530.md": o texto que não está no Drive será perdido.', 'Descartar'); 'ok'`);
     await shot('8-confirmar');
+    await js(`document.getElementById('confirm-cancel').click(); __App.newFile(); 'ok'`);
+    await send('Input.insertText', { text: 'Ideia anotada na rua' });
+    await shot('9-nota-nova');
     console.log(`\nem ${out}`);
   } finally {
     browser.close();

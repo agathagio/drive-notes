@@ -220,6 +220,44 @@ const FAKE_DRIVE = `
     await sleep(300);
     l = await lines();
     check('ir pro modo leitura e voltar mantem a imagem', l[3].on && l[3].bg, l[3]);
+
+    // ── 6. Dates: the caret of a new note in TinyMDE, and the editor catching up out of sight ──
+    console.log('6. created e updated no TinyMDE');
+    await open(buildPage('current', currentApp));
+    await js(`(() => {
+      localStorage.clear();
+      localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
+      __App.accessToken = 'fake';
+      window.__written = [];
+      window.fetch = async (url, opts = {}) => {
+        const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o });
+        if (opts.method === 'POST') return ok({ id: 'NEW', name: 'n.md', parents: [CONFIG.DEFAULT_FOLDER_ID], modifiedTime: 't1' });
+        if (opts.method === 'PATCH') { window.__written.push(opts.body); return ok({ id: 'OLD', modifiedTime: 't1' }); }
+        if (new URL(url).searchParams.get('alt') === 'media') return ok('---\\ncreated: 2026-01-02\\nupdated: 2026-01-03\\n---\\n\\ntexto');
+        return ok({ id: 'OLD', name: 'velha.md', parents: [CONFIG.VAULT_FOLDER_ID], modifiedTime: 't1' });
+      };
+      return 'ok';
+    })()`);
+    const today = await js('__App.today()');
+    await js(`__App.newFile(); 'ok'`);
+    await sleep(200);
+    await send('Input.insertText', { text: 'ideia' });
+    await sleep(200);
+    check('nota nova: o que se digita cai embaixo das propriedades', await js('__App.getContent()') === `---\ncreated: ${today}\nupdated: ${today}\n---\n\nideia`, await js('__App.getContent()'));
+
+    await js(`__App.isDirty = false; __App.openFile('OLD', 'velha.md').then(() => 'ok')`);
+    await js(`__App.setMode('edit'); __App.editor.e.focus(); __App.editor.setSelection({ row: 5, col: 5 }); 'ok'`);
+    await send('Input.insertText', { text: ' novo' });
+    await sleep(200);
+    await js(`__App.save().then(() => 'ok')`);
+    const dated = `---\ncreated: 2026-01-02\nupdated: ${today}\n---\n\ntexto novo`;
+    check('o Drive recebe o updated de hoje', JSON.parse(await js('JSON.stringify(window.__written)'))[0] === dated, await js('JSON.stringify(window.__written)'));
+    check('com o teclado aberto o editor fica como esta, cursor no lugar', await js('__App.getContent()') === dated.replace(today, '2026-01-03') && await js(`(({ row, col }) => row + ':' + col)(__App.editor.getSelection())`) === '5:10', await js('JSON.stringify(__App.editor.getSelection())'));
+    await js(`__App.setMode('preview'); 'ok'`);
+    await sleep(200);
+    check('na leitura o editor alcanca o Drive e a nota segue limpa', await js('__App.getContent()') === dated && await js('__App.isDirty') === false, await js('__App.getContent()'));
+    await js(`__App.save().then(() => 'ok')`);
+    check('sem escrita extra', Number(await js('window.__written.length')) === 1);
   } finally {
     browser.close();
   }
