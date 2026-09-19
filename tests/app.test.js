@@ -107,6 +107,26 @@ function makeDrive() {
   return drive;
 }
 
+/** Stands in for the 2d context jsdom does not have: records what was painted, in order.
+    Kept on the canvas so a resize (which really would reset the context) does not lose the log. */
+function fakeCtx(canvas) {
+  if (canvas.__ctx) return canvas.__ctx;
+  const ops = [];
+  const ctx = {
+    ops, canvas,
+    lineCap: '', lineJoin: '', lineWidth: 0, strokeStyle: '', globalCompositeOperation: 'source-over',
+    scale: (x, y) => ops.push(`scale ${x},${y}`),
+    clearRect: (x, y, w, h) => ops.push(`clear ${x},${y},${w},${h}`),
+    beginPath: () => ops.push('begin'),
+    moveTo: (x, y) => ops.push(`move ${x},${y}`),
+    lineTo: (x, y) => ops.push(`line ${x},${y}`),
+    stroke() { ops.push(`stroke ${this.strokeStyle} w=${this.lineWidth} ${this.globalCompositeOperation}`); },
+    drawImage: (src, x, y) => ops.push(`drawImage ${src.width}x${src.height} at ${x},${y}`),
+  };
+  canvas.__ctx = ctx;
+  return ctx;
+}
+
 async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const dom = new JSDOM(html, { url: 'http://localhost:8000/', runScripts: 'outside-only', pretendToBeVisual: true });
@@ -125,6 +145,11 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
   w.fetch = drive.fetch;
   w.confirm = () => true;
   w.HTMLElement.prototype.scrollIntoView = function () {};
+  // jsdom has no canvas and no pointer capture: see drive-notes-aprendizados
+  w.HTMLCanvasElement.prototype.getContext = function () { return fakeCtx(this); };
+  w.HTMLCanvasElement.prototype.toBlob = function (cb, type) { cb(new w.Blob([`png ${this.width}x${this.height}`], { type: type || 'image/png' })); };
+  w.Element.prototype.setPointerCapture = function () {};
+  w.Element.prototype.releasePointerCapture = function () {};
   w.console = { log() {}, warn() {}, error() {} };
   for (const [k, v] of Object.entries(seedStorage)) w.localStorage.setItem(k, v);
   w.eval(fs.readFileSync(LIBS.marked, 'utf8'));
@@ -517,6 +542,9 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     const up = uploaded()[0];
     check('foto no _media, com nome foto-data-hora.jpg', uploaded().length === 1 && up.parents[0] === 'media' && /^foto-\d{4}-\d{2}-\d{2}-\d{6}\.jpg$/.test(up.name), up);
     check('conteudo e tipo chegaram inteiros', up.content === 'bytes-da-foto' && up.mimeType === 'image/jpeg', up);
+    const pngBlob = new w.Blob(['x'], { type: 'image/png' });
+    const drawn = App.mediaName(pngBlob, null, 'desenho');
+    check('mediaName carimba o prefixo e tira a extensao do tipo', /^desenho-\d{4}-\d{2}-\d{2}-\d{6}\.png$/.test(drawn), drawn);
     check('embed em linha propria, no cursor', ta.value === `linha um\n![[${up.name}]]\n\nlinha dois`, ta.value);
     check('nota ficou suja pra salvar', App.isDirty && App.els.saveStatus.textContent === 'Foto inserida');
     const gets = drive.count('GET content');
@@ -1005,6 +1033,209 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     drive.failReads = false;
     search('inexistente'); await sleep(10); search('inexistentes'); await sleep(200);
     check('nada encontrado: diz que nao achou', /nada/i.test(d.querySelector('.browser-message')?.textContent || ''), d.getElementById('browser-list').textContent);
+  }
+
+  console.log('29. Desenho: a caixa de recorte sai dos tracos, nao da tela');
+  {
+    const { App } = await boot();
+    const line = (width, points, erase = false) => ({ color: '#8b6cef', width, erase, points });
+
+    check('sem traco nenhum: sem caixa', App.sketchBounds([]) === null);
+    check('so borracha: sem caixa', App.sketchBounds([line(12, [{ x: 10, y: 10 }, { x: 90, y: 90 }], true)]) === null);
+
+    const one = App.sketchBounds([line(6, [{ x: 100, y: 50 }, { x: 140, y: 90 }])]);
+    check('caixa cobre o traco, mais meia espessura e a margem',
+      one.x === 100 - 3 - 16 && one.y === 50 - 3 - 16 && one.width === 40 + 6 + 32 && one.height === 40 + 6 + 32, one);
+
+    const far = App.sketchBounds([line(6, [{ x: 100, y: 50 }, { x: 140, y: 90 }]), line(12, [{ x: 900, y: 900 }], true)]);
+    check('borracha do outro lado da tela nao incha a caixa', far.width === one.width && far.height === one.height, far);
+
+    const thick = App.sketchBounds([line(12, [{ x: 200, y: 200 }])]);
+    check('traco grosso empurra a caixa pela metade da espessura', thick.width === 12 + 32 && thick.height === 12 + 32, thick);
+
+    const edge = App.sketchBounds([line(3, [{ x: 2, y: 2 }])]);
+    check('traco na borda deixa a caixa entrar no negativo', edge.x === 2 - 1.5 - 16 && edge.y === 2 - 1.5 - 16, edge);
+  }
+
+  console.log('30. Desenho: a tela abre a partir da edicao e fecha sem mexer na nota');
+  {
+    const { App, drive, w } = await boot();
+    w.devicePixelRatio = 3;
+    drive.put('A', 'a.md', 'linha um');
+    await App.openFile('A', 'a.md');
+    const screen = w.document.getElementById('sketch-screen');
+    const pencil = w.document.querySelector('.toolbar-btn[data-sketch]');
+
+    App.setMode('preview');
+    pencil.click();
+    check('fora da edicao o lapis nao abre nada', !App.sketch && !screen.classList.contains('visible'));
+
+    App.setMode('edit');
+    pencil.click();
+    check('na edicao o lapis abre a tela', !!App.sketch && screen.classList.contains('visible'));
+    check('comeca no cinza, 6px, sem borracha', App.sketch.color === '#9b94a6' && App.sketch.width === 6 && App.sketch.erase === false, App.sketch);
+    check('canvas dimensionado pelo devicePixelRatio', App.sketch.canvas.width === w.innerWidth * 3 && App.sketch.dpr === 3, [App.sketch.canvas.width, App.sketch.dpr]);
+    check('contexto sai com ponta redonda', App.sketch.ctx.lineCap === 'round' && App.sketch.ctx.lineJoin === 'round');
+
+    const swatches = [...w.document.getElementById('sketch-colors').children];
+    check('seis bolinhas, uma por cor da paleta', swatches.length === 6 && swatches.map(b => b.dataset.sketchColor).join() === App.SKETCH_COLORS.join());
+    check('a cor ativa e a unica marcada', swatches.filter(b => b.classList.contains('sketch-active')).length === 1 && swatches[0].classList.contains('sketch-active'));
+
+    swatches[2].click();
+    check('tocar numa cor troca a cor ativa', App.sketch.color === '#e0645c' && swatches[2].classList.contains('sketch-active') && !swatches[0].classList.contains('sketch-active'));
+    w.document.querySelector('[data-sketch-width="12"]').click();
+    check('tocar na espessura troca e marca', App.sketch.width === 12 && w.document.querySelector('[data-sketch-width="12"]').classList.contains('sketch-active'));
+    w.document.getElementById('sketch-erase').click();
+    check('borracha liga e desmarca a cor', App.sketch.erase === true && !swatches[2].classList.contains('sketch-active'));
+    swatches[1].click();
+    check('tocar numa cor desliga a borracha', App.sketch.erase === false && App.sketch.color === '#8b6cef');
+
+    const before = App.getContent();
+    App.sketchClose();
+    check('fechar tira a tela e o estado, sem tocar na nota', !App.sketch && !screen.classList.contains('visible') && App.getContent() === before && !App.isDirty);
+  }
+
+  console.log('31. Desenho: traco, borracha e desfazer');
+  {
+    const { App, drive, w } = await boot();
+    drive.put('A', 'a.md', 'linha um');
+    await App.openFile('A', 'a.md');
+    App.setMode('edit');
+    w.document.querySelector('.toolbar-btn[data-sketch]').click();
+    const canvas = App.sketch.canvas;
+    const ctx = App.sketch.ctx;
+    const send = (type, x, y) => canvas.dispatchEvent(new w.PointerEvent(type, { clientX: x, clientY: y, pointerId: 1, bubbles: true, cancelable: true }));
+    const drag = (points) => {
+      send('pointerdown', points[0].x, points[0].y);
+      for (const p of points.slice(1)) send('pointermove', p.x, p.y);
+      send('pointerup', points[points.length - 1].x, points[points.length - 1].y);
+    };
+
+    drag([{ x: 10, y: 10 }, { x: 20, y: 30 }, { x: 40, y: 30 }]);
+    check('um traco, com todos os pontos', App.sketch.strokes.length === 1 && App.sketch.strokes[0].points.length === 3, App.sketch.strokes);
+    check('o traco guarda a ferramenta da hora', App.sketch.strokes[0].color === '#9b94a6' && App.sketch.strokes[0].width === 6 && App.sketch.strokes[0].erase === false);
+    check('soltar fecha o traco', App.sketch.stroke === null);
+
+    send('pointerdown', 99, 99);
+    check('um toque so tambem vale traco', App.sketch.strokes.length === 2 && App.sketch.strokes[1].points.length === 1);
+    send('pointerup', 99, 99);
+
+    w.document.querySelector('[data-sketch-width="12"]').click();
+    w.document.getElementById('sketch-erase').click();
+    ctx.ops.length = 0;
+    drag([{ x: 15, y: 15 }, { x: 25, y: 25 }]);
+    check('a borracha e um traco como outro, so que erase', App.sketch.strokes.length === 3 && App.sketch.strokes[2].erase === true && App.sketch.strokes[2].width === 12);
+    check('a borracha pinta em destination-out', ctx.ops.some(o => o.includes('destination-out')), ctx.ops);
+    check('e a composicao volta ao normal depois', ctx.globalCompositeOperation === 'source-over');
+
+    ctx.ops.length = 0;
+    w.devicePixelRatio = 2;
+    w.dispatchEvent(new w.Event('resize'));
+    check('girar o aparelho nao perde traco: repinta a lista no tamanho novo',
+      App.sketch.strokes.length === 3 && App.sketch.dpr === 2 && App.sketch.canvas.width === w.innerWidth * 2
+      && ctx.ops.filter(o => o.startsWith('stroke')).length === 3, ctx.ops);
+
+    ctx.ops.length = 0;
+    w.document.getElementById('sketch-undo').click();
+    check('desfazer tira o ultimo traco', App.sketch.strokes.length === 2);
+    check('desfazer repinta a lista do zero, nao desenha por cima', ctx.ops[0]?.startsWith('clear') && ctx.ops.filter(o => o.startsWith('stroke')).length === 2, ctx.ops);
+
+    w.document.getElementById('sketch-undo').click();
+    w.document.getElementById('sketch-undo').click();
+    w.document.getElementById('sketch-undo').click();
+    check('desfazer no vazio nao quebra', App.sketch.strokes.length === 0);
+
+    App.sketchClose();
+  }
+
+  console.log('32. Desenho: o voltar do sistema fecha a tela, e nao joga fora sem perguntar');
+  {
+    const { App, drive, w } = await boot({ watcher: true });
+    drive.put('A', 'a.md', 'linha um');
+    await App.openFile('A', 'a.md');
+    App.setMode('edit');
+    const confirmOverlay = w.document.getElementById('confirm-overlay');
+    const openSketch = () => w.document.querySelector('.toolbar-btn[data-sketch]').click();
+    const scribble = () => {
+      const c = App.sketch.canvas;
+      c.dispatchEvent(new w.PointerEvent('pointerdown', { clientX: 30, clientY: 30, pointerId: 1, bubbles: true, cancelable: true }));
+      c.dispatchEvent(new w.PointerEvent('pointerup', { clientX: 30, clientY: 30, pointerId: 1, bubbles: true, cancelable: true }));
+    };
+
+    openSketch();
+    check('com a tela aberta existe um watcher pra segurar o voltar', w.__watchers.length > 0);
+    w.__back();
+    await sleep(10);
+    check('tela em branco: o voltar fecha sem perguntar', !App.sketch && !confirmOverlay.classList.contains('visible'));
+
+    openSketch();
+    scribble();
+    w.__back();
+    await sleep(10);
+    check('com desenho na tela, o voltar pergunta antes', !!App.sketch && confirmOverlay.classList.contains('visible'));
+
+    w.__back();
+    await sleep(10);
+    check('o voltar de novo e "continuar desenhando": some o dialogo, fica a tela', !!App.sketch && !confirmOverlay.classList.contains('visible') && App.sketch.strokes.length === 1);
+
+    w.__back();
+    await sleep(10);
+    w.document.getElementById('confirm-ok').click();
+    await sleep(10);
+    check('descartar fecha a tela e nao mexe na nota', !App.sketch && App.getContent() === 'linha um' && !App.isDirty);
+  }
+
+  console.log('33. Desenho: o pronto recorta, sobe pro _media e so entao entra na nota');
+  {
+    const { App, drive, w } = await boot();
+    w.URL.createObjectURL = () => 'blob:fake/sketch';
+    w.devicePixelRatio = 2;
+    drive.put('media', '_media', '', [VAULT]); drive.files.get('media').mimeType = FOLDER;
+    drive.put('A', 'a.md', 'linha um\nlinha dois');
+    await App.openFile('A', 'a.md');
+    App.setMode('edit');
+    const ta = App.els.editorElement;
+    const uploaded = () => [...drive.files.values()].filter(f => /^desenho-/.test(f.name));
+    const openSketch = () => w.document.querySelector('.toolbar-btn[data-sketch]').click();
+    const scribble = (from, to) => {
+      const c = App.sketch.canvas;
+      c.dispatchEvent(new w.PointerEvent('pointerdown', { clientX: from.x, clientY: from.y, pointerId: 1, bubbles: true, cancelable: true }));
+      c.dispatchEvent(new w.PointerEvent('pointermove', { clientX: to.x, clientY: to.y, pointerId: 1, bubbles: true, cancelable: true }));
+      c.dispatchEvent(new w.PointerEvent('pointerup', { clientX: to.x, clientY: to.y, pointerId: 1, bubbles: true, cancelable: true }));
+    };
+
+    openSketch();
+    await App.sketchFinish();
+    check('tela em branco: o pronto so fecha, sem subir nada', !App.sketch && uploaded().length === 0 && ta.value === 'linha um\nlinha dois');
+
+    ta.selectionStart = ta.selectionEnd = 'linha um'.length;
+    openSketch();
+    scribble({ x: 100, y: 50 }, { x: 140, y: 90 });
+    await App.sketchFinish();
+    const up = uploaded()[0];
+    check('desenho no _media, com nome desenho-data-hora.png', uploaded().length === 1 && up.parents[0] === 'media' && /^desenho-\d{4}-\d{2}-\d{2}-\d{6}\.png$/.test(up.name), up);
+    check('o PNG sai do tamanho do recorte, em pixels do aparelho', up.content === `png ${(40 + 6 + 32) * 2}x${(40 + 6 + 32) * 2}`, up.content);
+    check('embed em linha propria, onde o cursor estava', ta.value === `linha um\n![[${up.name}]]\n\nlinha dois`, ta.value);
+    check('tela fechada e nota suja pra salvar', !App.sketch && App.isDirty && App.els.saveStatus.textContent === 'Desenho inserido');
+
+    const gets = drive.count('GET content');
+    App.setMode('preview');
+    await sleep(40);
+    check('modo leitura mostra o desenho sem baixar de volta', App.els.previewContainer.querySelector('img')?.getAttribute('src') === 'blob:fake/sketch' && drive.count('GET content') === gets);
+    App.setMode('edit');
+    await App.save(); await App._saveChain;
+
+    drive.failWrites = true;
+    const before = ta.value;
+    openSketch();
+    scribble({ x: 10, y: 10 }, { x: 60, y: 60 });
+    await App.sketchFinish();
+    check('upload falhou: a tela FICA aberta com o desenho, e nada entra na nota',
+      !!App.sketch && App.sketch.strokes.length === 1 && ta.value === before && uploaded().length === 1 && App.els.saveStatus.textContent === 'Erro ao enviar o desenho', App.els.saveStatus.textContent);
+
+    drive.failWrites = false;
+    await App.sketchFinish();
+    check('tentar de novo com a rede de volta sobe o mesmo desenho', uploaded().length === 2 && !App.sketch && /!\[\[desenho-/.test(ta.value));
   }
 
   done();

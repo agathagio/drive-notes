@@ -15,6 +15,8 @@
   --success: #4caf50;
   --warning: #ff9800;
   --error: #f44336;
+  /* Roxo da paleta de desenho: os outros cinco hexes vivem no SKETCH_COLORS do app.js */
+  --sketch-purple: #8b6cef;
 }
 
 * {
@@ -886,3 +888,92 @@ body[data-view="preview"] .file-name {
     padding-top: calc(8px + env(safe-area-inset-top));
   }
 }
+
+/* ── Tela de desenho ── */
+
+.sketch-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: var(--bg-editor);
+  display: none;
+  flex-direction: column;
+}
+
+.sketch-screen.visible { display: flex; }
+
+.sketch-top {
+  height: 48px;
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  font-weight: 600;
+}
+
+/* Never scrolls and never hands a touch back to the page: a stroke must not turn into a scroll */
+.sketch-canvas {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  display: block;
+  touch-action: none;
+}
+
+.sketch-bar {
+  height: 56px;
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.sketch-swatch {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  padding: 0;
+}
+
+/* Two rings: the inner one is the bar's own colour, and it is what keeps the purple ring
+   visible when the selected colour is itself the purple */
+.sketch-swatch.sketch-active {
+  box-shadow: 0 0 0 3px var(--bg-secondary), 0 0 0 6px var(--sketch-purple);
+}
+
+.sketch-tool {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 10px;
+  background: var(--button-bg);
+  color: var(--text-primary);
+  font-size: 19px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sketch-tool i {
+  display: block;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.sketch-tool.sketch-active,
+.btn-icon.sketch-active {
+  background: var(--sketch-purple);
+  color: #fff;
+}
+
+.sketch-gap { width: 12px; }
