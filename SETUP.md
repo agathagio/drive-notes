@@ -17,9 +17,10 @@ Você só precisa fazer isso **uma vez**.
 ## 2. Ativar as APIs
 
 1. No menu lateral, vá em **APIs & Services** → **Library**
-2. Pesquise e ative cada uma:
+2. Pesquise e ative:
    - **Google Drive API** → clique → **Enable**
-   - **Google Picker API** → clique → **Enable**
+
+O app não usa mais o Google Picker: a navegação de pastas é do próprio app, direto na Drive API.
 
 ## 3. Configurar tela de consentimento OAuth
 
@@ -35,17 +36,8 @@ Você só precisa fazer isso **uma vez**.
 
 ## 4. Criar credenciais
 
-### API Key
-1. Vá em **APIs & Services** → **Credentials**
-2. Clique **Create Credentials** → **API Key**
-3. Copie a chave gerada
-4. (Recomendado) Clique em **Restrict Key**:
-   - Em **API restrictions**, selecione **Restrict key**
-   - Marque: Google Drive API, Google Picker API
-   - Salve
-
 ### OAuth Client ID
-1. Na mesma página, clique **Create Credentials** → **OAuth client ID**
+1. Vá em **APIs & Services** → **Credentials** e clique **Create Credentials** → **OAuth client ID**
 2. Application type: **Web application**
 3. Name: `Drive Notes Web`
 4. Em **Authorized JavaScript origins**, adicione:
@@ -54,9 +46,7 @@ Você só precisa fazer isso **uma vez**.
 5. Clique **Create**
 6. Copie o **Client ID**
 
-### Project Number
-1. Vá em **IAM & Admin** → **Settings** (ou página inicial do projeto)
-2. Copie o **Project Number** (é um número, tipo `123456789012`)
+API key e Project Number não são mais necessários (eram só do Google Picker). Se você criou uma API key pra versões antigas, pode apagar em **Credentials**.
 
 ## 5. Configurar o app
 
@@ -65,21 +55,21 @@ Abra o arquivo `app.js` e substitua os valores no topo:
 ```javascript
 const CONFIG = {
   CLIENT_ID: 'SEU_CLIENT_ID_AQUI.apps.googleusercontent.com',
-  API_KEY: 'SUA_API_KEY_AQUI',
-  APP_ID: 'SEU_PROJECT_NUMBER_AQUI',
-  DEFAULT_FOLDER_ID: null,  // configurar depois (opcional)
+  DEFAULT_FOLDER_ID: 'ID_DA_PASTA_DE_NOTAS_NOVAS',
+  VAULT_FOLDER_ID: 'ID_DA_PASTA_DO_VAULT',
+  VAULT_NAME: 'vault',
 };
 ```
 
-## 6. (Opcional) Configurar pasta padrão
+## 6. IDs das pastas
 
-Pra que novas notas sejam salvas automaticamente em `vault/00-inbox/`:
+`VAULT_FOLDER_ID` é a raiz do navegador de pastas. `DEFAULT_FOLDER_ID` é onde as notas novas são criadas (a inbox do vault).
 
 1. Abra o Google Drive no navegador
-2. Navegue até a pasta `vault/00-inbox/`
-3. Olhe a URL — ela terá algo como: `drive.google.com/drive/folders/XXXXX`
+2. Navegue até a pasta
+3. Olhe a URL: ela terá algo como `drive.google.com/drive/folders/XXXXX`
 4. Copie o ID da pasta (o `XXXXX`)
-5. Cole em `DEFAULT_FOLDER_ID` no `app.js`
+5. Cole no campo correspondente no `app.js`
 
 ## 7. Deploy no GitHub Pages
 
@@ -111,6 +101,7 @@ Depois de ativar o GitHub Pages, volte ao Google Cloud Console:
 ## Troubleshooting
 
 - **"This app isn't verified"**: Normal pra projetos em Testing mode. Clique "Advanced" → "Go to Drive Notes (unsafe)". É seguro — é o seu próprio app.
-- **Picker não aparece**: Verifique se a Picker API está ativada e se o API Key está correto.
+- **Pasta não carrega**: Verifique se a Google Drive API está ativada e se `VAULT_FOLDER_ID` é o ID da pasta certa.
+- **Botão voltar do celular não funciona**: na tela inicial, toque 5 vezes no título "Drive Notes". Abre um painel de diagnóstico com o modo de navegação em uso e o log dos últimos eventos.
 - **401 Unauthorized**: Token expirou. Recarregue a página e faça login novamente.
 - **Erro de origin**: A URL de onde você acessa precisa estar nas Authorized JavaScript Origins.

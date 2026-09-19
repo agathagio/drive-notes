@@ -2,7 +2,8 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <!-- interactive-widget=resizes-content: the page shrinks when the keyboard opens, so the text being typed is never under it -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="theme-color" content="#1a1a2e">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -25,8 +26,7 @@
   <!-- DOMPurify (sanitizes the rendered preview) -->
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
 
-  <!-- Google APIs (Drive + Picker + Auth) -->
-  <script async defer src="https://apis.google.com/js/api.js" onload="onGapiLoaded()"></script>
+  <!-- Google Identity Services (login). Drive itself is called with plain fetch. -->
   <script async defer src="https://accounts.google.com/gsi/client" onload="onGisLoaded()"></script>
 </head>
 <body data-view="welcome">
@@ -62,6 +62,12 @@
     </div>
   </div>
 
+  <!-- ── File browser ── -->
+  <div id="browser" class="browser hidden">
+    <div id="browser-path" class="browser-path"></div>
+    <ul id="browser-list" class="browser-list"></ul>
+  </div>
+
   <!-- ── Editor ── -->
   <div id="editor-container" class="editor-container hidden">
     <div id="editor"></div>
@@ -87,13 +93,15 @@
   <!-- Spacer to compensate for fixed toolbar -->
   <div class="toolbar-spacer"></div>
 
-  <!-- ── Modal: new file ── -->
+  <!-- In every dialog, the button marked data-dismiss is what the system back button presses -->
+
+  <!-- ── Modal: text input (rename) ── -->
   <div id="modal-overlay" class="modal-overlay">
     <div class="modal">
-      <h3>Nova nota</h3>
+      <h3>Renomear nota</h3>
       <input id="modal-input" type="text" placeholder="Nome do arquivo" autocomplete="off">
       <div class="modal-actions">
-        <button id="modal-cancel" class="btn">Cancelar</button>
+        <button id="modal-cancel" class="btn" data-dismiss>Cancelar</button>
         <button id="modal-confirm" class="btn active">Criar</button>
       </div>
     </div>
@@ -108,7 +116,31 @@
         <button class="btn active" data-conflict="copy">Salvar a minha como cópia</button>
         <button class="btn" data-conflict="overwrite">Sobrescrever o Drive</button>
         <button class="btn" data-conflict="reload">Descartar a minha e recarregar</button>
-        <button class="btn" data-conflict="later">Decidir depois</button>
+        <button class="btn" data-conflict="later" data-dismiss>Decidir depois</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Modal: confirm ── -->
+  <div id="confirm-overlay" class="modal-overlay">
+    <div class="modal">
+      <h3 id="confirm-title"></h3>
+      <p id="confirm-text" class="modal-text"></p>
+      <div class="modal-actions">
+        <button id="confirm-cancel" class="btn" data-dismiss>Cancelar</button>
+        <button id="confirm-ok" class="btn btn-danger"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Diagnostics (five taps on the welcome title) ── -->
+  <div id="debug-overlay" class="modal-overlay">
+    <div class="modal modal-wide">
+      <h3>Diagnóstico</h3>
+      <pre id="debug-text" class="debug-text"></pre>
+      <div class="modal-actions">
+        <button id="debug-copy" class="btn">Copiar</button>
+        <button id="debug-close" class="btn active" data-dismiss>Fechar</button>
       </div>
     </div>
   </div>

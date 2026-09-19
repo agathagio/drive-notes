@@ -4,16 +4,14 @@
 // =====================================================
 const CONFIG = {
   CLIENT_ID: '104411957628-eu5gbpopvot1ai5a95qbpdn3frcvko4r.apps.googleusercontent.com',
-  API_KEY: 'AIzaSyD4muL3FkZEVc5c4bN0cmOj2rpCQMDGOGo',
-  APP_ID: '104411957628',
-  // Default folder for new files (vault/00-inbox/ on Google Drive)
-  // Set this to the folder ID after first setup, or leave null to use Picker
+  // Folder where new notes are created (the vault inbox on Google Drive)
   DEFAULT_FOLDER_ID: '1xONP1bGB7qqNDQ1XNQRSk8rqWKoqCuuV',
+  // Root of the file browser
   VAULT_FOLDER_ID: '1xJYm3FFeafY1IAcvAHuQ5BaMX7KxRM-K',
+  VAULT_NAME: 'vault',
 };
 
 const SCOPES = 'https://www.googleapis.com/auth/drive';
-const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest';
 
 // =====================================================
 
@@ -28,13 +26,21 @@ const App = {
   autoSaveTimer: null,
   accessToken: null,
   tokenClient: null,
-  gapiLoaded: false,
-  gisLoaded: false,
   // All Drive writes run through this chain, one at a time, so a create and a save
   // (or two saves) of the same file can never race and duplicate or reorder content
   _saveChain: Promise.resolve(),
   // Bumped on every file open; a slow load that lost the race is discarded
   _loadSeq: 0,
+  // Folder on screen in the file browser: { id, name, path }, or null
+  folder: null,
+  // Folder listings seen in this session, by folder ID
+  _folderCache: new Map(),
+  // "Back" without the history stack (see Navigation): views left behind, and the active CloseWatcher
+  useWatcher: false,
+  navStack: [],
+  _watcher: null,
+  // Recent navigation events, for the hidden diagnostics panel
+  _log: [],
 
   // DOM refs
   els: {},
@@ -58,10 +64,16 @@ const App = {
       modalConfirm: document.getElementById('modal-confirm'),
       conflict: document.getElementById('conflict-overlay'),
       conflictText: document.getElementById('conflict-text'),
+      browser: document.getElementById('browser'),
     };
 
     // Pointer used by older versions; drafts are now found by scanning their keys
     localStorage.removeItem('drivenotes_draft_latest');
+
+    this.useWatcher = typeof CloseWatcher !== 'undefined';
+    this.log('init');
+    // The saved login does not depend on Google's script having loaded
+    this.restoreToken();
 
     this.initEditor();
     this.bindEvents();
@@ -83,10 +95,34 @@ const App = {
       this.editor.addEventListener('change', () => {
         this.markDirty();
       });
+      this.guardComposition();
     } catch (e) {
       console.warn('TinyMDE failed to load, using fallback textarea:', e);
       this.useFallbackEditor();
     }
+  },
+
+  /** TinyMDE redraws the line and resets the caret on every input event. While the keyboard is
+      composing (voice typing, swipe, word suggestions) that throws away the region the keyboard is
+      working on, and each partial result lands as new text: "NãoNão consigoNão consigo ditar".
+      So composition updates are kept from TinyMDE, and it gets one input event when the composition ends. */
+  guardComposition() {
+    const editable = this.editor.e;
+    if (!editable) return;
+
+    editable.addEventListener('input', (e) => {
+      if (e.isComposing && /CompositionText$/.test(e.inputType || '')) {
+        e.stopImmediatePropagation();
+        this._composed = true;
+        this.markDirty(); // TinyMDE's change event is on hold with the rest
+      }
+    }, true);
+
+    editable.addEventListener('compositionend', () => {
+      if (!this._composed) return;
+      this._composed = false;
+      editable.dispatchEvent(new InputEvent('input', { inputType: 'insertText', bubbles: true }));
+    });
   },
 
   useFallbackEditor() {
@@ -121,17 +157,6 @@ const App = {
 
   // ── Google Auth ──
 
-  onGapiLoaded() {
-    gapi.load('client:picker', async () => {
-      await gapi.client.init({
-        apiKey: CONFIG.API_KEY,
-        discoveryDocs: [DISCOVERY_DOC],
-      });
-      this.gapiLoaded = true;
-      this.checkReady();
-    });
-  },
-
   onGisLoaded() {
     this.tokenClient = google.accounts.oauth2.initTokenClient({
       client_id: CONFIG.CLIENT_ID,
@@ -142,16 +167,6 @@ const App = {
         if (this._authReject) this._authReject(err);
       },
     });
-    this.gisLoaded = true;
-    this.checkReady();
-  },
-
-  checkReady() {
-    if (this.gapiLoaded && this.gisLoaded) {
-      console.log('Drive Notes: Google APIs ready');
-      // Try to restore saved token
-      this.restoreToken();
-    }
   },
 
   /** Save token + expiry to localStorage (persists across PWA restarts) */
@@ -202,7 +217,6 @@ const App = {
     if (token && expiresAt > Date.now() + 60000) {
       // Token exists and has more than 1 minute left
       this.accessToken = token;
-      gapi.client.setToken({ access_token: token });
       this.scheduleTokenRefresh(expiresAt);
       console.log('Drive Notes: token restored, expires in', Math.round((expiresAt - Date.now()) / 60000), 'min');
     }
@@ -236,7 +250,6 @@ const App = {
         return;
       }
       this.saveToken(response.access_token, response.expires_in);
-      gapi.client.setToken({ access_token: response.access_token });
       console.log('Drive Notes: token refreshed silently');
     };
     this.tokenClient.requestAccessToken(this.tokenRequest(''));
@@ -279,7 +292,6 @@ const App = {
           return;
         }
         this.saveToken(response.access_token, response.expires_in);
-        gapi.client.setToken({ access_token: response.access_token });
         resolve(this.accessToken);
       };
       this.tokenClient.requestAccessToken(this.tokenRequest(prompt));
@@ -298,51 +310,111 @@ const App = {
     return this.requestToken('');
   },
 
-  // ── Google Picker ──
+  // ── File browser ──
+  // Replaces the Google Picker: a plain list, folders first, sorted by name like Obsidian's file tree.
 
-  async openPicker() {
+  /** Tap on "open": start at the vault root */
+  async browseVault() {
+    this.beginNav();
+    const opened = await this.openFolder({ id: CONFIG.VAULT_FOLDER_ID, name: CONFIG.VAULT_NAME, path: [] });
+    if (!opened) this.cancelNav();
+  },
+
+  /** Show a folder. `folder` is { id, name, path }, path being the names of the folders above it.
+      Resolves to false only when the view never changed (no login). */
+  async openFolder(folder) {
     try {
       await this.ensureAuth();
+    } catch {
+      this.setSaveStatus('error', 'Faça login primeiro');
+      return false;
+    }
+
+    // Whatever is open gets saved before it is replaced
+    this.flushCurrent();
+    const seq = ++this._loadSeq;
+    this.currentFile = null;
+    this.isDirty = false;
+    this.folder = folder;
+    this.updateFileNameDisplay();
+    this.setSaveStatus('', '');
+    this.showBrowser();
+    this.syncHistory();
+
+    // What we saw last time shows at once; the fresh listing replaces it when it arrives
+    const cached = this._folderCache.get(folder.id);
+    this.renderBrowser(folder, cached, cached ? '' : 'Carregando...');
+
+    try {
+      const items = await this.driveListFolder(folder.id);
+      this._folderCache.set(folder.id, items);
+      if (seq === this._loadSeq) this.renderBrowser(folder, items, items.length ? '' : 'Pasta vazia');
     } catch (e) {
-      console.error('Auth failed:', e);
-      this.setSaveStatus('error', 'Erro na autenticação');
-      return;
+      console.error('Failed to list folder:', e);
+      if (seq === this._loadSeq && !cached) this.renderBrowser(folder, null, 'Erro ao carregar a pasta');
     }
-
-    // Default view: vault folder
-    const vaultView = new google.picker.DocsView(google.picker.ViewId.DOCS)
-      .setIncludeFolders(true)
-      .setSelectFolderEnabled(false)
-      .setParent(CONFIG.VAULT_FOLDER_ID)
-      .setMimeTypes('text/markdown,text/plain,text/x-markdown');
-
-    // Fallback: search all Drive
-    const allView = new google.picker.DocsView(google.picker.ViewId.DOCS)
-      .setIncludeFolders(true)
-      .setSelectFolderEnabled(false)
-      .setMimeTypes('text/markdown,text/plain,text/x-markdown');
-
-    const picker = new google.picker.PickerBuilder()
-      .addView(vaultView)
-      .addView(allView)
-      .setOAuthToken(this.accessToken)
-      .setDeveloperKey(CONFIG.API_KEY)
-      .setAppId(CONFIG.APP_ID)
-      .setCallback((data) => this.onPickerResult(data))
-      .setTitle('Abrir arquivo markdown')
-      .build();
-
-    picker.setVisible(true);
+    return true;
   },
 
-  async onPickerResult(data) {
-    if (data[google.picker.Response.ACTION] !== google.picker.Action.PICKED) {
-      return;
-    }
+  renderBrowser(folder, items, message) {
+    const pathEl = document.getElementById('browser-path');
+    const list = document.getElementById('browser-list');
+    // The element is right-to-left so a long path is cut at the start; the marks keep the text itself left-to-right
+    pathEl.textContent = `‎${[...folder.path, folder.name].join(' / ')}‎`;
+    list.innerHTML = '';
 
-    const doc = data[google.picker.Response.DOCUMENTS][0];
-    this.navigateTo(doc[google.picker.Document.ID], doc[google.picker.Document.NAME]);
+    (items || []).forEach(item => {
+      const li = document.createElement('li');
+      li.className = 'browser-item' + (item.isFolder ? ' is-folder' : '');
+
+      const icon = document.createElement('span');
+      icon.className = 'browser-icon';
+      icon.textContent = item.isFolder ? '\u{1F4C1}' : '';
+      li.appendChild(icon);
+
+      const name = document.createElement('span');
+      name.className = 'browser-name';
+      name.textContent = item.isFolder ? item.name : item.name.replace(/\.md$/i, '');
+      li.appendChild(name);
+
+      if (!item.isFolder) {
+        const when = document.createElement('span');
+        when.className = 'browser-meta';
+        when.textContent = this.shortDate(item.modifiedTime);
+        li.appendChild(when);
+      }
+
+      li.addEventListener('click', () => {
+        if (item.isFolder) {
+          this.beginNav();
+          this.openFolder({ id: item.id, name: item.name, path: [...folder.path, folder.name] });
+        } else {
+          this.navigateTo(item.id, item.name);
+        }
+      });
+      list.appendChild(li);
+    });
+
+    if (message) {
+      const li = document.createElement('li');
+      li.className = 'browser-message';
+      li.textContent = message;
+      list.appendChild(li);
+    }
   },
+
+  /** "14:32" for today, "19 set" for this year, "19/09/25" before that */
+  shortDate(iso) {
+    const date = new Date(iso);
+    if (!iso || isNaN(date)) return '';
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    if (date.toDateString() === now.toDateString()) return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    const months = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+    if (date.getFullYear() === now.getFullYear()) return `${date.getDate()} ${months[date.getMonth()]}`;
+    return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${String(date.getFullYear()).slice(2)}`;
+  },
+
 
   /** Open a Drive file, in the reading view. Shared by the Picker, the recents list, links and "back".
       `heading` scrolls to a title once open. Callers reacting to a tap call beginNav() first. */
@@ -427,7 +499,7 @@ const App = {
   /** A tap that leads to a note: the history entry is created now, and dropped again if the note never opens */
   async navigateTo(fileId, fileName, options) {
     this.beginNav();
-    if (!(await this.openFile(fileId, fileName, options))) history.back();
+    if (!(await this.openFile(fileId, fileName, options))) this.cancelNav();
   },
 
   // ── Google Drive API ──
@@ -457,6 +529,34 @@ const App = {
       `https://www.googleapis.com/drive/v3/files/${fileId}?fields=${fields}`
     );
     return response.json();
+  },
+
+  /** Folders and notes directly inside a folder: folders first, then by name the way a person sorts ("2" before "10") */
+  async driveListFolder(folderId) {
+    const FOLDER = 'application/vnd.google-apps.folder';
+    const found = [];
+    let pageToken = '';
+    for (let page = 0; page < 20; page++) {
+      const params = new URLSearchParams({
+        q: `'${folderId}' in parents and trashed = false`,
+        fields: 'nextPageToken, files(id,name,mimeType,modifiedTime)',
+        pageSize: '1000',
+      });
+      if (pageToken) params.set('pageToken', pageToken);
+      const response = await this.driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
+      const data = await response.json();
+      found.push(...(data.files || []));
+      pageToken = data.nextPageToken;
+      if (!pageToken) break;
+    }
+
+    const isNote = (f) => /\.(md|markdown|txt)$/i.test(f.name) || (f.mimeType || '').startsWith('text/');
+    return found
+      // Dot-folders (.obsidian, .trash) stay hidden, as in Obsidian
+      .filter(f => !f.name.startsWith('.') && (f.mimeType === FOLDER || isNote(f)))
+      .map(f => ({ id: f.id, name: f.name, isFolder: f.mimeType === FOLDER, modifiedTime: f.modifiedTime }))
+      .sort((a, b) => (b.isFolder - a.isFolder)
+        || a.name.localeCompare(b.name, 'pt-BR', { numeric: true, sensitivity: 'base' }));
   },
 
   /** Files with exactly one of these names, anywhere in Drive, newest first */
@@ -641,8 +741,18 @@ const App = {
 
   // ── UI State ──
 
+  showBrowser() {
+    this.els.welcome.classList.add('hidden');
+    this.els.editorContainer.classList.add('hidden');
+    this.els.previewContainer.classList.remove('visible');
+    this.els.browser.classList.remove('hidden');
+    this.els.browser.scrollTop = 0;
+    document.body.dataset.view = 'browse';
+  },
+
   showWelcome() {
     this.els.welcome.classList.remove('hidden');
+    this.els.browser.classList.add('hidden');
     this.els.editorContainer.classList.add('hidden');
     this.els.previewContainer.classList.remove('visible');
     // The stylesheet keys off data-view: the formatting toolbar only exists while editing
@@ -651,6 +761,7 @@ const App = {
 
   showEditor(mode = 'edit') {
     this.els.welcome.classList.add('hidden');
+    this.els.browser.classList.add('hidden');
     this.setMode(mode);
   },
 
@@ -772,7 +883,7 @@ const App = {
     }
 
     // Still inside the tap: the history entry has to be created now (see beginNav).
-    // Every way out that does not open a note drops it again with history.back().
+    // Every way out that does not open a note drops it again with cancelNav().
     this.beginNav();
 
     const base = target.split('/').pop().trim();
@@ -786,7 +897,7 @@ const App = {
     } catch (e) {
       console.error('Link lookup failed:', e);
       this.setSaveStatus('error', 'Erro ao procurar a nota');
-      history.back();
+      this.cancelNav();
       return;
     }
 
@@ -794,7 +905,7 @@ const App = {
     const notes = matches.filter(isText);
     if (!notes.length) {
       this.setSaveStatus('error', matches.length ? `Não abro esse tipo: ${base}` : `Nota não encontrada: ${base}`);
-      history.back();
+      this.cancelNav();
       return;
     }
 
@@ -804,7 +915,7 @@ const App = {
       || notes.find(f => /\.md$/i.test(f.name))
       || notes[0];
 
-    if (!(await this.openFile(pick.id, pick.name, { heading }))) history.back();
+    if (!(await this.openFile(pick.id, pick.name, { heading }))) this.cancelNav();
   },
 
   scrollToHeading(heading) {
@@ -819,27 +930,108 @@ const App = {
 
   // ── Navigation (back button, Android back gesture) ──
 
-  // Each history entry carries the view it shows: { view: 'welcome' } or { view: 'file', id, name }.
-  // "Back" (header button or system gesture) lands on an entry and onPopState shows what it says.
+  // A view is described by { view: 'welcome' }, { view: 'file', id, name } or { view: 'browse', id, name, path }.
+  //
+  // Two ways to make the system back button walk through views instead of closing the app:
+  // - CloseWatcher (useWatcher): the API Chrome gives apps for the Android back button. While one is
+  //   active, "back" fires its close event and never touches the session history. The views left
+  //   behind live in navStack. This is the one used wherever it exists.
+  // - History API: one history entry per view, carrying its description; "back" lands on an entry
+  //   and onPopState shows what it says.
 
   viewState() {
     const file = this.currentFile;
-    return file ? { view: 'file', id: file.id, name: file.name } : { view: 'welcome' };
+    if (file) return { view: 'file', id: file.id, name: file.name };
+    if (this.folder) return { view: 'browse', ...this.folder };
+    return { view: 'welcome' };
   },
 
-  /** Call synchronously from the tap that starts a navigation. Chrome's back gesture skips
-      history entries that were not created during a user gesture, so this cannot wait for the Drive. */
+  /** Show the view a description stands for; nothing to do if it is already on screen */
+  show(state) {
+    this.log(`show ${state?.view || 'welcome'} ${state?.name || ''}`);
+    if (state?.view === 'file' && state.id) {
+      if (state.id !== this.currentFile?.id) this.openFile(state.id, state.name);
+    } else if (state?.view === 'browse') {
+      if (this.currentFile || this.folder?.id !== state.id) {
+        this.openFolder({ id: state.id, name: state.name, path: state.path || [] });
+      }
+    } else if (this.currentFile || this.folder || document.body.dataset.view !== 'welcome') {
+      // (already there when a failed navigation is being undone: its error message stays on screen)
+      this.goHome();
+    }
+  },
+
+  /** Call synchronously from the tap that starts a navigation. In History mode Chrome's back button
+      skips entries that were not created during a user gesture, so this cannot wait for the Drive. */
   beginNav() {
-    history.pushState(this.viewState(), '');
+    if (this.useWatcher) {
+      this.navStack.push(this.viewState());
+      this.armWatcher();
+    } else {
+      history.pushState(this.viewState(), '');
+    }
+    this.log('beginNav');
   },
 
-  /** Make the current history entry describe what is on screen */
+  /** The navigation begun never changed the view: forget it */
+  cancelNav() {
+    if (this.useWatcher) {
+      this.navStack.pop();
+      this.armWatcher();
+    } else {
+      history.back();
+    }
+    this.log('cancelNav');
+  },
+
+  /** History mode: make the current entry describe what is on screen */
   syncHistory() {
-    history.replaceState(this.viewState(), '');
+    if (!this.useWatcher) history.replaceState(this.viewState(), '');
   },
 
-  /** Header back button. The real work happens in onPopState, shared with the system back gesture. */
+  /** Keep a CloseWatcher alive exactly while "back" has something to do inside the app.
+      With none active, the system back button leaves the app, which is what the welcome screen wants. */
+  armWatcher() {
+    if (!this.useWatcher) return;
+    const needed = this.navStack.length > 0 || !!document.querySelector('.modal-overlay.visible');
+    if (needed && !this._watcher) {
+      try {
+        const watcher = new CloseWatcher();
+        watcher.onclose = () => {
+          this._watcher = null;
+          this.log('watcher: close');
+          this.handleBack();
+        };
+        this._watcher = watcher;
+      } catch (e) {
+        this.log(`watcher failed: ${e.message}`);
+      }
+    } else if (!needed && this._watcher) {
+      this._watcher.destroy();
+      this._watcher = null;
+    }
+  },
+
+  /** One step back: close the dialog on top, or else return to the previous view */
+  handleBack() {
+    const dismiss = document.querySelector('.modal-overlay.visible [data-dismiss]');
+    if (dismiss) {
+      dismiss.click();
+    } else if (this.navStack.length) {
+      this.show(this.navStack.pop());
+    } else {
+      this.show(null);
+    }
+    this.armWatcher();
+  },
+
+  /** Header back button */
   goBack() {
+    this.log('goBack (button)');
+    if (this.useWatcher) {
+      this.handleBack();
+      return;
+    }
     this._popped = false;
     history.back();
     // No entry of ours behind this one (should not happen): still leave the note
@@ -850,18 +1042,36 @@ const App = {
 
   onPopState(state) {
     this._popped = true;
-    if (!state || state.view !== 'file' || !state.id) {
-      // Already there when a failed navigation is being undone: keep its error message on screen
-      if (this.currentFile || document.body.dataset.view !== 'welcome') this.goHome();
-    } else if (state.id !== this.currentFile?.id) {
-      this.openFile(state.id, state.name);
-    }
+    this.log('popstate');
+    if (!this.useWatcher) this.show(state);
+  },
+
+  /** Line for the hidden diagnostics panel (five taps on the welcome title) */
+  log(message) {
+    const time = new Date().toTimeString().slice(0, 8);
+    this._log.push(`${time} ${message} | hist=${history.length} stack=${this.navStack.length} watcher=${this._watcher ? 1 : 0}`);
+    if (this._log.length > 60) this._log.shift();
+  },
+
+  showDiagnostics() {
+    const standalone = window.matchMedia?.('(display-mode: standalone)').matches ?? '?';
+    document.getElementById('debug-text').textContent = [
+      `modo de voltar: ${this.useWatcher ? 'CloseWatcher' : 'History API'}`,
+      `instalado (standalone): ${standalone}`,
+      `view: ${document.body.dataset.view}`,
+      navigator.userAgent,
+      '',
+      ...this._log,
+    ].join('\n');
+    document.getElementById('debug-overlay').classList.add('visible');
+    this.armWatcher();
   },
 
   goHome() {
     this.flushCurrent();
     this._loadSeq++;
     this.currentFile = null;
+    this.folder = null;
     this.isDirty = false;
     this.syncHistory();
     this.els.fileName.textContent = 'Drive Notes';
@@ -887,7 +1097,7 @@ const App = {
   },
 
   updateFileNameDisplay() {
-    const name = this.currentFile ? this.currentFile.name : 'Sem título';
+    const name = this.currentFile ? this.currentFile.name : (this.folder ? this.folder.name : 'Drive Notes');
     this.els.fileName.textContent = name;
     this.els.fileName.classList.toggle('unsaved', this.isDirty);
   },
@@ -1233,15 +1443,45 @@ const App = {
       removeBtn.className = 'recent-remove';
       removeBtn.textContent = '×';
       removeBtn.title = 'Descartar rascunho';
-      removeBtn.addEventListener('click', (e) => {
+      removeBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        if (!confirm(`Descartar o rascunho de "${d.name}"? O texto que não está no Drive será perdido.`)) return;
+        const discard = await this.confirmDialog(
+          'Descartar rascunho',
+          `"${d.name}": o texto que não está no Drive será perdido.`,
+          'Descartar'
+        );
+        if (!discard) return;
         localStorage.removeItem(d.key);
         this.renderDrafts();
       });
       li.appendChild(removeBtn);
 
       ul.appendChild(li);
+    });
+  },
+
+  // ── Confirm dialog ──
+
+  /** The app's own confirm(). Resolves to true on OK, false on cancel or "back". */
+  confirmDialog(title, text, okLabel) {
+    const overlay = document.getElementById('confirm-overlay');
+    document.getElementById('confirm-title').textContent = title;
+    document.getElementById('confirm-text').textContent = text;
+    const ok = document.getElementById('confirm-ok');
+    const cancel = document.getElementById('confirm-cancel');
+    ok.textContent = okLabel;
+
+    return new Promise((resolve) => {
+      const close = (answer) => {
+        overlay.classList.remove('visible');
+        ok.onclick = cancel.onclick = null;
+        this.armWatcher();
+        resolve(answer);
+      };
+      ok.onclick = () => close(true);
+      cancel.onclick = () => close(false);
+      overlay.classList.add('visible');
+      this.armWatcher();
     });
   },
 
@@ -1252,6 +1492,7 @@ const App = {
     this.els.conflictText.textContent =
       `"${file.name}" mudou no Drive depois que você abriu. Sua versão está guardada neste aparelho.`;
     this.els.conflict.classList.add('visible');
+    this.armWatcher();
   },
 
   conflictCopyName(name) {
@@ -1266,6 +1507,7 @@ const App = {
     const file = this._conflictFile;
     this._conflictFile = null;
     this.els.conflict.classList.remove('visible');
+    this.armWatcher();
     if (!file || this.currentFile !== file) return;
 
     if (action === 'later') {
@@ -1406,6 +1648,7 @@ const App = {
     // Ready to type over the name, keeping the extension
     const dot = value.lastIndexOf('.');
     if (dot > 0) this.els.modalInput.setSelectionRange(0, dot);
+    this.armWatcher();
 
     this._modalConfirm = () => {
       const value = this.els.modalInput.value;
@@ -1417,6 +1660,7 @@ const App = {
   hideModal() {
     this.els.modal.classList.remove('visible');
     this._modalConfirm = null;
+    this.armWatcher();
   },
 
   // ── Toolbar formatting ──
@@ -1512,6 +1756,23 @@ const App = {
 
   // ── Events ──
 
+  scrollCaretIntoView() {
+    if (this.mode !== 'edit' || !this.editor) return;
+    const scroller = this.editor.e;
+    const selection = window.getSelection();
+    if (!scroller || !selection.rangeCount || !scroller.contains(selection.focusNode)) return;
+
+    // A collapsed range at the end of a line can report an empty box: use its line instead
+    let rect = selection.getRangeAt(0).getBoundingClientRect();
+    if (!rect.height) {
+      const node = selection.focusNode;
+      rect = (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement).getBoundingClientRect();
+    }
+    const box = scroller.getBoundingClientRect();
+    if (rect.bottom > box.bottom - 12) scroller.scrollTop += rect.bottom - box.bottom + 32;
+    else if (rect.top < box.top) scroller.scrollTop -= box.top - rect.top + 12;
+  },
+
   /** Keep toolbar visible above virtual keyboard using visualViewport API */
   initToolbarKeyboardHandler() {
     const toolbar = document.querySelector('.toolbar');
@@ -1522,21 +1783,25 @@ const App = {
       // How much the keyboard is covering: difference between layout and visual viewport
       const keyboardHeight = window.innerHeight - vv.height;
       if (keyboardHeight > 50) {
-        // Keyboard is open — move toolbar up
+        // Keyboard is open: move toolbar up
         toolbar.style.transform = `translateY(-${keyboardHeight}px)`;
       } else {
         toolbar.style.transform = '';
       }
+      // The page itself resizes with the keyboard (interactive-widget in the viewport meta),
+      // so the editor just got shorter: keep the line being typed above the toolbar
+      this.scrollCaretIntoView();
     };
 
     window.visualViewport.addEventListener('resize', update);
     window.visualViewport.addEventListener('scroll', update);
+    window.addEventListener('resize', update);
   },
 
   bindEvents() {
     // Header buttons
     this.els.btnNew.addEventListener('click', () => this.newFile());
-    this.els.btnOpen.addEventListener('click', () => this.openPicker());
+    this.els.btnOpen.addEventListener('click', () => this.browseVault());
     this.els.btnSave?.addEventListener('click', () => this.save({ manual: true }));
     this.els.btnPreview.addEventListener('click', () => this.togglePreview());
 
@@ -1590,7 +1855,25 @@ const App = {
 
     // Welcome buttons
     document.getElementById('welcome-new')?.addEventListener('click', () => this.newFile());
-    document.getElementById('welcome-open')?.addEventListener('click', () => this.openPicker());
+    document.getElementById('welcome-open')?.addEventListener('click', () => this.browseVault());
+
+    // Diagnostics: five quick taps on the welcome title
+    let taps = [];
+    document.querySelector('#welcome h2')?.addEventListener('click', () => {
+      const now = Date.now();
+      taps = [...taps.filter(t => now - t < 3000), now];
+      if (taps.length >= 5) {
+        taps = [];
+        this.showDiagnostics();
+      }
+    });
+    document.getElementById('debug-close')?.addEventListener('click', () => {
+      document.getElementById('debug-overlay').classList.remove('visible');
+      this.armWatcher();
+    });
+    document.getElementById('debug-copy')?.addEventListener('click', () => {
+      navigator.clipboard?.writeText(document.getElementById('debug-text').textContent).catch(() => {});
+    });
 
     // Flush on hide/close — mobile users switch apps constantly.
     // saveDraft is sync (localStorage) so it always runs; save() is async best-effort.
@@ -1649,11 +1932,7 @@ if (typeof marked !== 'undefined') {
   marked.use({ extensions: [wikilinkExtension] });
 }
 
-// ── Google API callbacks (called from script onload in index.html) ──
-function onGapiLoaded() {
-  App.onGapiLoaded();
-}
-
+// ── Google Identity callback (called from script onload in index.html) ──
 function onGisLoaded() {
   App.onGisLoaded();
 }

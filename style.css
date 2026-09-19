@@ -476,6 +476,32 @@ body {
   flex-direction: column;
 }
 
+.btn.btn-danger {
+  background: var(--error);
+  border-color: var(--error);
+  color: #fff;
+}
+
+.modal.modal-wide {
+  max-width: 560px;
+}
+
+.debug-text {
+  max-height: 55vh;
+  overflow: auto;
+  margin-bottom: 12px;
+  padding: 8px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  background: var(--bg-editor);
+  border-radius: 6px;
+  user-select: text;
+}
+
 .modal-actions-stacked .btn {
   justify-content: center;
   padding: 10px 12px;
@@ -490,11 +516,17 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /* "safe": centred while it fits, top-aligned and scrollable once the lists outgrow the screen */
+  justify-content: safe center;
+  overflow-y: auto;
   gap: 16px;
   padding: 32px;
   text-align: center;
   color: var(--text-secondary);
+}
+
+.welcome > * {
+  flex-shrink: 0;
 }
 
 .welcome h2 {
@@ -607,7 +639,86 @@ body {
   border-radius: 3px;
 }
 
-/* ── Views (body[data-view] = welcome | edit | preview) ── */
+/* ── File browser ── */
+
+.browser {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-editor);
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.browser-path {
+  position: sticky;
+  top: 0;
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl; /* a long path keeps its end, the current folder, in sight */
+  text-align: left;
+}
+
+.browser-list {
+  list-style: none;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.browser-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  font-size: 15px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.browser-item:hover, .browser-item:active {
+  background: var(--button-bg);
+}
+
+.browser-icon {
+  width: 22px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 16px;
+}
+
+.browser-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.browser-item.is-folder .browser-name {
+  font-weight: 600;
+}
+
+.browser-meta {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.browser-message {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+/* ── Views (body[data-view] = welcome | browse | edit | preview) ── */
 
 /* The formatting toolbar only exists while editing */
 body:not([data-view="edit"]) .toolbar,
@@ -618,6 +729,9 @@ body:not([data-view="edit"]) .toolbar-spacer {
 body[data-view="welcome"] .btn-back,
 body[data-view="welcome"] .btn-mode,
 body[data-view="welcome"] #btn-save,
+body[data-view="browse"] .btn-mode,
+body[data-view="browse"] #btn-save,
+body[data-view="browse"] #btn-open,
 body[data-view="preview"] #btn-save {
   display: none;
 }
@@ -627,7 +741,8 @@ body[data-view="preview"] #btn-save {
 }
 
 /* The title of an open note is tappable: rename */
-body:not([data-view="welcome"]) .file-name {
+body[data-view="edit"] .file-name,
+body[data-view="preview"] .file-name {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
