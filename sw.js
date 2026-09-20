@@ -1,5 +1,5 @@
 // Drive Notes: Service Worker
-const CACHE_NAME = 'drivenotes-v20';
+const CACHE_NAME = 'drivenotes-v21';
 
 // Editor, renderer and sanitizer come from CDNs; without them offline the app falls back
 // to a bare textarea and plain-text reading. Must match the script tags in index.html.
@@ -28,10 +28,15 @@ const STATIC_ASSETS = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
+      // cache: 'reload' obriga cada pedido a ir na rede. Sem isso o navegador responde do
+      // cache HTTP dele, e como o GitHub Pages manda max-age=600, um cache novo nasce com
+      // os arquivos velhos dentro: o deploy sai, o numero do cache sobe, e o aparelho segue
+      // mostrando a versao anterior por dez minutos.
+      const fresh = (url) => new Request(url, { cache: 'reload' });
       // Best effort: a CDN hiccup must not block the install of the app itself
       return Promise.all([
-        cache.addAll(STATIC_ASSETS),
-        ...CDN_ASSETS.map((url) => cache.add(url).catch(() => {})),
+        cache.addAll(STATIC_ASSETS.map(fresh)),
+        ...CDN_ASSETS.map((url) => cache.add(fresh(url)).catch(() => {})),
       ]);
     })
   );
