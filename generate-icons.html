@@ -1,76 +1,97 @@
 <!DOCTYPE html>
-<html>
-<head><title>Gerar ícones</title></head>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Gerar ícones</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@800&display=swap">
+<style>
+  body {
+    margin: 0;
+    padding: 32px;
+    background: #1c1b1f;
+    color: #e4e0e8;
+    font-family: "Figtree", system-ui, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  p { color: #928d99; font-size: 14px; line-height: 1.5; margin: 0 0 24px; max-width: 52ch; }
+  .row { display: flex; align-items: flex-end; gap: 24px; margin-bottom: 20px; }
+  .item { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+  .label { font-size: 12px; color: #928d99; }
+  canvas { display: block; }
+  /* O launcher recorta o ícone: este preview mostra o pior corte possível */
+  .masked { border-radius: 50%; overflow: hidden; display: block; }
+  button {
+    background: #8b6cef;
+    color: #1c1b1f;
+    border: 0;
+    border-radius: 9px;
+    padding: 10px 16px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+</style>
+</head>
 <body>
-<p>Clique nos botões pra baixar os ícones. Depois salve na pasta drive-notes/.</p>
-<canvas id="c192" width="192" height="192"></canvas>
-<button onclick="download(192)">Baixar 192x192</button>
-<br><br>
-<canvas id="c512" width="512" height="512"></canvas>
-<button onclick="download(512)">Baixar 512x512</button>
+<h1>Ícones do Drive Notes</h1>
+<p>
+  Clique nos botões pra baixar e salve os dois arquivos aqui na pasta do projeto, por cima dos
+  que já existem. O fundo vai até a borda de propósito: o manifest declara os ícones como
+  <code>maskable</code>, então quem arredonda os cantos é o Android. O círculo da direita mostra
+  o corte mais agressivo que um launcher pode fazer.
+</p>
+
+<div class="row">
+  <div class="item">
+    <canvas id="c192" width="192" height="192"></canvas>
+    <span class="label">192 &times; 192</span>
+    <button onclick="download(192)">Baixar 192</button>
+  </div>
+  <div class="item">
+    <canvas id="c512" width="512" height="512" style="width: 192px; height: 192px;"></canvas>
+    <span class="label">512 &times; 512</span>
+    <button onclick="download(512)">Baixar 512</button>
+  </div>
+  <div class="item">
+    <span class="masked"><canvas id="cmask" width="192" height="192"></canvas></span>
+    <span class="label">como o launcher recorta</span>
+  </div>
+</div>
 
 <script>
-function drawIcon(size) {
-  const canvas = document.getElementById('c' + size);
+function drawIcon(canvas, s) {
   const ctx = canvas.getContext('2d');
-  const s = size;
 
-  // Background
-  ctx.fillStyle = '#1a1a2e';
-  ctx.beginPath();
-  ctx.roundRect(0, 0, s, s, s * 0.15);
-  ctx.fill();
+  // Fundo até a borda: sem raio desenhado, o sistema aplica a máscara dele
+  ctx.fillStyle = '#242229';
+  ctx.fillRect(0, 0, s, s);
 
-  // Notepad body
-  const pad = s * 0.18;
-  const w = s - pad * 2;
-  const h = s * 0.55;
-  const y = s * 0.22;
-  ctx.fillStyle = '#2a2a4a';
-  ctx.beginPath();
-  ctx.roundRect(pad, y, w, h, s * 0.04);
-  ctx.fill();
-
-  // Lines on notepad
-  ctx.strokeStyle = '#4a4a6a';
-  ctx.lineWidth = s * 0.01;
-  for (let i = 1; i <= 4; i++) {
-    const ly = y + h * (i / 5.5) + s * 0.02;
-    ctx.beginPath();
-    ctx.moveTo(pad + s * 0.06, ly);
-    ctx.lineTo(pad + w - s * 0.06, ly);
-    ctx.stroke();
-  }
-
-  // Pen/pencil
-  ctx.save();
-  ctx.translate(s * 0.62, s * 0.68);
-  ctx.rotate(0.5);
-  ctx.fillStyle = '#7c5cbf';
-  ctx.fillRect(-s * 0.015, -s * 0.2, s * 0.04, s * 0.3);
-  ctx.fillStyle = '#e0e0e0';
-  ctx.beginPath();
-  ctx.moveTo(-s * 0.015, s * 0.1);
-  ctx.lineTo(s * 0.025, s * 0.1);
-  ctx.lineTo(s * 0.005, s * 0.15);
-  ctx.fill();
-  ctx.restore();
-
-  // "md" text
-  ctx.fillStyle = '#bb86fc';
-  ctx.font = `bold ${s * 0.1}px -apple-system, sans-serif`;
+  // "dn" na Figtree, dentro da zona segura de 80% que a spec de maskable exige.
+  // Quem limita o tamanho aqui é a largura das duas letras, não a altura.
+  ctx.fillStyle = '#a68dff';
+  ctx.font = '800 ' + (s * 0.55) + 'px Figtree, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('md', s * 0.5, s * 0.92);
+  ctx.textBaseline = 'alphabetic';
+  if ('letterSpacing' in ctx) ctx.letterSpacing = (-s * 0.021) + 'px';
+  ctx.fillText('dn', s * 0.5, s * 0.70);
 }
 
-drawIcon(192);
-drawIcon(512);
+function drawAll() {
+  drawIcon(document.getElementById('c192'), 192);
+  drawIcon(document.getElementById('c512'), 512);
+  drawIcon(document.getElementById('cmask'), 192);
+}
+
+// Sem esperar a fonte carregar, o canvas desenha o "dn" na fonte de fallback
+document.fonts.load('800 100px Figtree').then(drawAll).catch(drawAll);
 
 function download(size) {
-  const canvas = document.getElementById('c' + size);
   const link = document.createElement('a');
   link.download = 'icon-' + size + '.png';
-  link.href = canvas.toDataURL('image/png');
+  link.href = document.getElementById('c' + size).toDataURL('image/png');
   link.click();
 }
 </script>

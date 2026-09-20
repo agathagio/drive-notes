@@ -1,14 +1,18 @@
 // Drive Notes: Service Worker
-const CACHE_NAME = 'drivenotes-v19';
+const CACHE_NAME = 'drivenotes-v20';
 
 // Editor, renderer and sanitizer come from CDNs; without them offline the app falls back
 // to a bare textarea and plain-text reading. Must match the script tags in index.html.
+// The Google Fonts stylesheet is here too, but the font files it names live on
+// fonts.gstatic.com under urls we cannot predict: those are caught at runtime by CDN_HOSTS
+// the first time a page renders, so the second visit already has the letters offline.
 const CDN_ASSETS = [
   'https://unpkg.com/tiny-markdown-editor@0.1.8/dist/tiny-mde.min.js',
   'https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js',
   'https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js',
+  'https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap',
 ];
-const CDN_HOSTS = ['unpkg.com', 'cdn.jsdelivr.net'];
+const CDN_HOSTS = ['unpkg.com', 'cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 
 // Static assets to cache for offline use
 const STATIC_ASSETS = [

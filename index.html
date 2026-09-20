@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <!-- interactive-widget=resizes-content: the page shrinks when the keyboard opens, so the text being typed is never under it -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
-  <meta name="theme-color" content="#1a1a2e">
+  <meta name="theme-color" content="#242229">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Drive Notes</title>
@@ -13,6 +13,13 @@
   <link rel="manifest" href="manifest.json">
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
   <link rel="apple-touch-icon" href="icon-192.png">
+
+  <!-- Fontes: Figtree na interface, IBM Plex Mono no editor. Mesmo padrão das outras
+       bibliotecas, CDN com versão fixa. O service worker guarda as duas, então só a
+       primeira visita depende da rede; sem elas o fallback do sistema assume. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 
   <!-- Styles -->
   <link rel="stylesheet" href="style.css">
