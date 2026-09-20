@@ -1598,5 +1598,50 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     check('direita avanca pra nota', App.currentFile?.id === 'A', App.currentFile);
   }
 
+  console.log('39. Leitura: linha em branco entre itens separa grupos, em vez de espacar a lista toda');
+  {
+    const { App, drive, w } = await boot();
+    const c = App.els.previewContainer;
+    const classes = () => [...c.querySelectorAll('li')].map(li => li.className).join('|');
+
+    drive.put('A', 'a.md', '- um\n- dois\n\n- tres\n- quatro\n');
+    await App.openFile('A', 'a.md');
+    check('4 itens, nenhum embrulhado em paragrafo', c.querySelectorAll('li').length === 4 && c.querySelectorAll('li p').length === 0, c.innerHTML);
+    check('so o primeiro item do segundo grupo tem gap (e a classe passa pelo sanitizador)', classes() === '||gap|', c.innerHTML);
+    check('o texto dos itens ficou inteiro', [...c.querySelectorAll('li')].map(li => li.textContent.trim()).join(',') === 'um,dois,tres,quatro', c.innerHTML);
+
+    drive.put('B', 'b.md', '- um\n- dois\n- tres\n');
+    await App.openFile('B', 'b.md');
+    check('lista sem linha em branco: nenhum gap, nenhum paragrafo', classes() === '||' && c.querySelectorAll('li p').length === 0, c.innerHTML);
+
+    drive.put('C', 'c.md', '1. um\n2. dois\n\n\n3. tres\n');
+    await App.openFile('C', 'c.md');
+    check('numerada continua uma lista so, e duas linhas em branco contam como uma', c.querySelectorAll('ol > li').length === 3 && classes() === '||gap', c.innerHTML);
+
+    drive.put('D', 'd.md', '- pai\n  - a\n  - b\n\n  - c\n- tio\n');
+    await App.openFile('D', 'd.md');
+    check('na sublista o gap fica no item da sublista', classes() === '|||gap|' && c.querySelectorAll('li ul > li').length === 3, c.innerHTML);
+
+    const tarefas = '- [ ] um\n- [x] dois\n\n- [ ] tres\n- [ ] quatro\n';
+    drive.put('E', 'e.md', tarefas);
+    await App.openFile('E', 'e.md');
+    const boxes = () => [...c.querySelectorAll('li > input[type="checkbox"]')];
+    check('4 caixas, filhas diretas do li e tocaveis', boxes().length === 4 && boxes().every(b => !b.disabled), c.innerHTML);
+    check('gap no primeiro item do segundo grupo de tarefas', classes() === '||gap|', c.innerHTML);
+    const box = boxes()[2];
+    box.checked = true;
+    box.dispatchEvent(new w.Event('change', { bubbles: true }));
+    check('tocar na caixa do segundo grupo marca a linha certa da nota', App.getContent() === tarefas.replace('- [ ] tres', '- [x] tres'), App.getContent());
+
+    drive.put('F', 'f.md', '- um\n\n  continuado\n\n- dois\n');
+    await App.openFile('F', 'f.md');
+    check('item com dois paragrafos de verdade mantem os dois', c.querySelectorAll('li:first-child p').length === 2, c.innerHTML);
+    check('e o item depois dele ganha o respiro', classes() === '|gap', c.innerHTML);
+
+    drive.put('G', 'g.md', '- [[zebra]]\n\n- [[outra|texto]]\n');
+    await App.openFile('G', 'g.md');
+    check('item com wikilink continua virando link', c.querySelectorAll('li a.wikilink').length === 2 && c.querySelector('li.gap a.wikilink').textContent === 'texto', c.innerHTML);
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });

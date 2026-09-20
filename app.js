@@ -3068,12 +3068,48 @@ const wikilinkExtension = {
   },
 };
 
+// ── Lists: a blank line groups, it does not respace ──
+// A blank line between two items is how a list is split into groups while writing, and Obsidian shows it
+// that way: the items of a group stay together and only the groups are set apart. One blank line makes
+// marked call the WHOLE list "loose": every item gets its text wrapped in <p>, so every item ends up
+// equally spaced and the grouping disappears. The looseness is dropped here and the item that comes right
+// after the blank line is tagged instead, so the CSS opens the gap only there.
+
+// The blank line that closes an item is the last thing in its raw text (the last item is trimmed)
+const LIST_ITEM_GAP = /\n[^\S\n]*\n\s*$/;
+
+function ungroupLooseLists(token) {
+  if (token.type !== 'list') return;
+  let afterBlankLine = false;
+  for (const item of token.items) {
+    item.gap = afterBlankLine;
+    item.loose = false;
+    // Real paragraphs inside one item (indented text after a blank line) come out of the lexer as several
+    // text blocks. Those keep their <p>: a blank line INSIDE an item is not a gap between items.
+    const blocks = (item.tokens || []).filter(t => t.type === 'text');
+    if (blocks.length > 1) blocks.forEach(block => { block.type = 'paragraph'; });
+    afterBlankLine = LIST_ITEM_GAP.test(item.raw);
+  }
+  token.loose = false;
+}
+
 if (typeof marked !== 'undefined') {
   marked.setOptions({
     breaks: true,
     gfm: true,
   });
-  marked.use({ extensions: [wikilinkExtension] });
+  marked.use({
+    extensions: [wikilinkExtension],
+    walkTokens: ungroupLooseLists,
+    renderer: {
+      listitem(item) {
+        // The default item first: it is what puts the task checkbox straight into the <li> (only a loose
+        // item hides the box inside a <p>, where neither the tap handler nor the CSS can reach it)
+        const html = marked.Renderer.prototype.listitem.call(this, item);
+        return item.gap ? html.replace('<li>', '<li class="gap">') : html;
+      },
+    },
+  });
 }
 
 // ── Google Identity callback (called from script onload in index.html) ──

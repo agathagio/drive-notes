@@ -32,6 +32,9 @@
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Fira Code", monospace;
   /* Roxo da paleta de desenho: os outros cinco hexes vivem no SKETCH_COLORS do app.js */
   --sketch-purple: #8b6cef;
+  /* Respiro entre grupos de uma lista na leitura: uma linha em branco, do tamanho de uma linha de
+     texto (o line-height do .preview-container). Mudou o line-height de lá, mude este junto. */
+  --list-gap: 1.65em;
 }
 
 * {
@@ -277,6 +280,8 @@ body {
 .preview-container p { margin: 0.6em 0; }
 .preview-container a { color: var(--accent-hover); }
 .preview-container li { margin: 0.2em 0; }
+/* The item that follows a blank line in the note: the only place where a list opens up (see app.js) */
+.preview-container li.gap { margin-top: var(--list-gap); }
 
 /* Wikilinks */
 .preview-container a.wikilink {
