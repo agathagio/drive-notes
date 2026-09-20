@@ -376,6 +376,47 @@ const FAKE_DRIVE = `
     await js(`__App.setMode('edit'); 'ok'`);
     await sleep(200);
     check('na edicao o TinyMDE mostra o [x]', (await js('__App.editor.e.textContent')).includes('- [x] Banguela'), await js('__App.editor.e.textContent'));
+
+    // ── Deslizar da borda: toque de verdade, numa tela de celular, com o CloseWatcher real ──
+    console.log('10. Deslizar da borda com toque de verdade');
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+    await open(buildPage('swipe', currentApp));
+    await js(FAKE_DRIVE);
+    await js(`__App.browseVault().then(() => 'ok')`);
+    await js(`[...document.querySelectorAll('.browser-item')].find(li => li.textContent.includes('com link')).click(); 'ok'`); await sleep(300);
+    await js(`document.querySelector('#preview-container a.wikilink').click(); 'ok'`); await sleep(400);
+    const drag = async (x0, x1, y, shot) => {
+      await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y }] });
+      for (let i = 1; i <= 8; i++) {
+        await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x0 + (x1 - x0) * i / 8, y }] });
+        await sleep(16);
+      }
+      if (shot) {
+        const { data } = (await send('Page.captureScreenshot', { format: 'png' })).result;
+        fs.mkdirSync(path.join(ROOT, 'tests', '.tmp'), { recursive: true });
+        fs.writeFileSync(path.join(ROOT, 'tests', '.tmp', shot), Buffer.from(data, 'base64'));
+      }
+      const hint = JSON.parse(await js(`(() => { const h = document.getElementById('swipe-hint'); const b = h.getBoundingClientRect();
+        return JSON.stringify({ visible: h.classList.contains('visible'), armed: h.classList.contains('armed'), left: b.left, right: b.right, bg: getComputedStyle(h).backgroundColor }); })()`));
+      await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await sleep(400);
+      return hint;
+    };
+    let seta = await drag(4, 140, 400, 'swipe-voltar.png');
+    v = await view();
+    check('a seta sai da borda esquerda, inteira na tela e roxa', seta.visible && seta.armed && seta.left >= 0 && seta.bg === 'rgb(139, 108, 239)', seta);
+    check('soltar volta pra nota anterior', v.file === 'N1' && v.stack === 2, v);
+    seta = await drag(386, 250, 400, 'swipe-avancar.png');
+    v = await view();
+    check('a seta sai da borda direita', seta.visible && seta.armed && seta.right <= 390, seta);
+    check('soltar avanca pra nota do link', v.file === 'N2' && v.stack === 3, v);
+    await drag(4, 140, 400);
+    await drag(4, 140, 400);
+    v = await view();
+    check('mais dois deslizes da esquerda: volta ate a pasta',v.view === 'browse' && v.folder === 'ROOT', v);
+    await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+    await send('Emulation.clearDeviceMetricsOverride');
   } finally {
     browser.close();
   }

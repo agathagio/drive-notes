@@ -20,6 +20,10 @@ const CONFIG = {
 
 const SCOPES = 'https://www.googleapis.com/auth/drive';
 
+// Edge swipe: how close to the side of the screen the finger must start, and how far in it must drag (px)
+const SWIPE_EDGE = 20;
+const SWIPE_TRIGGER = 70;
+
 // =====================================================
 
 const App = {
@@ -63,6 +67,9 @@ const App = {
   useWatcher: false,
   navStack: [],
   _watcher: null,
+  // Views ahead of this one after going back (CloseWatcher mode), and the edge swipe under way: { side, x, y, armed }
+  fwdStack: [],
+  _swipe: null,
   // The drawing screen while it is open: { canvas, ctx, dpr, strokes, stroke, color, width, erase, at }.
   // `strokes` is the whole drawing (painting works from it, never from the pixels on screen) and
   // `at` is where the caret was in the note. Null while the screen is closed.
@@ -87,6 +94,7 @@ const App = {
       editorContainer: document.getElementById('editor-container'),
       editorElement: document.getElementById('editor'),
       previewContainer: document.getElementById('preview-container'),
+      swipeHint: document.getElementById('swipe-hint'),
       welcome: document.getElementById('welcome'),
       modal: document.getElementById('modal-overlay'),
       modalInput: document.getElementById('modal-input'),
@@ -1331,10 +1339,10 @@ const App = {
   show(state) {
     this.log(`show ${state?.view || 'welcome'} ${state?.name || ''}`);
     if (state?.view === 'file' && state.id) {
-      if (state.id !== this.currentFile?.id) this.openFile(state.id, state.name);
+      if (state.id !== this.currentFile?.id) return this.openFile(state.id, state.name);
     } else if (state?.view === 'browse') {
       if (this.currentFile || this.folder?.id !== state.id) {
-        this.openFolder({ id: state.id, name: state.name, path: state.path || [], query: state.query || '' });
+        return this.openFolder({ id: state.id, name: state.name, path: state.path || [], query: state.query || '' });
       }
     } else if (this.currentFile || this.folder || document.body.dataset.view !== 'welcome') {
       // (already there when a failed navigation is being undone: its error message stays on screen)
@@ -1347,6 +1355,7 @@ const App = {
   beginNav() {
     if (this.useWatcher) {
       this.navStack.push(this.viewState());
+      this.fwdStack = []; // going somewhere new: nothing is "ahead" any more, as in a browser
       this.armWatcher();
     } else {
       history.pushState(this.viewState(), '');
@@ -1400,12 +1409,95 @@ const App = {
       dismiss.click();
     } else if (this.sketch) {
       this.sketchCancel();
-    } else if (this.navStack.length) {
-      this.show(this.navStack.pop());
     } else {
-      this.show(null);
+      // The view being left is where a swipe from the right edge returns to. A note not yet on the Drive has no way back.
+      const leaving = this.viewState();
+      if (leaving.view === 'browse' || (leaving.view === 'file' && leaving.id)) this.fwdStack.push(leaving);
+      this.show(this.navStack.length ? this.navStack.pop() : null);
     }
     this.armWatcher();
+  },
+
+  /** Swipe from the right edge: back into the view that "back" last left */
+  async goForward() {
+    this.log('goForward (swipe)');
+    if (!this.useWatcher) {
+      history.forward();
+      return;
+    }
+    const next = this.fwdStack.pop();
+    if (!next) return;
+    this.navStack.push(this.viewState());
+    this.armWatcher();
+    if ((await this.show(next)) === false) {
+      // Did not open (no network): the screen stayed where it was, and so do the two stacks
+      this.navStack.pop();
+      this.fwdStack.push(next);
+      this.armWatcher();
+    }
+  },
+
+  // ── Edge swipe ──
+  //
+  // With the three-button bar Android has no back gesture, and the swipe Chrome offers in a tab does not
+  // exist in an installed app. So the app has its own, with Chrome's meaning: a drag inwards from the left
+  // edge is "back" (the same as the system button), from the right edge is "forward".
+
+  swipeAllowed(side) {
+    if (this.sketch) return false; // a stroke that starts at the edge is a stroke
+    const dialog = !!document.querySelector('.modal-overlay.visible');
+    if (side === 'left') return dialog || document.body.dataset.view !== 'welcome';
+    return !dialog && (!this.useWatcher || this.fwdStack.length > 0);
+  },
+
+  onSwipeStart(e) {
+    this._swipe = null;
+    if (e.touches.length !== 1) return;
+    const { clientX: x, clientY: y } = e.touches[0];
+    const side = x <= SWIPE_EDGE ? 'left' : x >= window.innerWidth - SWIPE_EDGE ? 'right' : null;
+    if (!side || !this.swipeAllowed(side)) return;
+    // Dragging near the edge with text selected is moving a selection handle; and these scroll sideways themselves
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) return;
+    if (e.target.closest?.('input, .toolbar, .table-wrap, pre')) return;
+    this._swipe = { side, x, y, armed: false };
+  },
+
+  onSwipeMove(e) {
+    const swipe = this._swipe;
+    if (!swipe) return;
+    const { clientX, clientY } = e.touches[0];
+    const pull = (clientX - swipe.x) * (swipe.side === 'left' ? 1 : -1);
+    const drift = Math.abs(clientY - swipe.y);
+    if (drift > 10 && drift > pull) {
+      this.endSwipe(); // more down than across: that is the page scrolling
+      return;
+    }
+    swipe.armed = pull >= SWIPE_TRIGGER;
+    const hint = this.els.swipeHint;
+    hint.textContent = swipe.side === 'left' ? '‹' : '›';
+    hint.dataset.side = swipe.side;
+    hint.style.top = `${swipe.y}px`;
+    hint.style.setProperty('--pull', `${Math.max(0, Math.min(pull, SWIPE_TRIGGER + 20))}px`);
+    hint.classList.toggle('visible', pull > 10);
+    hint.classList.toggle('armed', swipe.armed);
+  },
+
+  /** Finger up (act = true) or gesture abandoned */
+  endSwipe(act = false) {
+    const swipe = this._swipe;
+    this._swipe = null;
+    this.els.swipeHint.classList.remove('visible', 'armed');
+    if (!act || !swipe?.armed || !this.swipeAllowed(swipe.side)) return;
+    if (swipe.side === 'left') {
+      this.log('swipe: back');
+      // History mode has no step for "close the dialog": goBack would leave the note behind it
+      const dismiss = !this.useWatcher && document.querySelector('.modal-overlay.visible [data-dismiss]');
+      if (dismiss) dismiss.click();
+      else this.goBack();
+    } else {
+      this.goForward();
+    }
   },
 
   /** Header back button */
@@ -2708,6 +2800,11 @@ const App = {
     // Navigation
     this.els.btnBack?.addEventListener('click', () => this.goBack());
     window.addEventListener('popstate', (e) => this.onPopState(e.state));
+    // Passive: the swipe only watches the finger, scrolling stays with the browser
+    document.addEventListener('touchstart', (e) => this.onSwipeStart(e), { passive: true });
+    document.addEventListener('touchmove', (e) => this.onSwipeMove(e), { passive: true });
+    document.addEventListener('touchend', () => this.endSwipe(true), { passive: true });
+    document.addEventListener('touchcancel', () => this.endSwipe(), { passive: true });
     this.els.previewContainer.addEventListener('click', (e) => this.onPreviewClick(e));
 
     // Conflict dialog

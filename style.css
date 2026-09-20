@@ -453,6 +453,45 @@ body {
   flex-shrink: 0;
 }
 
+/* ── Edge swipe: the arrow pulled out of the side of the screen ── */
+
+/* Above the dialogs too (300): the swipe from the left also closes them. It never takes a tap. */
+.swipe-hint {
+  --pull: 0px;
+  position: fixed;
+  z-index: 400;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 4px;
+  font-size: 28px;
+  line-height: 1;
+  color: var(--text-primary);
+  background: var(--button-bg);
+  border: 1px solid var(--border);
+  pointer-events: none;
+}
+.swipe-hint.visible {
+  display: flex;
+}
+.swipe-hint[data-side="left"] {
+  left: -44px;
+  transform: translate(var(--pull), -50%);
+}
+.swipe-hint[data-side="right"] {
+  right: -44px;
+  transform: translate(calc(-1 * var(--pull)), -50%);
+}
+/* Far enough: letting go now navigates. Dark on the filled purple, as any text on a fill. */
+.swipe-hint.armed {
+  color: var(--bg-primary);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
 /* ── Modal (new file dialog) ── */
 
 .modal-overlay {

@@ -1327,5 +1327,108 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     check('contagem que nao bate: caixas ficam desligadas', boxes().length === 1 && boxes()[0].disabled, boxes().map(b => b.disabled));
   }
 
+  console.log('36. Deslizar da borda: a esquerda volta, a direita avanca');
+  {
+    const { App, drive, w } = await boot({ watcher: true });
+    seedVault(drive);
+    drive.put('L', 'com link.md', 'vai [[zebra]]', [VAULT]);
+    const d = w.document;
+    const W = w.innerWidth;
+    const touch = (type, x, y) => {
+      const e = new w.Event(type, { bubbles: true, cancelable: true });
+      e.touches = type === 'touchend' ? [] : [{ clientX: x, clientY: y }];
+      e.changedTouches = [{ clientX: x, clientY: y }];
+      d.body.dispatchEvent(e);
+    };
+    // Um arrasto de dedo: comeca em (x0, y0), passa pelo meio e solta em (x1, y1)
+    const swipe = async (x0, x1, y0 = 300, y1 = 300) => {
+      touch('touchstart', x0, y0);
+      touch('touchmove', (x0 + x1) / 2, (y0 + y1) / 2);
+      touch('touchmove', x1, y1);
+      touch('touchend', x1, y1);
+      await sleep(80);
+    };
+    const hint = d.getElementById('swipe-hint');
+    const view = () => d.body.dataset.view;
+
+    await swipe(5, 150);
+    check('na tela inicial deslizar nao faz nada', view() === 'welcome' && App.navStack.length === 0);
+
+    d.getElementById('welcome-open').click(); await sleep(80);
+    [...d.querySelectorAll('.browser-item')].find(li => li.textContent.includes('com link')).click(); await sleep(80);
+    App.els.previewContainer.querySelector('a.wikilink').click(); await sleep(80);
+    check('pasta > nota > link', App.currentFile?.id === 'n-z' && App.navStack.length === 3);
+
+    await swipe(5, 50);
+    check('arrasto curto nao volta', App.currentFile?.id === 'n-z');
+    await swipe(5, 60, 300, 500);
+    check('arrasto mais vertical que horizontal e rolagem, nao volta', App.currentFile?.id === 'n-z');
+    await swipe(100, 300);
+    check('arrasto que comeca fora da borda nao volta', App.currentFile?.id === 'n-z');
+    await swipe(W - 5, W - 150);
+    check('sem nada pra frente, a borda direita nao faz nada', App.currentFile?.id === 'n-z' && App.navStack.length === 3);
+
+    touch('touchstart', 5, 300); touch('touchmove', 40, 300);
+    check('a seta aparece do lado esquerdo, ainda sem armar', hint.classList.contains('visible') && hint.dataset.side === 'left' && !hint.classList.contains('armed'), hint.className);
+    touch('touchmove', 150, 300);
+    check('passando do ponto a seta arma', hint.classList.contains('armed'));
+    touch('touchend', 150, 300); await sleep(80);
+    check('soltar volta pra nota anterior, e a seta some', App.currentFile?.id === 'L' && !hint.classList.contains('visible'), App.currentFile);
+
+    await swipe(W - 5, W - 150);
+    check('borda direita avanca de volta pra nota do link', App.currentFile?.id === 'n-z' && App.navStack.length === 3, [App.currentFile?.id, App.navStack.length]);
+    check('botao voltar do sistema continua voltando depois de avancar', w.__back() === 'handled'); await sleep(80);
+    check('... pra nota anterior', App.currentFile?.id === 'L');
+
+    await swipe(5, 150);
+    check('voltar de novo: pasta', view() === 'browse' && App.folder?.id === VAULT);
+    await swipe(W - 5, W - 150);
+    check('avancar da pasta reabre a nota', App.currentFile?.id === 'L');
+    await swipe(W - 5, W - 150);
+    check('... e avanca mais uma, ate a do link', App.currentFile?.id === 'n-z');
+
+    await swipe(5, 150);
+    App.els.previewContainer.querySelector('a.wikilink').click(); await sleep(80);
+    check('abrir outra coisa depois de voltar zera o avancar', App.currentFile?.id === 'n-z' && App.fwdStack.length === 0, App.fwdStack);
+
+    // Dialogo aberto: a esquerda fecha o dialogo, como o botao voltar
+    App.showDiagnostics();
+    await swipe(5, 150);
+    check('com dialogo aberto, deslizar fecha o dialogo e fica na nota', !d.getElementById('debug-overlay').classList.contains('visible') && App.currentFile?.id === 'n-z');
+
+    // Texto selecionado: arrastar perto da borda e mexer na selecao, nao voltar
+    const range = d.createRange();
+    range.selectNodeContents(App.els.previewContainer);
+    w.getSelection().removeAllRanges(); w.getSelection().addRange(range);
+    await swipe(5, 150);
+    check('com texto selecionado nao volta', App.currentFile?.id === 'n-z');
+    w.getSelection().removeAllRanges();
+
+    // Tela de desenho: traco que comeca na borda e traco
+    App.setMode('edit');
+    d.querySelector('.toolbar-btn[data-sketch]').click();
+    await swipe(5, 150);
+    check('na tela de desenho nao volta nem fecha o desenho', !!App.sketch && App.currentFile?.id === 'n-z');
+  }
+
+  console.log('37. Deslizar da borda sem CloseWatcher: anda no historico do navegador');
+  {
+    const { App, drive, w } = await boot();
+    drive.put('A', 'a.md', 'A');
+    const d = w.document;
+    const touch = (type, x) => {
+      const e = new w.Event(type, { bubbles: true, cancelable: true });
+      e.touches = type === 'touchend' ? [] : [{ clientX: x, clientY: 300 }];
+      e.changedTouches = [{ clientX: x, clientY: 300 }];
+      d.body.dispatchEvent(e);
+    };
+    const swipe = async (x0, x1) => { touch('touchstart', x0); touch('touchmove', x1); touch('touchend', x1); await sleep(120); };
+    await App.navigateTo('A', 'a.md');
+    await swipe(5, 150);
+    check('esquerda volta pra tela inicial', d.body.dataset.view === 'welcome' && App.currentFile === null);
+    await swipe(w.innerWidth - 5, w.innerWidth - 150);
+    check('direita avanca pra nota', App.currentFile?.id === 'A', App.currentFile);
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });

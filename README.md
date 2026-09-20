@@ -40,7 +40,8 @@ Então fiz o meu. Hoje é por ele que eu leio e escrevo no vault quando estou lo
 - Na edição o texto é markdown cru, mas a linha do `![[foto.jpg]]` mostra a imagem embaixo: dá pra escrever olhando pro que se está descrevendo.
 - Desenhar na nota: tela cheia pra rabiscar com o dedo, seis cores, três espessuras, borracha e desfazer. Sai um PNG de fundo transparente, recortado no traço, que funciona tanto no tema escuro do app quanto no claro do Obsidian.
 - Renomear tocando no título.
-- O **botão** voltar do Android fecha diálogo, sai da nota e volta de pasta, como em app nativo. O **gesto** de deslizar da borda não funciona hoje: é uma limitação conhecida, não um recurso.
+- O botão voltar do Android fecha diálogo, sai da nota e volta de pasta, como em app nativo.
+- Deslizar da borda navega como no Chrome: da esquerda volta, da direita avança, com uma seta que acompanha o dedo e fica roxa quando já dá pra soltar. O gesto é do próprio app: com a barra de três botões o Android não tem gesto de voltar, e o deslizar do Chrome não existe em app instalado.
 
 **Não perder texto**
 
@@ -67,7 +68,6 @@ Construído com IA: eu defino o problema, decido o comportamento e testo no apar
 - Offline é parcial: sem rede o app abre e dá pra escrever, e o texto fica guardado no aparelho até ser salvo no Drive. Abrir uma nota que já está no Drive precisa de internet.
 - Renomear uma nota não atualiza os `[[links]]` que apontam pra ela.
 - O voltar usa a API CloseWatcher, que hoje só existe em navegadores baseados no Chromium. Nos outros, o app cai pro histórico do navegador, que é menos confiável.
-- O gesto de deslizar da borda pra voltar não funciona dentro do app; o botão voltar da barra do Android funciona. Está mapeado pra investigar.
 - O app é travado em retrato (`orientation` no `manifest.json`), então girar o aparelho não muda nada.
 
 ## Rodar o seu
