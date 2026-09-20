@@ -8,7 +8,7 @@ O app não tem build. O `package.json` da raiz existe só pra estes testes. Uma 
 
 O jsdom não tem canvas: o `boot()` põe um contexto 2D de mentira que anota o que foi pintado, e é contra esse registro que o traço e a borracha são conferidos. O canvas de verdade fica pro `test:browser`.
 
-O editor aqui é o textarea de fallback, porque o TinyMDE precisa de um navegador de verdade.
+O editor aqui é o textarea de fallback. A exceção é o cenário 40: o TinyMDE roda no jsdom quando a lib é carregada na mão, e é assim que o Enter dentro de uma tarefa é conferido contra a lib de verdade. O que depende de layout, cursor de verdade e teclado continua no `test:browser`.
 
 ## `npm run test:browser`
 

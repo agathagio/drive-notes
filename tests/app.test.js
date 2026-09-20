@@ -1,7 +1,8 @@
 // Runs the real app.js inside jsdom against an in-memory fake Drive: saving, conflicts, drafts,
 // reading view, navigation, rename, login, formatting and the file browser.
 //   npm test
-// The editor here is the fallback textarea (TinyMDE needs a real browser: see browser.test.js).
+// The editor here is the fallback textarea, except in scenario 40, which loads TinyMDE into the same
+// window to drive its Enter handling. What needs layout, a real caret or a keyboard: browser.test.js.
 const fs = require('fs');
 const path = require('path');
 const { JSDOM } = require('jsdom');
@@ -1641,6 +1642,90 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     drive.put('G', 'g.md', '- [[zebra]]\n\n- [[outra|texto]]\n');
     await App.openFile('G', 'g.md');
     check('item com wikilink continua virando link', c.querySelectorAll('li a.wikilink').length === 2 && c.querySelector('li.gap a.wikilink').textContent === 'texto', c.innerHTML);
+  }
+
+  console.log('40. Edicao: Enter numa tarefa continua a lista de tarefas');
+  {
+    // Este e o unico bloco que roda o TinyMDE de verdade: o boot() nao carrega a lib (o app cai no
+    // textarea), entao ela entra aqui na mesma janela e o editor e refeito em cima de uma div nova.
+    const { App, w } = await boot();
+    w.eval(fs.readFileSync(LIBS.tinymde, 'utf8'));
+    const host = w.document.createElement('div');
+    w.document.body.appendChild(host);
+    App.els.editorElement = host;
+    App.initEditor();
+    check('com a lib carregada o app usa o TinyMDE, nao o textarea', !!App.editor && !!App.editor.lines);
+
+    // Enter como o Chrome faz: o "\n" cai dentro da div da linha e o cursor fica logo depois dele.
+    // Quem chama o processNewParagraph e o input do teclado (inputType insertParagraph), nao uma tecla.
+    const enter = (content, col, row = 0) => {
+      const ed = App.editor;
+      ed.setContent(content);
+      const text = ed.lines[row];
+      const el = ed.lineElements[row];
+      el.innerHTML = '';
+      const node = w.document.createTextNode(`${text.slice(0, col)}\n${text.slice(col)}`);
+      el.appendChild(node);
+      const range = w.document.createRange();
+      range.setStart(node, col + 1);
+      range.setEnd(node, col + 1);
+      w.getSelection().removeAllRanges();
+      w.getSelection().addRange(range);
+      ed.e.dispatchEvent(new w.InputEvent('input', { inputType: 'insertParagraph', bubbles: true }));
+      const at = ed.getSelection() || {};
+      return { text: ed.getContent(), at: `${at.row}:${at.col}` };
+    };
+
+    let r = enter('- [ ] comprar pao', 17);
+    check('tarefa com texto: a linha nova nasce tarefa, cursor depois da caixinha',
+      r.text === '- [ ] comprar pao\n- [ ] ' && r.at === '1:6', r);
+
+    r = enter('- [x] feito', 11);
+    check('tarefa marcada continua desmarcada', r.text === '- [x] feito\n- [ ] ' && r.at === '1:6', r);
+
+    r = enter('- [ ] ', 6);
+    check('tarefa vazia encerra a lista, como o item vazio da lib', r.text === '\n' && r.at === '1:0', r);
+
+    r = enter('  - [ ] sub', 11);
+    check('sublista mantem o recuo', r.text === '  - [ ] sub\n  - [ ] ' && r.at === '1:8', r);
+
+    r = enter('- [ ] ovos leite', 11);
+    check('Enter no meio: o texto que desce vira tarefa', r.text === '- [ ] ovos \n- [ ] leite' && r.at === '1:6', r);
+
+    r = enter('- [ ] comprar pao', 6);
+    check('Enter logo depois da caixinha: o texto desce inteiro e continua tarefa (nao e "tarefa vazia")',
+      r.text === '- [ ] \n- [ ] comprar pao' && r.at === '1:6', r);
+
+    r = enter('titulo\n\n- [ ] um\n- [ ] dois', 8, 2);
+    check('tarefa no meio da nota: so as duas linhas mexidas mudam',
+      r.text === 'titulo\n\n- [ ] um\n- [ ] \n- [ ] dois' && r.at === '3:6', r);
+    const ed = App.editor;
+    const divs = () => [...ed.lineElements].map(e => e.textContent);
+    check('as divs das linhas continuam casando com o texto (a decoracao le esse par)',
+      divs().join('\n') === ed.getContent(), divs());
+
+    r = enter('- item', 6);
+    check('lista comum intocada', r.text === '- item\n- ' && r.at === '1:2', r);
+
+    r = enter('- ', 2);
+    check('item comum vazio continua encerrando a lista', r.text === '\n' && r.at === '1:0', r);
+
+    r = enter('1. um', 5);
+    check('lista numerada intocada', r.text === '1. um\n2. ' && r.at === '1:3', r);
+
+    r = enter('paragrafo', 9);
+    check('paragrafo comum intocado', r.text === 'paragrafo\n' && r.at === '1:0', r);
+
+    // O embrulho roda depois de todo Enter, inclusive onde nao ha nada a fazer
+    const fake = (lines, col) => {
+      const ed2 = { lines: lines.slice(), lineDirty: [], updateFormatting() { ed2.formatted = true; }, formatted: false };
+      const sel = { row: lines.length - 1, col };
+      const changed = App.continueTaskLine(ed2, sel);
+      return { changed, formatted: ed2.formatted, lines: ed2.lines.join('\n'), col: sel.col };
+    };
+    check('primeira linha do arquivo: nao olha pra tras', fake(['- item'], 2).changed === false);
+    check('paragrafo comum em cima: nao mexe em nada', fake(['texto', 'outro'], 0).formatted === false);
+    check('tarefa em cima mas sem marcador na linha nova: nao mexe', fake(['- [ ] um', 'dois'], 0).formatted === false);
   }
 
   done();
