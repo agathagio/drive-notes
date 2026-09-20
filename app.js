@@ -2415,18 +2415,33 @@ const App = {
   pickPhoto(source) {
     if (this.mode !== 'edit') return;
     this._photoAt = this.editor ? this.editor.getSelection(false) : null;
+    const camera = source === 'camera';
     // With "capture" Android goes straight to the camera; without it, to the photo picker
-    if (source === 'camera') this.els.photoInput.setAttribute('capture', 'environment');
+    if (camera) this.els.photoInput.setAttribute('capture', 'environment');
     else this.els.photoInput.removeAttribute('capture');
+    // The camera takes one shot at a time; from the gallery several photos can come at once
+    this.els.photoInput.toggleAttribute('multiple', !camera);
     this.els.photoInput.value = '';
     this.els.photoInput.click();
   },
 
+  /** Everything that was picked, one upload at a time and in the order it was picked: in parallel the
+      embeds would land out of order, and the phone's upload is slow enough to jam. A failure stops the
+      queue and keeps whatever already went into the note. */
+  async insertPhotos(picked) {
+    // Names are only unique to the second, and a batch goes up inside one: this keeps them apart
+    const taken = new Set();
+    for (let i = 0; i < picked.length; i++) {
+      const status = picked.length > 1 ? `Enviando foto ${i + 1} de ${picked.length}...` : 'Enviando foto...';
+      if (!await this.insertPhoto(picked[i], taken, status)) return;
+    }
+  },
+
   /** Shrink, upload to the vault's attachment folder, and only then write ![[name]] into the note:
-      a failed upload leaves no broken embed behind */
-  async insertPhoto(picked) {
+      a failed upload leaves no broken embed behind. Answers whether the queue can carry on. */
+  async insertPhoto(picked, taken, status = 'Enviando foto...') {
     const file = this.currentFile;
-    this.setSaveStatus('saving', 'Enviando foto...');
+    this.setSaveStatus('saving', status);
 
     let name;
     try {
@@ -2434,10 +2449,10 @@ const App = {
       const folderId = await this.getMediaFolderId();
       if (!folderId) {
         this.setSaveStatus('error', `Pasta ${CONFIG.MEDIA_FOLDER} não encontrada no vault`);
-        return;
+        return false;
       }
       const photo = await this.shrinkPhoto(picked);
-      name = this.mediaName(photo, picked.name, 'foto');
+      name = this.mediaName(photo, picked.name, 'foto', taken);
       await this.driveUploadBlob(name, photo, folderId);
       // The reading view shows it straight from here, without asking Drive for it back
       this._embedUrls.set(name, Promise.resolve(URL.createObjectURL(photo)));
@@ -2446,16 +2461,19 @@ const App = {
       // In case it was the remembered folder that went away: look it up again next time
       localStorage.removeItem('drivenotes_media_folder');
       this.setSaveStatus('error', 'Erro ao enviar a foto');
-      return;
+      return false;
     }
 
     if (this.currentFile !== file) {
       this.setSaveStatus('error', `Foto salva, mas a nota mudou: ${name}`);
-      return;
+      return false;
     }
-    this.insertOnOwnLine(`![[${name}]]`, this._photoAt);
+    // Back from the picker the editor may have no cursor, and every photo of a batch would fall back
+    // on the same spot, the last one on top: the next one goes below the one just inserted
+    this._photoAt = this.insertOnOwnLine(`![[${name}]]`, this._photoAt) || this._photoAt;
     this.markDirty();
     this.setSaveStatus('saved', 'Foto inserida');
+    return true;
   },
 
   PHOTO_MAX_SIDE: 2000,
@@ -2484,18 +2502,24 @@ const App = {
     }
   },
 
-  /** foto-2026-09-19-153012.jpg, desenho-2026-09-19-153012.png: the vault's kebab-case, unique to the second */
-  mediaName(blob, originalName, prefix) {
+  /** foto-2026-09-19-153012.jpg, desenho-2026-09-19-153012.png: the vault's kebab-case, unique to the second.
+      Several photos picked at once go up inside the same second, so `taken` collects the names already given
+      and the repeats become -2, -3. Alone, the name keeps its plain shape. */
+  mediaName(blob, originalName, prefix, taken) {
     const two = (n) => String(n).padStart(2, '0');
     const d = new Date();
     const stamp = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
     const fromType = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg' }[blob.type];
     const ext = fromType || (/\.([a-z0-9]+)$/i.exec(originalName || '')?.[1] || 'jpg').toLowerCase();
-    return `${prefix}-${stamp}.${ext}`;
+    let name = `${prefix}-${stamp}.${ext}`;
+    if (!taken) return name;
+    for (let n = 2; taken.has(name); n++) name = `${prefix}-${stamp}-${n}.${ext}`;
+    taken.add(name);
+    return name;
   },
 
   /** Insert `text` as a line of its own: at the cursor, or where it was (`at`) when the editor lost the focus,
-      or at the end. The cursor ends on a fresh line below. */
+      or at the end. The cursor ends on a fresh line below; with the editor, answers where that is. */
   insertOnOwnLine(text, at) {
     if (this.editor) {
       const ed = this.editor;
@@ -2506,7 +2530,7 @@ const App = {
       const pos = { row, col: Math.min(wanted.col, ed.lines[row].length) };
       const before = ed.lines[row].slice(0, pos.col).trim() ? '\n' : '';
       ed.paste(`${before}${text}\n`, pos, { ...pos });
-      return;
+      return { row: pos.row + (before ? 2 : 1), col: 0 };
     }
 
     const ta = this.els.editorElement;
@@ -2912,8 +2936,8 @@ const App = {
       btn.addEventListener('click', () => this.pickPhoto(btn.dataset.photo));
     });
     this.els.photoInput.addEventListener('change', () => {
-      const picked = this.els.photoInput.files[0];
-      if (picked) this.insertPhoto(picked);
+      const picked = [...this.els.photoInput.files];
+      if (picked.length) this.insertPhotos(picked);
     });
 
     // Drawing: the pencil sits with the photo buttons and gets the same touch handling, because it

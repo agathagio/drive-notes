@@ -571,6 +571,82 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     check('sem pasta _media no vault: avisa e nao sobe', uploaded().length === 2 && /_media/.test(App.els.saveStatus.textContent), App.els.saveStatus.textContent);
   }
 
+  console.log('16d. Galeria: varias fotos de uma vez, em fila');
+  {
+    const { App, drive, w } = await boot();
+    w.URL.createObjectURL = () => 'blob:fake/local';
+    drive.put('media', '_media', '', [VAULT]); drive.files.get('media').mimeType = FOLDER;
+    drive.put('A', 'a.md', 'linha um');
+    await App.openFile('A', 'a.md');
+    App.setMode('edit');
+    const ta = App.els.editorElement;
+    const photo = (n) => new w.File([`bytes-${n}`], `IMG_${n}.JPG`, { type: 'image/jpeg' });
+    const uploaded = () => [...drive.files.values()].filter(f => /^foto-/.test(f.name));
+    // O seletor devolve uma FileList; aqui basta a lista que o app percorre
+    const pick = (...files) => {
+      Object.defineProperty(App.els.photoInput, 'files', { configurable: true, value: files });
+      App.els.photoInput.dispatchEvent(new w.Event('change'));
+    };
+
+    const many = [];
+    App.els.photoInput.click = () => many.push(App.els.photoInput.hasAttribute('multiple'));
+    w.document.querySelector('[data-photo="gallery"]').click();
+    w.document.querySelector('[data-photo="camera"]').click();
+    check('galeria aceita varias, camera continua uma por vez', many.join('|') === 'true|false', many);
+
+    // Um envio por vez: contar quantos POST ficam no ar ao mesmo tempo
+    const real = w.fetch;
+    let flying = 0, most = 0;
+    w.fetch = async (url, opts = {}) => {
+      if (opts.method !== 'POST') return real(url, opts);
+      most = Math.max(most, ++flying);
+      try { return await real(url, opts); } finally { flying--; }
+    };
+
+    ta.selectionStart = ta.selectionEnd = ta.value.length;
+    pick(photo(1), photo(2), photo(3));
+    await sleep(300);
+    const names = uploaded().map(f => f.name);
+    check('as tres subiram, uma de cada vez, na ordem escolhida', most === 1 && uploaded().map(f => f.content).join('|') === 'bytes-1|bytes-2|bytes-3', uploaded());
+    check('tres embeds, um por linha, na mesma ordem', ta.value === `linha um\n![[${names[0]}]]\n![[${names[1]}]]\n![[${names[2]}]]\n`, ta.value);
+    check('nomes da mesma leva nao se repetem', names.length === 3 && new Set(names).size === 3, names);
+    const jpeg = new w.Blob(['x'], { type: 'image/jpeg' });
+    const taken = new Set();
+    const leva = [App.mediaName(jpeg, null, 'foto', taken), App.mediaName(jpeg, null, 'foto', taken), App.mediaName(jpeg, null, 'foto', taken)];
+    check('no mesmo segundo, a segunda e a terceira ganham -2 e -3', /^foto-\d{4}-\d{2}-\d{2}-\d{6}\.jpg$/.test(leva[0])
+      && leva[1] === leva[0].replace('.jpg', '-2.jpg') && leva[2] === leva[0].replace('.jpg', '-3.jpg'), leva);
+
+    // No celular o editor volta do seletor sem cursor: cada foto tem que cair embaixo da anterior,
+    // nao todas na posicao guardada (a ultima ficaria em cima)
+    const fake = {
+      lines: ['linha um', ''],
+      getSelection: () => null,
+      paste(text, pos) {
+        const head = this.lines.slice(0, pos.row).concat(this.lines[pos.row].slice(0, pos.col)).join('\n');
+        this.lines = (head + text + this.lines[pos.row].slice(pos.col) + this.lines.slice(pos.row + 1).map(l => '\n' + l).join('')).split('\n');
+      },
+    };
+    const editorBefore = App.editor;
+    App.editor = fake;
+    let at = { row: 1, col: 0 };
+    for (const n of [1, 2, 3]) at = App.insertOnOwnLine(`![[f${n}]]`, at) || at;
+    App.editor = editorBefore;
+    check('sem cursor no editor, a fila continua na ordem', fake.lines.join('\n') === 'linha um\n![[f1]]\n![[f2]]\n![[f3]]\n', fake.lines);
+
+    // Erro no meio: o que ja entrou fica, o resto nem sobe
+    const kept = ta.value;
+    const had = uploaded().length;
+    let posts = 0;
+    w.fetch = async (url, opts = {}) => (opts.method === 'POST' && ++posts === 2)
+      ? { ok: false, status: 500, json: async () => ({}), text: async () => '' }
+      : real(url, opts);
+    pick(photo(4), photo(5), photo(6));
+    await sleep(300);
+    check('falha no meio: a fila para e o que subiu continua na nota', posts === 2 && uploaded().length === had + 1
+      && ta.value === `${kept}![[${uploaded().pop().name}]]\n` && App.els.saveStatus.textContent === 'Erro ao enviar a foto', ta.value);
+    w.fetch = real;
+  }
+
   console.log('17. Wikilinks: navegacao e voltar');
   {
     const { App, drive, w } = await boot();
