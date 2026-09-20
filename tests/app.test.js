@@ -1368,6 +1368,23 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     await swipe(W - 5, W - 150);
     check('sem nada pra frente, a borda direita nao faz nada', App.currentFile?.id === 'n-z' && App.navStack.length === 3);
 
+    // Dedo de verdade: nao cai colado na borda, e o comeco do arrasto do polegar e um arco, nao uma reta
+    await swipe(28, 170);
+    check('pega com o dedo a 28px da borda', App.currentFile?.id === 'L', App.currentFile?.id);
+    await swipe(W - 28, W - 170);
+    check('... e da direita tambem', App.currentFile?.id === 'n-z');
+    touch('touchstart', 10, 300); touch('touchmove', 12, 309); touch('touchmove', 16, 316); touch('touchmove', 60, 330); touch('touchmove', 150, 340); touch('touchend', 150, 340);
+    await sleep(80);
+    check('comeco torto (mais pra baixo que pro lado) nao mata o gesto', App.currentFile?.id === 'L', App.currentFile?.id);
+    await swipe(W - 5, W - 150);
+    touch('touchstart', 10, 300); touch('touchmove', 14, 330); touch('touchmove', 20, 380); touch('touchmove', 150, 400); touch('touchend', 150, 400);
+    await sleep(80);
+    check('rolagem que depois entorta pro lado continua sendo rolagem', App.currentFile?.id === 'n-z', App.currentFile?.id);
+    App.showDiagnostics();
+    const logText = d.getElementById('debug-text').textContent;
+    check('o painel de diagnostico conta o que houve com cada gesto', /swipe left x=28/.test(logText) && /swipe: back pull=\d+/.test(logText) && /swipe drop: vertical/.test(logText), logText.split('\n').filter(l => l.includes('swipe')).slice(-8));
+    d.getElementById('debug-close').click();
+
     touch('touchstart', 5, 300); touch('touchmove', 40, 300);
     check('a seta aparece do lado esquerdo, ainda sem armar', hint.classList.contains('visible') && hint.dataset.side === 'left' && !hint.classList.contains('armed'), hint.className);
     touch('touchmove', 150, 300);

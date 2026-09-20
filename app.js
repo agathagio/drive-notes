@@ -21,8 +21,10 @@ const CONFIG = {
 const SCOPES = 'https://www.googleapis.com/auth/drive';
 
 // Edge swipe: how close to the side of the screen the finger must start, and how far in it must drag (px)
-const SWIPE_EDGE = 20;
-const SWIPE_TRIGGER = 70;
+const SWIPE_EDGE = 32;
+const SWIPE_TRIGGER = 60;
+// Vertical travel that means "this is a scroll", when it is also more than the travel inwards
+const SWIPE_SCROLL = 36;
 
 // =====================================================
 
@@ -1420,7 +1422,6 @@ const App = {
 
   /** Swipe from the right edge: back into the view that "back" last left */
   async goForward() {
-    this.log('goForward (swipe)');
     if (!this.useWatcher) {
       history.forward();
       return;
@@ -1454,13 +1455,16 @@ const App = {
     this._swipe = null;
     if (e.touches.length !== 1) return;
     const { clientX: x, clientY: y } = e.touches[0];
-    const side = x <= SWIPE_EDGE ? 'left' : x >= window.innerWidth - SWIPE_EDGE ? 'right' : null;
-    if (!side || !this.swipeAllowed(side)) return;
+    const fromEdge = Math.min(x, window.innerWidth - x);
+    const side = x < window.innerWidth / 2 ? 'left' : 'right';
+    if (fromEdge > SWIPE_EDGE * 2 || !this.swipeAllowed(side)) return;
     // Dragging near the edge with text selected is moving a selection handle; and these scroll sideways themselves
     const selection = window.getSelection();
-    if (selection && !selection.isCollapsed) return;
-    if (e.target.closest?.('input, .toolbar, .table-wrap, pre')) return;
-    this._swipe = { side, x, y, armed: false };
+    const blocked = selection && !selection.isCollapsed ? 'selection' : e.target.closest?.('input, .toolbar, .table-wrap, pre') ? 'target' : '';
+    // A start just outside the strip (or a blocked one) does nothing, but is followed so the diagnostics panel can tell
+    const skip = blocked || (fromEdge > SWIPE_EDGE ? 'outside' : '');
+    this._swipe = { side, x, y, pull: 0, armed: false, skip };
+    if (!skip) this.log(`swipe ${side} x=${Math.round(x)}`);
   },
 
   onSwipeMove(e) {
@@ -1469,8 +1473,13 @@ const App = {
     const { clientX, clientY } = e.touches[0];
     const pull = (clientX - swipe.x) * (swipe.side === 'left' ? 1 : -1);
     const drift = Math.abs(clientY - swipe.y);
-    if (drift > 10 && drift > pull) {
-      this.endSwipe(); // more down than across: that is the page scrolling
+    swipe.pull = Math.max(swipe.pull, pull);
+    if (swipe.skip) return;
+    // Clearly more down than across: that is the page scrolling. The first few px decide nothing:
+    // a thumb starts its swipe in an arc, and dropping the gesture there made it hard to catch.
+    if (drift > SWIPE_SCROLL && drift > pull) {
+      this.log(`swipe drop: vertical pull=${Math.round(pull)} drift=${Math.round(drift)}`);
+      this.endSwipe();
       return;
     }
     swipe.armed = pull >= SWIPE_TRIGGER;
@@ -1488,21 +1497,32 @@ const App = {
     const swipe = this._swipe;
     this._swipe = null;
     this.els.swipeHint.classList.remove('visible', 'armed');
-    if (!act || !swipe?.armed || !this.swipeAllowed(swipe.side)) return;
+    if (!act || !swipe) return;
+    const pull = Math.round(swipe.pull);
+    if (swipe.skip) {
+      // Only what looked like an attempt at the gesture is worth a line
+      if (pull >= SWIPE_TRIGGER) this.log(`swipe miss (${swipe.skip}) ${swipe.side} x=${Math.round(swipe.x)} pull=${pull}`);
+      return;
+    }
+    if (!swipe.armed || !this.swipeAllowed(swipe.side)) {
+      if (pull > 10) this.log(`swipe end: short pull=${pull}`);
+      return;
+    }
     if (swipe.side === 'left') {
-      this.log('swipe: back');
+      this.log(`swipe: back pull=${pull}`);
       // History mode has no step for "close the dialog": goBack would leave the note behind it
       const dismiss = !this.useWatcher && document.querySelector('.modal-overlay.visible [data-dismiss]');
       if (dismiss) dismiss.click();
-      else this.goBack();
+      else this.goBack('swipe');
     } else {
+      this.log(`swipe: forward pull=${pull}`);
       this.goForward();
     }
   },
 
   /** Header back button */
-  goBack() {
-    this.log('goBack (button)');
+  goBack(from = 'button') {
+    this.log(`goBack (${from})`);
     if (this.useWatcher) {
       this.handleBack();
       return;
