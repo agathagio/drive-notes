@@ -1023,6 +1023,7 @@ const App = {
 
     container.innerHTML = DOMPurify.sanitize(marked.parse(body));
     this.decoratePreview(container);
+    this.enableTasks(container);
     this.loadEmbeds(container);
 
     if (frontmatter) {
@@ -1075,6 +1076,50 @@ const App = {
       quote.classList.add('callout');
       quote.dataset.callout = type;
     });
+  },
+
+  /** Where each task's mark (the space or the x between the brackets) sits in the note, in the order
+      the reading view shows them. Fenced code is skipped, as the renderer skips it. */
+  taskMarks(content) {
+    const start = content.length - this.splitFrontmatter(content).body.length;
+    const marks = [];
+    let fence = null;
+    let at = start;
+    for (const line of content.slice(start).split('\n')) {
+      const fenceMatch = /^[\s>]*(`{3,}|~{3,})/.exec(line);
+      if (fenceMatch) {
+        if (!fence) fence = fenceMatch[1][0];
+        else if (fenceMatch[1][0] === fence) fence = null;
+      } else if (!fence) {
+        const task = /^[\s>]*(?:[-*+]|\d+[.)])\s+\[[ xX]\] /.exec(line);
+        if (task) marks.push(at + task[0].length - 3);
+      }
+      at += line.length + 1;
+    }
+    return marks;
+  },
+
+  /** Task boxes come out of the renderer switched off. They are switched on only when the note's text
+      and the screen agree on how many tasks there are: ticking the wrong line is worse than not ticking. */
+  enableTasks(container) {
+    const boxes = [...container.querySelectorAll('li > input[type="checkbox"]')];
+    if (boxes.length !== this.taskMarks(this.getContent()).length) return;
+    boxes.forEach((box, i) => {
+      box.disabled = false;
+      box.addEventListener('change', () => this.toggleTask(i, box));
+    });
+  },
+
+  /** The editor is out of sight in reading view, so its text can be replaced (see setContent and the keyboard) */
+  toggleTask(index, box) {
+    const content = this.getContent();
+    const at = this.taskMarks(content)[index];
+    if (at === undefined) {
+      box.checked = !box.checked;
+      return;
+    }
+    this.setContent(content.slice(0, at) + (box.checked ? 'x' : ' ') + content.slice(at + 1));
+    this.markDirty();
   },
 
   /** ![[foto.jpg]]: Drive only hands the file over with the login, so an <img> cannot point at it.

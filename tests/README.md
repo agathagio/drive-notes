@@ -4,7 +4,7 @@ O app não tem build. O `package.json` da raiz existe só pra estes testes. Uma 
 
 ## `npm test`
 
-`app.test.js`: roda o `app.js` real dentro do jsdom contra um Google Drive falso em memória. Cobre save e fila de escrita, conflito, rascunhos, modo leitura (frontmatter, wikilinks, imagens embutidas, callouts, tabelas), foto na nota (upload pro `_media`), navegação e botão voltar, renomear, login expirado, formatação, navegador de pastas, busca (filtro da pasta aberta, vault inteiro, o que fica de fora, voltar de um resultado) as datas `created` / `updated` (incluindo o que fica de fora: `_templates`, `CLAUDE.md`, `-antigo`, `.txt`, fora do vault) e o desenho na nota (caixa de recorte, traço, borracha, desfazer, voltar e o PNG no `_media`). Leva uns 20 segundos.
+`app.test.js`: roda o `app.js` real dentro do jsdom contra um Google Drive falso em memória. Cobre save e fila de escrita, conflito, rascunhos, modo leitura (frontmatter, wikilinks, imagens embutidas, callouts, tabelas), foto na nota (upload pro `_media`), navegação e botão voltar, renomear, login expirado, formatação, navegador de pastas, busca (filtro da pasta aberta, vault inteiro, o que fica de fora, voltar de um resultado) as datas `created` / `updated` (incluindo o que fica de fora: `_templates`, `CLAUDE.md`, `-antigo`, `.txt`, fora do vault) e o desenho na nota (caixa de recorte, traço, borracha, desfazer, voltar e o PNG no `_media`) e a tarefa marcada no modo leitura (a caixa certa no texto, bloco de código de fora, caixas desligadas se a contagem não bater). Leva uns 20 segundos.
 
 O jsdom não tem canvas: o `boot()` põe um contexto 2D de mentira que anota o que foi pintado, e é contra esse registro que o traço e a borracha são conferidos. O canvas de verdade fica pro `test:browser`.
 
@@ -20,7 +20,8 @@ O editor aqui é o textarea de fallback, porque o TinyMDE precisa de um navegado
 - imagem visível na edição: aparece só na linha que é só o embed, não muda o texto, sobrevive a digitação e sai quando a linha muda;
 - o CloseWatcher real, com a tecla Esc fazendo o papel do botão voltar do Android;
 - datas: o cursor da nota nova cai embaixo das propriedades, salvar não mexe no texto nem no cursor de quem está digitando, e o editor alcança o `updated` do Drive ao ir pro modo leitura;
-- desenho: canvas com `devicePixelRatio`, ponta de traço redonda, o traço nascendo sob o dedo (e não deslocado pela faixa do topo), borracha apagando pra transparente e o PNG recortado no traço.
+- desenho: canvas com `devicePixelRatio`, ponta de traço redonda, o traço nascendo sob o dedo (e não deslocado pela faixa do topo), borracha apagando pra transparente e o PNG recortado no traço;
+- tarefa: um clique de verdade na caixa do modo leitura vira `[x]` no TinyMDE.
 
 Pra escolher o navegador: variável de ambiente `BROWSER_PATH`.
 

@@ -26,6 +26,7 @@ Então fiz o meu. Hoje é por ele que eu leio e escrevo no vault quando estou lo
 
 - Nota do Drive abre formatada, em modo leitura. Um toque alterna pra edição.
 - Entende o markdown do Obsidian: o frontmatter vira um bloco "Propriedades" recolhido, `[[wikilinks]]` abrem a nota certa (inclusive `[[nota#título]]`), callouts ganham cor por tipo, tabela larga rola de lado, imagem embutida (`![[foto.jpg]]`) aparece na nota.
+- Tarefa (`- [ ]`) se marca tocando na caixa, direto no modo leitura: o `[x]` entra no texto da nota e o auto-save leva pro Drive.
 - Navegador de pastas próprio, na mesma ordem do Obsidian (`2-x` antes de `10-x`), com a data da última edição.
 - Busca na tela de pastas: o que se digita filtra a pasta aberta na hora, sem rede e sem ligar pra acento, e depois de uma pausa procura no vault inteiro, por nome e pelo texto das notas. Cada resultado mostra a pasta onde a nota mora.
 

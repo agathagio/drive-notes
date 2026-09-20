@@ -355,6 +355,27 @@ const FAKE_DRIVE = `
     check('o dialogo abre', dialogo.visivel, dialogo);
     check('o dedo alcanca o "Descartar"', dialogo.okAlcancavel, dialogo);
     check('o dedo alcanca o "Cancelar"', dialogo.cancelarAlcancavel, dialogo);
+
+    // ── Tarefa: um clique de verdade na caixa, com o TinyMDE guardando o texto ──
+    console.log('9. Tarefa marcada no modo leitura, com o TinyMDE');
+    await open(buildPage('tarefa', currentApp));
+    await js(FAKE_DRIVE);
+    await editNote('- [ ] Agatha\n- [ ] Banguela\n', 0, 0);
+    await js(`__App.setMode('preview'); 'ok'`);
+    await sleep(200);
+    const box = JSON.parse(await js(`(() => {
+      const b = document.querySelectorAll('#preview-container input[type="checkbox"]')[1].getBoundingClientRect();
+      return JSON.stringify({ x: b.left + b.width / 2, y: b.top + b.height / 2 });
+    })()`));
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 });
+    }
+    await sleep(200);
+    check('o clique marca a segunda tarefa no texto', await js('__App.getContent()') === '- [ ] Agatha\n- [x] Banguela\n', await js('__App.getContent()'));
+    check('a caixa fica marcada na tela e a nota tem o que salvar', await js(`document.querySelectorAll('#preview-container input[type="checkbox"]')[1].checked && __App.isDirty`) === true);
+    await js(`__App.setMode('edit'); 'ok'`);
+    await sleep(200);
+    check('na edicao o TinyMDE mostra o [x]', (await js('__App.editor.e.textContent')).includes('- [x] Banguela'), await js('__App.editor.e.textContent'));
   } finally {
     browser.close();
   }

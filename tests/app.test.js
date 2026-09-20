@@ -1292,5 +1292,40 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     check('e dai da pra tentar de novo', uploaded().length === 3 && embeds() === 3 && !App.sketch);
   }
 
+  console.log('35. Tarefa: tocar na caixa no modo leitura marca no texto da nota');
+  {
+    const { App, drive, w } = await boot();
+    const note = [
+      '---', 'tags: [a]', '---', '',
+      '- [ ] Agatha', '- [x] Banguela', '',
+      '```', '- [ ] dentro de codigo, nao e tarefa', '```', '',
+      '> - [ ] na citacao',
+      '1. [ ] numerada',
+    ].join('\n');
+    drive.put('A', 'a.md', note);
+    await App.openFile('A', 'a.md');
+    const boxes = () => [...App.els.previewContainer.querySelectorAll('input[type="checkbox"]')];
+    const tap = (i) => { const box = boxes()[i]; box.checked = !box.checked; box.dispatchEvent(new w.Event('change', { bubbles: true })); };
+    check('4 caixas, todas tocaveis', boxes().length === 4 && boxes().every(b => !b.disabled), boxes().map(b => b.disabled));
+
+    tap(0);
+    check('marcar a primeira troca so ela no texto', App.getContent() === note.replace('- [ ] Agatha', '- [x] Agatha'), App.getContent());
+    check('a nota fica com algo pra salvar', App.isDirty);
+    tap(1);
+    check('desmarcar volta pro [ ]', App.getContent().includes('- [ ] Banguela') && App.getContent().includes('- [x] Agatha'), App.getContent());
+    tap(3);
+    check('a quarta caixa e a numerada, o bloco de codigo nao conta', App.getContent().includes('1. [x] numerada') && App.getContent().includes('- [ ] dentro de codigo'), App.getContent());
+    tap(2);
+    check('tarefa dentro de citacao', App.getContent().includes('> - [x] na citacao'), App.getContent());
+
+    await App.save(); await App._saveChain;
+    check('e vai pro Drive', bodyOf(drive.files.get('A').content).includes('- [x] Agatha') && drive.files.get('A').content.includes('1. [x] numerada'), drive.files.get('A').content);
+
+    // Se o texto e a tela discordarem de quantas tarefas existem, marcar a errada e pior que nao marcar
+    drive.put('B', 'b.md', 'texto\n\n    - [ ] isto e bloco de codigo por recuo\n\n- [ ] uma\n');
+    await App.openFile('B', 'b.md');
+    check('contagem que nao bate: caixas ficam desligadas', boxes().length === 1 && boxes()[0].disabled, boxes().map(b => b.disabled));
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });
