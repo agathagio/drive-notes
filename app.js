@@ -72,6 +72,12 @@ const App = {
   // Views ahead of this one after going back (CloseWatcher mode), and the edge swipe under way: { side, x, y, armed }
   fwdStack: [],
   _swipe: null,
+  // The note on its way from the Drive, as a view description. Until it arrives the screen still shows the
+  // previous view, but for navigation the note is already where we are (see viewState).
+  _opening: null,
+  // A navigation begun by a tap (or a swipe forward) whose view has not landed yet: { pushed }, pushed
+  // telling whether it put an entry on navStack. Null once a view lands or the navigation is dropped.
+  _pending: null,
   // The drawing screen while it is open: { canvas, ctx, dpr, strokes, stroke, color, width, erase, at }.
   // `strokes` is the whole drawing (painting works from it, never from the pixels on screen) and
   // `at` is where the caret was in the note. Null while the screen is closed.
@@ -383,6 +389,7 @@ const App = {
     // Whatever is open gets saved before it is replaced
     this.flushCurrent();
     const seq = ++this._loadSeq;
+    this._opening = null;
     this.currentFile = null;
     this.isDirty = false;
     this.folder = folder;
@@ -619,6 +626,8 @@ const App = {
     this.flushCurrent();
 
     const seq = ++this._loadSeq;
+    const opening = this._opening = { view: 'file', id: fileId, name: fileName };
+    const started = Date.now();
     this.setSaveStatus('saving', 'Carregando...');
 
     let meta, content;
@@ -630,12 +639,14 @@ const App = {
     } catch (e) {
       console.error('Failed to load file:', e);
       if (seq !== this._loadSeq) return true;
+      if (this._opening === opening) this._opening = null;
       // Offline or Drive error: unsynced local edits of this file are still reachable
       if (this.openDraft(draftKey)) return true;
       this.setSaveStatus('error', 'Erro ao carregar');
       return false;
     }
     if (seq !== this._loadSeq) return true; // another file was opened meanwhile: not ours to undo
+    this.log(`loaded ${meta.name || fileName} ${Date.now() - started}ms`);
 
     const file = {
       id: fileId,
@@ -974,6 +985,7 @@ const App = {
   // ── UI State ──
 
   showBrowser() {
+    this._pending = this._opening = null; // a view has landed
     this.els.welcome.classList.add('hidden');
     this.els.editorContainer.classList.add('hidden');
     this.els.previewContainer.classList.remove('visible');
@@ -983,6 +995,7 @@ const App = {
   },
 
   showWelcome() {
+    this._pending = this._opening = null; // a view has landed
     this.els.welcome.classList.remove('hidden');
     this.els.browser.classList.add('hidden');
     this.els.editorContainer.classList.add('hidden');
@@ -992,6 +1005,7 @@ const App = {
   },
 
   showEditor(mode = 'edit') {
+    this._pending = this._opening = null; // a view has landed
     this.els.welcome.classList.add('hidden');
     this.els.browser.classList.add('hidden');
     this.setMode(mode);
@@ -1276,6 +1290,7 @@ const App = {
     // Still inside the tap: the history entry has to be created now (see beginNav).
     // Every way out that does not open a note drops it again with cancelNav().
     this.beginNav();
+    const seq = ++this._loadSeq; // this tap wins over a note still loading, and "back" can give up on it
 
     const base = target.split('/').pop().trim();
     const names = /\.md$/i.test(base) ? [base] : [`${base}.md`, base];
@@ -1287,10 +1302,12 @@ const App = {
       matches = await this.driveFindByName(names);
     } catch (e) {
       console.error('Link lookup failed:', e);
+      if (seq !== this._loadSeq) return;
       this.setSaveStatus('error', 'Erro ao procurar a nota');
       this.cancelNav();
       return;
     }
+    if (seq !== this._loadSeq) return; // overtaken by another tap, or dropped by "back"
 
     const isText = (f) => /\.(md|markdown|txt)$/i.test(f.name) || (f.mimeType || '').startsWith('text/');
     const notes = matches.filter(isText);
@@ -1331,6 +1348,9 @@ const App = {
   //   and onPopState shows what it says.
 
   viewState() {
+    // Read while a note is still loading, the screen would describe the view before it: two quick steps
+    // (forward twice, two taps on the list) then left the same folder on the back stack more than once
+    if (this._opening) return this._opening;
     const file = this.currentFile;
     if (file) return { view: 'file', id: file.id, name: file.name };
     if (this.folder) return { view: 'browse', ...this.folder };
@@ -1342,8 +1362,14 @@ const App = {
     this.log(`show ${state?.view || 'welcome'} ${state?.name || ''}`);
     if (state?.view === 'file' && state.id) {
       if (state.id !== this.currentFile?.id) return this.openFile(state.id, state.name);
+      if (this._opening) {
+        // Back to the note on screen while another was on its way: give up on that one
+        this._loadSeq++;
+        this._opening = null;
+        this.setSaveStatus('', '');
+      }
     } else if (state?.view === 'browse') {
-      if (this.currentFile || this.folder?.id !== state.id) {
+      if (this._opening || this.currentFile || this.folder?.id !== state.id) {
         return this.openFolder({ id: state.id, name: state.name, path: state.path || [], query: state.query || '' });
       }
     } else if (this.currentFile || this.folder || document.body.dataset.view !== 'welcome') {
@@ -1356,7 +1382,11 @@ const App = {
       skips entries that were not created during a user gesture, so this cannot wait for the Drive. */
   beginNav() {
     if (this.useWatcher) {
-      this.navStack.push(this.viewState());
+      // A navigation still under way (looking a link up, a note loading) never reached the screen:
+      // its entry already stands for the view being left
+      const pushed = this._pending ? this._pending.pushed : true;
+      if (!this._pending) this.navStack.push(this.viewState());
+      this._pending = { pushed };
       this.fwdStack = []; // going somewhere new: nothing is "ahead" any more, as in a browser
       this.armWatcher();
     } else {
@@ -1368,7 +1398,9 @@ const App = {
   /** The navigation begun never changed the view: forget it */
   cancelNav() {
     if (this.useWatcher) {
-      this.navStack.pop();
+      if (this._pending?.pushed) this.navStack.pop();
+      this._pending = null;
+      this._opening = null;
       this.armWatcher();
     } else {
       history.back();
@@ -1411,11 +1443,22 @@ const App = {
       dismiss.click();
     } else if (this.sketch) {
       this.sketchCancel();
+    } else if (this._pending) {
+      // Something tapped is still on its way (a link being looked up, a note loading): "back" gives up
+      // on it and stays on the view that is on screen, instead of leaving it for the note to land later.
+      // (A note that an earlier "back" is still loading is different: see viewState, back goes on from it.)
+      this._loadSeq++;
+      this.cancelNav();
+      this.setSaveStatus('', '');
     } else {
       // The view being left is where a swipe from the right edge returns to. A note not yet on the Drive has no way back.
       const leaving = this.viewState();
       if (leaving.view === 'browse' || (leaving.view === 'file' && leaving.id)) this.fwdStack.push(leaving);
-      this.show(this.navStack.length ? this.navStack.pop() : null);
+      // An entry for the view already on screen would make this "back" do nothing: skip it
+      const same = (a, b) => a.view === b.view && (a.id || null) === (b.id || null);
+      let target = this.navStack.pop();
+      while (target && same(target, leaving)) target = this.navStack.pop();
+      this.show(target || null);
     }
     this.armWatcher();
   },
@@ -1428,13 +1471,14 @@ const App = {
     }
     const next = this.fwdStack.pop();
     if (!next) return;
+    // Forward again while the last step is still loading: what is left behind is that step, not the screen
     this.navStack.push(this.viewState());
+    this._pending = { pushed: true };
     this.armWatcher();
     if ((await this.show(next)) === false) {
       // Did not open (no network): the screen stayed where it was, and so do the two stacks
-      this.navStack.pop();
+      this.cancelNav();
       this.fwdStack.push(next);
-      this.armWatcher();
     }
   },
 
@@ -1565,6 +1609,7 @@ const App = {
   goHome() {
     this.flushCurrent();
     this._loadSeq++;
+    this._opening = null;
     this.currentFile = null;
     this.folder = null;
     this.isDirty = false;

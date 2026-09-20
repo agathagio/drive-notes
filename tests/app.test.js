@@ -1428,6 +1428,81 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     check('na tela de desenho nao volta nem fecha o desenho', !!App.sketch && App.currentFile?.id === 'n-z');
   }
 
+  console.log('38. Navegar de novo antes de a nota anterior carregar nao suja a pilha do voltar');
+  {
+    // Do log do aparelho em 19 set 2026: dois "avancar" com 1s de intervalo, rede lenta, e depois o voltar
+    // parou tres vezes na mesma pasta. A tela que fica pra tras era lida enquanto a nota ainda carregava.
+    const { App, drive, w } = await boot({ watcher: true });
+    seedVault(drive);
+    drive.put('L', 'com link.md', 'vai [[zebra]]', [VAULT]);
+    const d = w.document;
+    const stack = () => App.navStack.map(s => s.view === 'file' ? s.id : s.view === 'browse' ? `pasta:${s.id === VAULT ? 'vault' : s.id}` : s.view);
+    const item = (text) => [...d.querySelectorAll('.browser-item')].find(li => li.textContent.includes(text));
+
+    d.getElementById('welcome-open').click(); await sleep(80);
+    item('com link').click(); await sleep(80);
+    App.els.previewContainer.querySelector('a.wikilink').click(); await sleep(80);
+    w.__back(); await sleep(80);
+    w.__back(); await sleep(80);
+    check('pasta, com duas notas pra frente', d.body.dataset.view === 'browse' && App.fwdStack.length === 2, stack());
+
+    drive.delay = 60;
+    App.goForward();            // comeca a carregar "com link"...
+    await sleep(10);
+    await App.goForward();      // ...e avanca de novo antes de ela chegar
+    await sleep(200);
+    check('dois avancar seguidos: chega na nota do link, com a do meio na pilha', App.currentFile?.id === 'n-z' && stack().join(' > ') === 'welcome > pasta:vault > L', stack());
+
+    w.__back(); await sleep(200);
+    check('voltar: a nota do meio', App.currentFile?.id === 'L', App.currentFile?.id);
+    w.__back(); await sleep(200);
+    check('voltar: a pasta, uma vez so', d.body.dataset.view === 'browse' && stack().join(' > ') === 'welcome', stack());
+
+    // Dois toques seguidos na lista: o segundo nao pode empilhar a pasta de novo
+    item('zebra').click();
+    await sleep(10);
+    item('Abacaxi').click();
+    await sleep(250);
+    check('dois toques seguidos: abre a segunda nota', App.currentFile?.id === 'n-a', App.currentFile?.id);
+    w.__back(); await sleep(200);
+    w.__back(); await sleep(200);
+    check('dois voltar bastam pra sair da pasta: nenhum cai no vazio', d.body.dataset.view === 'welcome', [d.body.dataset.view, stack()]);
+
+    // Voltar com a nota ainda carregando desiste dela: ela nao pode aparecer sozinha depois
+    d.getElementById('welcome-open').click(); await sleep(250);
+    item('zebra').click();
+    await sleep(10);
+    w.__back(); await sleep(250);
+    check('voltar no meio do carregamento fica na pasta', d.body.dataset.view === 'browse' && App.currentFile === null && stack().join(' > ') === 'welcome', [d.body.dataset.view, App.currentFile?.id, stack()]);
+
+    // O mesmo de dentro de uma nota: o link tocado e abandonado nao aparece depois
+    item('com link').click(); await sleep(250);
+    App.els.previewContainer.querySelector('a.wikilink').click();
+    await sleep(10);
+    w.__back(); await sleep(250);
+    check('voltar com o link ainda carregando fica na nota', App.currentFile?.id === 'L' && stack().join(' > ') === 'welcome > pasta:vault', [App.currentFile?.id, stack()]);
+
+    // Toque que nao abre nada, dado com outra nota a caminho, nao pode comer a entrada dela
+    drive.put('Q', 'quebrada.md', 'vai [[zebra]] e [[nao existe]]', [VAULT]);
+    await App.openFile('Q', 'quebrada.md');
+    const links = App.els.previewContainer.querySelectorAll('a.wikilink');
+    links[0].click();
+    await sleep(10);
+    links[1].click();
+    await sleep(300);
+    check('o ultimo toque vence: link quebrado tocado com outra nota a caminho desiste dela, avisa e fica', App.currentFile?.id === 'Q' && /não encontrada/.test(App.els.saveStatus.textContent) && stack().join(' > ') === 'welcome > pasta:vault', [App.currentFile?.id, App.els.saveStatus.textContent, stack()]);
+
+    // Dois voltar seguidos com a rede lenta sobem dois niveis: o segundo nao pode "desistir" do primeiro
+    links[0].click(); await sleep(250);
+    check('nota do link aberta a partir da quebrada', App.currentFile?.id === 'n-z' && stack().join(' > ') === 'welcome > pasta:vault > Q', stack());
+    w.__back();
+    await sleep(10);
+    w.__back(); await sleep(250);
+    check('o painel de diagnostico diz quanto cada nota levou pra chegar do Drive', App._log.some(l => /loaded zebra\.md \d+ms/.test(l)), App._log.slice(-6));
+    check('dois voltar seguidos: da nota do link direto pra pasta',d.body.dataset.view === 'browse' && App.currentFile === null && stack().join(' > ') === 'welcome', [d.body.dataset.view, App.currentFile?.id, stack()]);
+    drive.delay = 5;
+  }
+
   console.log('37. Deslizar da borda sem CloseWatcher: anda no historico do navegador');
   {
     const { App, drive, w } = await boot();
