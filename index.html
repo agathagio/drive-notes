@@ -47,8 +47,12 @@
     </div>
     <div class="header-actions">
       <button id="btn-new" class="btn btn-icon" title="Nova nota">+</button>
-      <button id="btn-open" class="btn btn-icon" title="Abrir do Drive">&#128194;</button>
-      <button id="btn-save" class="btn btn-icon" title="Salvar">&#128190;</button>
+      <button id="btn-open" class="btn btn-icon" title="Abrir do Drive" aria-label="Abrir do Drive">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      </button>
+      <button id="btn-save" class="btn btn-icon" title="Salvar" aria-label="Salvar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+      </button>
       <button id="btn-preview" class="btn btn-mode">Ler</button>
     </div>
   </header>
@@ -100,12 +104,20 @@
     <button class="toolbar-btn" data-format="checklist" title="Checklist">☐</button>
     <button class="toolbar-btn" data-format="quote" title="Citação">"</button>
     <div class="toolbar-separator"></div>
-    <button class="toolbar-btn" data-format="link" title="Link">🔗</button>
+    <button class="toolbar-btn" data-format="link" title="Link" aria-label="Link">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+    </button>
     <button class="toolbar-btn" data-format="code" title="Código">&lt;/&gt;</button>
     <div class="toolbar-separator"></div>
-    <button class="toolbar-btn" data-photo="camera" title="Tirar foto">📷</button>
-    <button class="toolbar-btn" data-photo="gallery" title="Foto da galeria">🖼️</button>
-    <button class="toolbar-btn" data-sketch="open" title="Desenhar">✏️</button>
+    <button class="toolbar-btn" data-photo="camera" title="Tirar foto" aria-label="Tirar foto">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+    </button>
+    <button class="toolbar-btn" data-photo="gallery" title="Foto da galeria" aria-label="Foto da galeria">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+    </button>
+    <button class="toolbar-btn" data-sketch="open" title="Desenhar" aria-label="Desenhar">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+    </button>
   </nav>
   <!-- Recent Android opens the system photo picker for image/*, which has no camera:
        the camera button sets "capture" on this input before opening it -->
@@ -128,7 +140,9 @@
       <button class="sketch-tool" data-sketch-width="6" aria-label="Traço médio"><i style="width:8px;height:8px"></i></button>
       <button class="sketch-tool" data-sketch-width="12" aria-label="Traço grosso"><i style="width:14px;height:14px"></i></button>
       <span class="sketch-gap"></span>
-      <button id="sketch-erase" class="sketch-tool" aria-label="Borracha">&#129532;</button>
+      <button id="sketch-erase" class="sketch-tool" aria-label="Borracha">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>
+      </button>
       <button id="sketch-undo" class="sketch-tool" aria-label="Desfazer">&#8630;</button>
     </div>
   </div>

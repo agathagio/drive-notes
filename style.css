@@ -144,6 +144,22 @@ body {
   font-size: 16px;
 }
 
+/* Ícones de traço. Quem desenha um emoji é a fonte de emoji do sistema: ela não herda cor
+   nenhuma, ignora a paleta e muda de forma a cada fabricante de Android. O SVG pega o
+   currentColor do botão, então acompanha o tema, inclusive quando o botão fica ativo e a
+   cor vira branco. O display:block tira a folga de linha de base que um SVG em linha deixa
+   embaixo; o margin auto centraliza dentro do .toolbar-btn, que centraliza por text-align.
+   O pointer-events:none mantém o botão como alvo do toque: sem ele o e.target passa a ser o
+   desenho, e quem decide olhando pro alvo (o deslizar da borda, em onSwipeStart) teria que
+   atravessar o SVG pra achar o botão. */
+.btn-icon svg,
+.toolbar-btn svg,
+.sketch-tool svg {
+  display: block;
+  margin: 0 auto;
+  pointer-events: none;
+}
+
 /* ── Editor area ── */
 
 .editor-container {
