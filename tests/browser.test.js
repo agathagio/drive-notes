@@ -475,6 +475,30 @@ const FAKE_DRIVE = `
     check('mais dois deslizes da esquerda: volta ate a pasta',v.view === 'browse' && v.folder === 'ROOT', v);
     await send('Emulation.setTouchEmulationEnabled', { enabled: false });
     await send('Emulation.clearDeviceMetricsOverride');
+
+    // ── A barra de formatacao rola de lado de verdade ──
+    console.log('11. A barra de formatacao rola de lado de verdade');
+    // Largura de celular: o Edge headless nao abre janela pequena, entao e override de metricas
+    await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 740, deviceScaleFactor: 2, mobile: true });
+    await open(buildPage('toolbar-scroll', currentApp));
+    // A barra so existe no CSS com body[data-view="edit"]; numa pagina recem aberta (tela de
+    // boas-vindas) ela fica display:none e a medida sai toda zerada, o que foi medido na primeira
+    // rodada (RED) e nao e o "os botoes encolhem" que o brief esperava
+    await editNote('linha um\nlinha dois', 0, 0);
+    const medida = await js(`(() => {
+      const barra = document.querySelector('.toolbar');
+      const botao = barra.querySelector('.toolbar-btn');
+      return {
+        conteudo: barra.scrollWidth,
+        visivel: barra.clientWidth,
+        larguraBotao: Math.round(botao.getBoundingClientRect().width),
+        alturaBotao: Math.round(botao.getBoundingClientRect().height),
+      };
+    })()`);
+    check('o conteudo da barra e mais largo que a tela, entao ela rola',
+      medida.conteudo > medida.visivel, medida);
+    check('o alvo de dedo tem pelo menos 44px', medida.larguraBotao >= 44, medida);
+    await send('Emulation.clearDeviceMetricsOverride');
   } finally {
     browser.close();
   }

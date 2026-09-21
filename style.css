@@ -502,10 +502,10 @@ body {
   color: var(--text-secondary);
   border: none;
   border-radius: 4px;
-  /* Ten buttons share the width of a 360px phone without scrolling sideways; on a wide screen they stop growing */
-  flex: 1 1 0;
-  min-width: 30px;
-  max-width: 56px;
+  /* Largura fixa, nao flexivel: item de flex encolhe ate o piso antes de estourar o container,
+     e era por isso que a barra nunca rolava apesar do overflow-x: auto. 44px e o alvo de dedo
+     recomendado, e e maior que os 30px que os botoes acabavam tendo espremidos. */
+  flex: 0 0 44px;
   padding: 8px 2px;
   font-size: 14px;
   font-weight: 600;

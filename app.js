@@ -3293,6 +3293,20 @@ const App = {
       if (e.key === 'Escape') this.hideModal();
     });
 
+    // Desfazer e refazer: tocados no meio da escrita, entao nao podem roubar o foco (ver a nota
+    // dos botoes de formatacao abaixo)
+    document.querySelectorAll('.toolbar-btn[data-history]').forEach(btn => {
+      const agir = () => {
+        if (btn.dataset.history === 'undo') this.Editor.desfazer();
+        else this.Editor.refazer();
+        this.markDirty();
+      };
+      btn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+      btn.addEventListener('touchend', (e) => { e.preventDefault(); agir(); }, { passive: false });
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.addEventListener('click', agir);
+    });
+
     // Toolbar buttons: prevent focus steal so the virtual keyboard stays open.
     // Cancelling touchstart also cancels the click that would follow, so on touch the
     // action runs on touchend; click is what a mouse or a keyboard produces.

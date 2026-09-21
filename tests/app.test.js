@@ -1994,5 +1994,19 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
       w.document.querySelectorAll('.cm-line.embed-line').length === 0);
   }
 
+  console.log('43. Botoes de desfazer e refazer na barra');
+  {
+    const { App, w } = await boot({ editor: true });
+    App.Editor.definirTexto('base');
+    App.cm6Digitar(' mais');
+    const desfazer = w.document.querySelector('.toolbar-btn[data-history="undo"]');
+    const refazer = w.document.querySelector('.toolbar-btn[data-history="redo"]');
+    check('os dois botoes existem na barra', !!desfazer && !!refazer);
+    desfazer.dispatchEvent(new w.Event('click', { bubbles: true }));
+    check('o botao desfez', App.Editor.texto() === 'base', App.Editor.texto());
+    refazer.dispatchEvent(new w.Event('click', { bubbles: true }));
+    check('o botao refez', App.Editor.texto() === 'base mais', App.Editor.texto());
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });
