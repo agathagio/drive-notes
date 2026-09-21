@@ -485,6 +485,10 @@ body {
   overflow-x: auto;
   flex-shrink: 0;
   -webkit-overflow-scrolling: touch;
+  /* O dedo arrastado em cima dos botoes rola a barra, e so de lado: o navegador ja sabe disso no
+     comeco do gesto, sem esperar pra ver. O toque em si continua sendo do botao (ver
+     bindToolbarButton), e o deslizar da borda ignora a barra de proposito (ver onSwipeStart). */
+  touch-action: pan-x;
   position: fixed;
   bottom: 0;
   left: 0;

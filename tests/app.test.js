@@ -2008,6 +2008,73 @@ function enterEm(App, w, conteudo, em) {
     App.Editor.formatar('bold');
     check('o foco volta pro editor depois de formatar por wrap (senao o teclado fecha)',
       view.hasFocus);
+
+    // O cursor depois do marcador de linha. Trocar a linha inteira (o que o codigo fazia) manda o
+    // cursor pro comeco dela: uma posicao dentro de um trecho substituido volta pro inicio do
+    // trecho. No celular isso e tocar em lista e ver o cursor pular pra antes do marcador, longe
+    // de onde se estava escrevendo.
+    const cursorDepoisDe = (texto, pos, nome) => {
+      App.Editor.definirTexto(texto);
+      view.dispatch({ selection: { anchor: pos, head: pos } });
+      App.Editor.formatar(nome);
+      const linha = view.state.doc.lineAt(view.state.selection.main.head);
+      return {
+        texto: App.Editor.texto(),
+        coluna: view.state.selection.main.head - linha.from,
+        linha: linha.number,
+      };
+    };
+
+    let r = cursorDepoisDe('uma linha', 3, 'list');
+    check('marcador novo: o cursor segue o texto, nao volta pro comeco da linha',
+      r.texto === '- uma linha' && r.coluna === 5, r);
+
+    r = cursorDepoisDe('', 0, 'list');
+    check('linha vazia: o cursor fica depois do marcador, que e de onde se digita',
+      r.texto === '- ' && r.coluna === 2, r);
+
+    r = cursorDepoisDe('uma linha', 0, 'checklist');
+    check('cursor no comeco da linha: passa pra depois do marcador, nao fica antes dele',
+      r.texto === '- [ ] uma linha' && r.coluna === 6, r);
+
+    r = cursorDepoisDe('- uma linha', 7, 'list');
+    check('tirando o marcador o cursor volta junto com o texto',
+      r.texto === 'uma linha' && r.coluna === 5, r);
+
+    r = cursorDepoisDe('- uma linha', 1, 'list');
+    check('cursor dentro do marcador que sai: fica no comeco do texto',
+      r.texto === 'uma linha' && r.coluna === 0, r);
+
+    r = cursorDepoisDe('## titulo', 5, 'quote');
+    check('trocando um marcador por outro de tamanho diferente o cursor acompanha',
+      r.texto === '> titulo' && r.coluna === 4, r);
+
+    r = cursorDepoisDe('  - sub item', 6, 'checklist');
+    check('com recuo o cursor tambem acompanha',
+      r.texto === '  - [ ] sub item' && r.coluna === 10, r);
+
+    // Varias linhas de uma vez: a segunda linha so cai no lugar certo se o deslocamento das
+    // anteriores for somado
+    App.Editor.definirTexto('uma\ndois\ntres');
+    view.dispatch({ selection: { anchor: 1, head: 10 } });
+    App.Editor.formatar('quote');
+    const selFinal = view.state.selection.main;
+    const linhaFinal = view.state.doc.lineAt(selFinal.head);
+    check('selecao de tres linhas: as pontas acompanham o texto que se moveu',
+      App.Editor.texto() === '> uma\n> dois\n> tres' && selFinal.anchor === 3
+      && linhaFinal.number === 3 && selFinal.head - linhaFinal.from === 3,
+      { texto: App.Editor.texto(), anchor: selFinal.anchor, head: selFinal.head });
+  }
+
+  console.log('41b. O teclado do celular sobe a primeira letra da frase');
+  {
+    const { App } = await boot({ editor: true });
+    const contentDOM = App.Editor._impl.view.contentDOM;
+    // O CM6 poe autocapitalize="off" na area de escrita, e o Android obedece: a nota inteira saia
+    // em minuscula. O editor antigo era um contenteditable comum e nao desligava nada.
+    check('a area de escrita pede maiuscula no comeco de frase',
+      contentDOM.getAttribute('autocapitalize') === 'sentences',
+      contentDOM.getAttribute('autocapitalize'));
   }
 
   console.log('42. Foto desenhada na linha, no CM6');
@@ -2172,6 +2239,78 @@ function enterEm(App, w, conteudo, em) {
     check('tarefa marcada continua desmarcada', r.text === '- [x] feito\n- [ ] ' && r.at === '1:6', r);
     r = enter('paragrafo', 9);
     check('paragrafo comum nao ganha marcador', r.text === 'paragrafo\n' && r.at === '1:0', r);
+  }
+
+  console.log('45. A barra rola com o dedo em cima dos botoes');
+  {
+    const { App, w } = await boot({ editor: true });
+    const d = w.document;
+    App.newFile();
+    App.setMode('edit');
+
+    // O toque como o Chrome entrega: as coordenadas do fim vem em changedTouches, porque no
+    // touchend a lista touches ja esta vazia
+    const toque = (el, tipo, x, y) => {
+      const e = new w.Event(tipo, { cancelable: true, bubbles: true });
+      const ponto = [{ clientX: x, clientY: y }];
+      e.touches = tipo === 'touchend' ? [] : ponto;
+      e.changedTouches = ponto;
+      el.dispatchEvent(e);
+      return e;
+    };
+
+    const lista = d.querySelector('.toolbar-btn[data-format="list"]');
+    App.Editor.definirTexto('uma linha');
+    App.Editor._impl.view.dispatch({ selection: { anchor: 9, head: 9 } });
+
+    const comeco = toque(lista, 'touchstart', 100, 700);
+    const fim = toque(lista, 'touchend', 100, 700);
+    check('o comeco do toque nao e cancelado: e ele que deixa o navegador rolar a barra',
+      !comeco.defaultPrevented);
+    check('o fim do toque e cancelado: e o que segura o teclado aberto', fim.defaultPrevented);
+    check('dedo parado em cima do botao: a formatacao acontece',
+      App.Editor.texto() === '- uma linha', App.Editor.texto());
+
+    // Arrastar em cima do botao e rolar a barra, nao tocar nele
+    App.Editor.definirTexto('outra linha');
+    toque(lista, 'touchstart', 100, 700);
+    toque(lista, 'touchend', 160, 704);
+    check('dedo arrastado de lado em cima do botao nao formata nada',
+      App.Editor.texto() === 'outra linha', App.Editor.texto());
+
+    // Um tremor de dedo continua sendo toque
+    toque(lista, 'touchstart', 100, 700);
+    toque(lista, 'touchend', 104, 703);
+    check('tremida de dedo ainda e toque', App.Editor.texto() === '- outra linha', App.Editor.texto());
+
+    // O navegador que assume a rolagem manda touchcancel e nunca chega ao touchend: o proximo
+    // toque nao pode herdar a posicao do gesto abandonado
+    App.Editor.definirTexto('mais uma');
+    toque(lista, 'touchstart', 100, 700);
+    toque(lista, 'touchcancel', 300, 700);
+    toque(lista, 'touchend', 300, 700);
+    check('gesto que virou rolagem nao formata quando o dedo larga longe',
+      App.Editor.texto() === 'mais uma', App.Editor.texto());
+
+    // O mouse continua no clique, e sem roubar o foco do editor
+    App.Editor.definirTexto('no mouse');
+    const abaixou = new w.Event('mousedown', { cancelable: true, bubbles: true });
+    lista.dispatchEvent(abaixou);
+    lista.click();
+    check('no mouse o clique formata, e o mousedown e cancelado pra nao tirar o foco',
+      App.Editor.texto() === '- no mouse' && abaixou.defaultPrevented, App.Editor.texto());
+
+    // A camera e a galeria abrem o seletor de dentro do toque, e o desenho abre a tela cheia:
+    // os dois passam pelo mesmo caminho, entao um toque neles tambem tem que agir
+    let abriu = 0;
+    App.els.photoInput.click = () => { abriu++; };
+    const galeria = d.querySelector('.toolbar-btn[data-photo="gallery"]');
+    toque(galeria, 'touchstart', 300, 700);
+    toque(galeria, 'touchend', 300, 700);
+    check('o botao da galeria abre o seletor no fim do toque', abriu === 1, abriu);
+    toque(galeria, 'touchstart', 300, 700);
+    toque(galeria, 'touchend', 360, 700);
+    check('arrastar em cima do botao da galeria nao abre o seletor', abriu === 1, abriu);
   }
 
   done();

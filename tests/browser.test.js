@@ -532,6 +532,37 @@ const FAKE_DRIVE = `
     check('o conteudo da barra e mais largo que a tela, entao ela rola',
       medida.conteudo > medida.visivel, medida);
     check('o alvo de dedo tem pelo menos 44px', medida.larguraBotao >= 44, medida);
+
+    // ── Arrastar o dedo EM CIMA de um botao rola a barra ──
+    // O app cancelava o comeco do toque nos botoes (pra nao roubar o foco do editor e fechar o
+    // teclado) e com isso matava o pan: sobrava a fresta de 6px entre os botoes e a borda da
+    // barra, que e o "algo muito fino" do relato. So aqui da pra provar o contrario, porque quem
+    // rola e o navegador, e o jsdom nao rola nada.
+    await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+    const alvo = await js(`(() => {
+      const b = document.querySelector('.toolbar-btn[data-format="quote"]').getBoundingClientRect();
+      return { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) };
+    })()`);
+    const textoAntes = await js('__App.Editor.texto()');
+    let rolou = false;
+    // Toque injetado entra numa fila diferente da leitura, e o navegador as vezes desiste do
+    // gesto no meio (o touchcancel do cenario 10): o arrasto e refeito ate tres vezes
+    for (let tentativa = 1; tentativa <= 3 && !rolou; tentativa++) {
+      await js('document.querySelector(".toolbar").scrollLeft = 0; "ok"');
+      await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: alvo.x, y: alvo.y }] });
+      for (let i = 1; i <= 8; i++) {
+        await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: alvo.x - i * 12, y: alvo.y }] });
+        await sleep(16);
+      }
+      rolou = await esperar('document.querySelector(".toolbar").scrollLeft > 20', 3000);
+      await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      if (!rolou) console.log(`     (tentativa ${tentativa} de rolar a barra perdida)`);
+    }
+    check('o dedo arrastado em cima de um botao rola a barra', rolou,
+      await js('document.querySelector(".toolbar").scrollLeft'));
+    check('e o arrasto nao formatou nada: rolar nao e tocar',
+      await js('__App.Editor.texto()') === textoAntes, await js('__App.Editor.texto()'));
+    await send('Emulation.setTouchEmulationEnabled', { enabled: false });
     await send('Emulation.clearDeviceMetricsOverride');
 
     // ── O bloco de propriedades e os colchetes que nao sao link saem como texto comum ──

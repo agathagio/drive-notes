@@ -415,6 +415,11 @@ const App = {
         compartimentoDoHistorico.of(history()),
         drawSelection(),
         lineWrapping,
+        // O CM6 põe autocapitalize="off" na área de escrita dele, e com isso o teclado do Android
+        // parou de subir a primeira letra de cada frase, que é o que o editor antigo (um
+        // contenteditable comum) deixava acontecer. A correção ortográfica segue desligada, como
+        // vem da biblioteca: o texto é markdown, cheio de marcador que ela sublinharia.
+        EditorView.contentAttributes.of({ autocapitalize: 'sentences' }),
         // Acima do Enter que o markdown() instala em Prec.high: ver o comentário do enterDoApp
         Prec.highest(keymap.of([{ key: 'Enter', run: enterDoApp }])),
         markdown({ base: markdownLanguage, codeLanguages: [] }),
@@ -523,12 +528,40 @@ const App = {
         const primeira = view.state.doc.lineAt(sel.from).number;
         let ultima = view.state.doc.lineAt(sel.to).number;
         if (!sel.empty && ultima > primeira && sel.to <= view.state.doc.line(ultima).from) ultima--;
+        // Só o marcador é trocado, nunca a linha inteira: uma posição que estava DENTRO de um
+        // trecho substituído volta pro começo dele, e por isso tocar em lista, tarefa, título ou
+        // citação mandava o cursor pro início da linha, longe de onde se estava escrevendo.
         const mudancas = [];
+        const trocas = new Map();
         for (let n = primeira; n <= ultima; n++) {
           const linha = view.state.doc.line(n);
-          mudancas.push({ from: linha.from, to: linha.to, insert: App.toggleLinePrefix(linha.text, formato.line) });
+          const troca = App.linePrefixChange(linha.text, formato.line);
+          trocas.set(n, troca);
+          mudancas.push({ from: linha.from + troca.from, to: linha.from + troca.to, insert: troca.insert });
         }
-        view.dispatch({ changes: mudancas, userEvent: 'input' });
+        // Onde uma posição do texto de antes vai parar. Quem estava no texto anda junto com ele;
+        // quem estava no marcador antigo, ou antes dele, para logo depois do marcador novo, que é
+        // de onde se continua digitando numa linha que acabou de virar item de lista.
+        const mover = (pos) => {
+          const linha = view.state.doc.lineAt(pos);
+          let acumulado = 0;
+          for (let n = primeira; n < Math.min(linha.number, ultima + 1); n++) {
+            const t2 = trocas.get(n);
+            acumulado += t2.insert.length - (t2.to - t2.from);
+          }
+          const troca = trocas.get(linha.number);
+          if (!troca) return pos + acumulado;
+          const coluna = pos - linha.from;
+          const nova = coluna < troca.to
+            ? troca.from + troca.insert.length
+            : coluna + troca.insert.length - (troca.to - troca.from);
+          return linha.from + acumulado + nova;
+        };
+        view.dispatch({
+          changes: mudancas,
+          selection: { anchor: mover(sel.anchor), head: mover(sel.head) },
+          userEvent: 'input',
+        });
         view.focus();
       },
       decorarEmbeds: (fn) => {
@@ -2751,8 +2784,11 @@ const App = {
     this.markDirty();
   },
 
-  /** Put `prefix` at the start of the line, replacing any other block marker; take it off if it is already there */
-  toggleLinePrefix(line, prefix) {
+  /** The smallest edit that puts `prefix` at the start of the line, replacing any other block marker,
+      or takes it off when it is already there: `{ from, to, insert }`, in columns of the line.
+      The editor needs the change this narrow to keep the caret where the writing was; whoever only
+      wants the line's new text goes through toggleLinePrefix. */
+  linePrefixChange(line, prefix) {
     const kindOf = (marker) => {
       if (marker.startsWith('#')) return 'heading';
       if (marker.startsWith('>')) return 'quote';
@@ -2760,9 +2796,19 @@ const App = {
       if (/^[-*+]/.test(marker)) return 'list';
       return marker ? 'ordered' : '';
     };
-    const [, indent, marker = '', rest] =
+    const [, indent, marker = ''] =
       /^(\s*)((?:#{1,6}|[0-9]{1,9}[).]|>|[-*+](?: \[[ xX]\])?)\s+)?(.*)$/.exec(line);
-    return kindOf(marker) === kindOf(prefix) ? indent + rest : indent + prefix + rest;
+    return {
+      from: indent.length,
+      to: indent.length + marker.length,
+      insert: kindOf(marker) === kindOf(prefix) ? '' : prefix,
+    };
+  },
+
+  /** Put `prefix` at the start of the line, replacing any other block marker; take it off if it is already there */
+  toggleLinePrefix(line, prefix) {
+    const { from, to, insert } = this.linePrefixChange(line, prefix);
+    return line.slice(0, from) + insert + line.slice(to);
   },
 
   // ── Photo into the note ──
@@ -3158,6 +3204,47 @@ const App = {
     this.Editor.rolarAteOCursor();
   },
 
+  // O quanto o dedo pode andar e o toque ainda contar como toque, em pixels. Acima disso foi
+  // arrasto, e arrasto na barra é rolagem. O Android decide o próprio scroll por uma distância
+  // parecida (uns 8dp).
+  ARRASTO_MAX: 10,
+
+  /** Botão da barra: tocado com o teclado aberto e com a barra rolando de lado, o que são duas
+      exigências que brigam. Ele não pode roubar o foco do editor (o teclado fecharia e o cursor
+      sumiria) e não pode engolir o arrasto que rola a barra, que não cabe na tela.
+
+      A saída é cancelar o FIM do toque em vez do começo. Cancelar o `touchstart`, que era o que o
+      app fazia, impede o foco mas também impede a rolagem: sobrava rolar pela fresta de 6px entre
+      os botões e a borda da barra. Cancelar só o `touchend` impede do mesmo jeito o clique
+      sintético (e com ele o foco), e deixa o navegador rolar enquanto o dedo anda. Por isso a ação
+      mora no `touchend`; o `click` é o caminho do mouse e do teclado.
+
+      Arrastou mais que ARRASTO_MAX: foi rolagem, o botão não age. (Rolagem longa nem chega aqui, o
+      navegador manda `touchcancel` assim que assume o gesto.) */
+  bindToolbarButton(btn, agir) {
+    let inicio = null;
+    btn.addEventListener('touchstart', (e) => {
+      const toque = e.touches?.[0];
+      inicio = { x: toque?.clientX, y: toque?.clientY };
+    }, { passive: true });
+    // O navegador que assume a rolagem avisa por aqui e o gesto deixa de ser um toque no botão
+    btn.addEventListener('touchcancel', () => { inicio = null; }, { passive: true });
+    btn.addEventListener('touchend', (e) => {
+      // Cancelado sempre: é o que segura o teclado, e também o que impede o clique sintético de
+      // agir de novo depois de um arrasto
+      e.preventDefault();
+      const gesto = inicio;
+      inicio = null;
+      if (!gesto) return;
+      const toque = e.changedTouches?.[0];
+      const arrastou = toque && Number.isFinite(gesto.x)
+        && Math.hypot(toque.clientX - gesto.x, toque.clientY - gesto.y) > this.ARRASTO_MAX;
+      if (!arrastou) agir();
+    }, { passive: false });
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+    btn.addEventListener('click', () => agir());
+  },
+
   /** Keep toolbar visible above virtual keyboard using visualViewport API */
   initToolbarKeyboardHandler() {
     const toolbar = document.querySelector('.toolbar');
@@ -3187,8 +3274,9 @@ const App = {
     // Header buttons
     this.els.btnNew.addEventListener('click', () => this.newFile());
     this.els.btnOpen.addEventListener('click', () => this.browseVault());
-    // Save is tapped in the middle of writing: like the toolbar buttons below, it must not take the
-    // focus (and the keyboard, and the caret) away from the editor
+    // Save is tapped in the middle of writing: it must not take the focus (and the keyboard, and the
+    // caret) away from the editor. Here the whole touch is cancelled, and not just its end as in the
+    // toolbar (bindToolbarButton): there is nothing to scroll in the header, so nothing to make room for
     this.els.btnSave?.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
     this.els.btnSave?.addEventListener('touchend', (e) => {
       e.preventDefault();
@@ -3240,58 +3328,34 @@ const App = {
       if (e.key === 'Escape') this.hideModal();
     });
 
-    // Desfazer e refazer: tocados no meio da escrita, entao nao podem roubar o foco (ver a nota
-    // dos botoes de formatacao abaixo)
+    // Desfazer e refazer
     document.querySelectorAll('.toolbar-btn[data-history]').forEach(btn => {
       // So marca a nota como suja se algo mudou de verdade. Sem a condicao, tocar em desfazer numa
       // nota recem aberta (pilha vazia, nada a desfazer) sujava a nota, e trinta segundos depois o
       // autosave gravava no Drive com o updated de hoje sem nenhuma edicao ter acontecido.
-      const agir = () => {
+      this.bindToolbarButton(btn, () => {
         const mudou = btn.dataset.history === 'undo' ? this.Editor.desfazer() : this.Editor.refazer();
         if (mudou) this.markDirty();
-      };
-      btn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
-      btn.addEventListener('touchend', (e) => { e.preventDefault(); agir(); }, { passive: false });
-      btn.addEventListener('mousedown', (e) => e.preventDefault());
-      btn.addEventListener('click', agir);
+      });
     });
 
-    // Toolbar buttons: prevent focus steal so the virtual keyboard stays open.
-    // Cancelling touchstart also cancels the click that would follow, so on touch the
-    // action runs on touchend; click is what a mouse or a keyboard produces.
     document.querySelectorAll('.toolbar-btn[data-format]').forEach(btn => {
-      btn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
-      btn.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        this.applyFormat(btn.dataset.format);
-      }, { passive: false });
-      btn.addEventListener('mousedown', (e) => e.preventDefault());
-      btn.addEventListener('click', () => this.applyFormat(btn.dataset.format));
+      this.bindToolbarButton(btn, () => this.applyFormat(btn.dataset.format));
     });
 
-    // Photo buttons: same touch handling as the formatting buttons. The file picker only opens from
+    // Photo buttons: same touch handling as the rest of the toolbar. The file picker only opens from
     // inside a tap, and touchend counts as one.
     document.querySelectorAll('.toolbar-btn[data-photo]').forEach(btn => {
-      btn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
-      btn.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        this.pickPhoto(btn.dataset.photo);
-      }, { passive: false });
-      btn.addEventListener('mousedown', (e) => e.preventDefault());
-      btn.addEventListener('click', () => this.pickPhoto(btn.dataset.photo));
+      this.bindToolbarButton(btn, () => this.pickPhoto(btn.dataset.photo));
     });
     this.els.photoInput.addEventListener('change', () => {
       const picked = [...this.els.photoInput.files];
       if (picked.length) this.insertPhotos(picked);
     });
 
-    // Drawing: the pencil sits with the photo buttons and gets the same touch handling, because it
-    // is tapped with the keyboard open (see the toolbar note above)
+    // Drawing: the pencil sits with the photo buttons and is tapped with the keyboard open too
     const pencil = document.querySelector('.toolbar-btn[data-sketch]');
-    pencil?.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
-    pencil?.addEventListener('touchend', (e) => { e.preventDefault(); this.sketchOpen(); }, { passive: false });
-    pencil?.addEventListener('mousedown', (e) => e.preventDefault());
-    pencil?.addEventListener('click', () => this.sketchOpen());
+    if (pencil) this.bindToolbarButton(pencil, () => this.sketchOpen());
 
     this.els.sketchCancel.addEventListener('click', () => this.sketchCancel());
     this.els.sketchColors.addEventListener('click', (e) => {
