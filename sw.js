@@ -1,5 +1,5 @@
 // Drive Notes: Service Worker
-const CACHE_NAME = 'drivenotes-v29';
+const CACHE_NAME = 'drivenotes-v30';
 
 // Editor, renderer and sanitizer come from CDNs; without them offline the app falls back
 // to a bare textarea and plain-text reading. Must match the script tags in index.html.
@@ -67,6 +67,14 @@ self.addEventListener('fetch', (event) => {
     url.hostname === 'apis.google.com' ||
     url.hostname === 'accounts.google.com'
   ) {
+    return;
+  }
+
+  // As paginas de experimento em /lab/ ficam de fora do cache. Elas existem pra ser
+  // trocadas e reabertas no celular a cada ajuste, e o cache-first abaixo devolveria a
+  // versao anterior: o mesmo "abrir e fechar duas vezes" que ja e dor no app viraria dor
+  // no proprio lugar onde a gente esta tentando medir uma coisa.
+  if (url.origin === self.location.origin && url.pathname.includes('/lab/')) {
     return;
   }
 
