@@ -86,7 +86,9 @@ const SETUP = `
     await shot('4b-leitura-imagem');
     await js(`__App.setMode('edit'); 'ok'`);
     await shot('5-edicao');
-    await js(`__App.editor.e.scrollTop = 1e6; 'ok'`);
+    // Pelo fim da nota, que e onde mora a foto: quem rola por dentro e o .cm-scroller, e o caminho
+    // da fachada (cursor no fim + rolar ate ele) evita depender de qual elemento do CM6 e esse
+    await js(`__App.Editor.cursorNoFim(); __App.Editor.rolarAteOCursor(); 'ok'`);
     await shot('5b-edicao-imagem');
     await js(`__App.promptRename(); 'ok'`);
     await shot('6-renomear');

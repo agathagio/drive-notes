@@ -22,6 +22,10 @@
   --toolbar-bg: #242229;
   --button-bg: #2f2c36;
   --button-hover: #3a3644;
+  /* Fundo do código, na leitura e no editor. Branco transparente, e não um cinza fixo, pra
+     funcionar por cima de qualquer uma das camadas escuras. Quem usa no editor é o realce de
+     sintaxe do CodeMirror, montado no app.js: ele lê esta variável, não um hex próprio. */
+  --code-bg: rgba(255,255,255,0.08);
   /* Desbotados de propósito: os cheios do Material antigo gritavam mais alto que o nome da nota */
   --success: #6bbf7b;
   --warning: #e0a458;
@@ -173,9 +177,8 @@ body {
   flex-direction: column;
 }
 
-/* TinyMDE injects a child <div class="TinyMDE"> inside #editor.
-   Both need to participate in the flex chain so the editor scrolls
-   internally instead of overflowing the container. */
+/* O editor monta a árvore dele dentro do #editor, e os dois precisam entrar na cadeia de flex
+   pra o texto rolar por dentro em vez de estourar o container. */
 #editor {
   flex: 1 1 0;
   min-height: 0;
@@ -183,52 +186,16 @@ body {
   flex-direction: column;
 }
 
-/* TinyMDE editor */
-.TinyMDE {
-  flex: 1 1 0;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 16px;
-  font-family: var(--font-mono);
-  font-size: 15px;
-  line-height: 1.6;
-  background: var(--bg-editor);
-  color: var(--text-primary);
-  outline: none;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
-}
-
-/* TinyMDE inline styling overrides */
-/* Class names are the ones TinyMDE 0.1.8 actually emits (TMH1..6, TMStrong, TMEm),
-   not the obvious ones. Check dist/tiny-mde.js before adding a selector here. */
-.TinyMDE .TMH1 { font-size: 1.5em; font-weight: 700; color: var(--accent-hover); }
-.TinyMDE .TMH2 { font-size: 1.3em; font-weight: 600; color: var(--accent-hover); }
-.TinyMDE .TMH3 { font-size: 1.1em; font-weight: 600; color: var(--accent-hover); }
-.TinyMDE .TMH4,
-.TinyMDE .TMH5,
-.TinyMDE .TMH6 { font-weight: 600; color: var(--accent-hover); }
-.TinyMDE .TMStrong { font-weight: 700; }
-.TinyMDE .TMEm { font-style: italic; }
-.TinyMDE .TMCode { background: rgba(255,255,255,0.08); padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
-.TinyMDE .TMLink { color: var(--accent-hover); text-decoration: underline; }
-/* TinyMDE reads any [text in brackets] as a reference link with no definition:
-   frontmatter tags, [!note] callouts, [x] tasks and [[wikilinks]] all land here.
-   Keep them looking like plain text. */
-.TinyMDE .TMLink.TMLinkLabel_Invalid { color: inherit; text-decoration: none; }
-.TinyMDE .TMMark { color: var(--text-secondary); }
-.TinyMDE .TMBlockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--text-secondary); }
-
 /* ── Editor CodeMirror 6 ──
    O CM6 monta .cm-editor > .cm-scroller > .cm-content dentro do #editor, e divide entre os três
-   o que o .TinyMDE fazia sozinho: quem entra no flex é o .cm-editor, quem rola por dentro é o
-   .cm-scroller (e é nele que o CM6 espera as regras de fonte), e o recuo do texto é do .cm-content.
-   Fonte, tamanho, entrelinha, recuo e fundo são os mesmos do .TinyMDE acima, de propósito.
-   As cores do texto vêm do syntaxHighlighting no app.js, não daqui.
-   Uma ressalva no recuo: os 16px do .cm-content são os mesmos, mas o tema de fábrica do CM6 põe
-   `padding: 0 2px 0 6px` na .cm-line, então o texto começa a 22px da borda e termina a 18px, onde
-   o .TinyMDE tinha 16px dos dois lados. Fica assim de propósito: esses 6px são o que impede o
-   cursor na coluna 0 de ficar colado na borda.
+   o trabalho: quem entra no flex é o .cm-editor, quem rola por dentro é o .cm-scroller (e é nele
+   que o CM6 espera as regras de fonte), e o recuo do texto é do .cm-content.
+   Fonte, tamanho, entrelinha, recuo e fundo são os mesmos que o editor tinha antes da troca, de
+   propósito. As cores do texto vêm do syntaxHighlighting no app.js, não daqui.
+   Uma ressalva no recuo: os 16px do .cm-content são os de sempre, mas o tema de fábrica do CM6 põe
+   `padding: 0 2px 0 6px` na .cm-line, então o texto começa a 22px da borda e termina a 18px, e não
+   a 16px dos dois lados. Fica assim de propósito: esses 6px são o que impede o cursor na coluna 0
+   de ficar colado na borda.
 
    Todo seletor daqui pra baixo leva o .cm-editor na frente, e não é enfeite: o CM6 injeta o tema
    de fábrica com a classe dele na frente (`.ͼ1 .cm-scroller`), então um `.cm-scroller` sozinho
@@ -280,7 +247,7 @@ body {
   color: var(--text-secondary);
 }
 
-/* Fallback textarea (if TinyMDE fails to load) */
+/* Fallback textarea (if the CodeMirror bundle fails to load) */
 .editor-fallback {
   flex: 1 1 0;
   min-height: 0;
@@ -434,7 +401,7 @@ body {
   font-family: var(--font-mono);
 }
 .preview-container code {
-  background: rgba(255,255,255,0.08);
+  background: var(--code-bg);
   padding: 1px 4px;
   border-radius: 3px;
   font-family: var(--font-mono);

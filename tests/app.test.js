@@ -1,8 +1,9 @@
 // Runs the real app.js inside jsdom against an in-memory fake Drive: saving, conflicts, drafts,
 // reading view, navigation, rename, login, formatting and the file browser.
 //   npm test
-// The editor here is the fallback textarea, except in scenario 40, which loads TinyMDE into the same
-// window to drive its Enter handling. What needs layout, a real caret or a keyboard: browser.test.js.
+// The editor here is the fallback textarea, except where a scenario asks for boot({ editor: true }),
+// which loads the real CodeMirror bundle into the same window (scenario 39b onwards). What needs
+// layout, a real caret or a keyboard: browser.test.js.
 const fs = require('fs');
 const path = require('path');
 const { JSDOM } = require('jsdom');
@@ -632,24 +633,17 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
       && leva[1] === leva[0].replace('.jpg', '-2.jpg') && leva[2] === leva[0].replace('.jpg', '-3.jpg'), leva);
 
     // No celular o editor volta do seletor sem cursor: cada foto tem que cair embaixo da anterior,
-    // nao todas na posicao guardada (a ultima ficaria em cima)
-    const fake = {
-      lines: ['linha um', ''],
-      getSelection: () => null,
-      paste(text, pos) {
-        const head = this.lines.slice(0, pos.row).concat(this.lines[pos.row].slice(0, pos.col)).join('\n');
-        this.lines = (head + text + this.lines[pos.row].slice(pos.col) + this.lines.slice(pos.row + 1).map(l => '\n' + l).join('')).split('\n');
-      },
-    };
-    const editorBefore = App.editor;
-    const implBefore = App.Editor._impl;
-    App.editor = fake;
-    App.Editor._impl = App.apiTinyMDE(fake);
-    let at = { row: 1, col: 0 };
-    for (const n of [1, 2, 3]) at = App.insertOnOwnLine(`![[f${n}]]`, at) || at;
-    App.editor = editorBefore;
-    App.Editor._impl = implBefore;
-    check('sem cursor no editor, a fila continua na ordem', fake.lines.join('\n') === 'linha um\n![[f1]]\n![[f2]]\n![[f3]]\n', fake.lines);
+    // nao todas na posicao guardada (a ultima ficaria em cima). No editor de verdade, e a marca
+    // devolvida por cada insercao que segura essa ordem, entao a prova roda no CM6, nao no textarea
+    {
+      const { App: comEditor } = await boot({ editor: true });
+      comEditor.Editor.definirTexto('linha um');
+      let at = comEditor.Editor.marcarCursor();
+      check('o editor voltou do seletor sem cursor nenhum', at === null, at);
+      for (const n of [1, 2, 3]) at = comEditor.insertOnOwnLine(`![[f${n}]]`, at) || at;
+      check('sem cursor no editor, a fila continua na ordem',
+        comEditor.Editor.texto() === 'linha um\n![[f1]]\n![[f2]]\n![[f3]]\n', comEditor.Editor.texto());
+    }
 
     // Erro no meio: o que ja entrou fica, o resto nem sobe
     const kept = ta.value;
@@ -1699,10 +1693,19 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     App.Editor.inserirEmLinhaPropria('![[foto.png]]', marca);
     check('inseriu em linha propria', App.Editor.texto().includes('![[foto.png]]'), App.Editor.texto());
 
+    // A lib do editor tem que ficar atras da fachada: quem esta fora da secao `Editor` fala com
+    // App.Editor e mais nada. A secao e delimitada pelos dois marcadores de comentario (o dela e o
+    // da secao seguinte), e o que sobra dos dois lados e onde moram os chamadores. O vocabulario
+    // procurado e o do CM6; `\.dispatch\(` nao pega o `dispatchEvent(` que o app usa no DOM.
+    const fonteDoApp = require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
+    const foraDaFachada = fonteDoApp.split('// ── Editor ──')[0]
+      + fonteDoApp.split('// ── Google Auth ──').slice(1).join('');
+    const VOCABULARIO_DA_LIB = /window\.CM6|EditorView|view\.state|\.dispatch\(|doc\.line/;
     check('nenhum chamador fora da fachada toca a lib',
-      !/this\.editor\.(getContent|setContent|paste|getSelection|setSelection|lines|lineElements|setCommandState|wrapSelection)/
-        .test(require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8')
-          .split('// ── Editor ──')[0]));
+      !VOCABULARIO_DA_LIB.test(foraDaFachada), VOCABULARIO_DA_LIB.exec(foraDaFachada)?.[0]);
+    // ... e a checagem acima so vale se ela souber achar a lib quando ela aparece de verdade
+    check('a checagem acima enxerga a lib: dentro da fachada o vocabulario esta la',
+      VOCABULARIO_DA_LIB.test(fonteDoApp.split('// ── Editor ──')[1].split('// ── Google Auth ──')[0]));
   }
 
   console.log('39d. CM6: texto, desfazer e a marca de cursor');
@@ -1816,7 +1819,7 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     // Regressao: com dois itens na lista (o de um item so cai no caso acima, que nao passa por
     // aqui), sem nonTightLists:false o CM6 gastava tres Enters pra sair de uma lista de tarefa: o
     // segundo inseria uma linha em branco e mantinha a caixinha, so o terceiro encerrava de vez. O
-    // TinyMDE encerrava no segundo, e e o comando configurado no keymap do app (nao o
+    // app sempre encerrou no segundo, e e o comando configurado no keymap dele (nao o
     // insertNewlineContinueMarkup cru) que faz isso continuar valendo.
     {
       const comandoDoApp = w.CM6.insertNewlineContinueMarkupCommand({ nonTightLists: false });

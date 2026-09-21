@@ -1,24 +1,27 @@
 // Drive Notes: Service Worker
-const CACHE_NAME = 'drivenotes-v30';
+const CACHE_NAME = 'drivenotes-v31';
 
-// Editor, renderer and sanitizer come from CDNs; without them offline the app falls back
-// to a bare textarea and plain-text reading. Must match the script tags in index.html.
+// Renderer and sanitizer come from CDNs; without them offline the reading view falls back to
+// plain text. Must match the script tags in index.html.
 // The Google Fonts stylesheet is here too, but the font files it names live on
 // fonts.gstatic.com under urls we cannot predict: those are caught at runtime by CDN_HOSTS
 // the first time a page renders, so the second visit already has the letters offline.
+//
+// O editor não entra nesta lista: ele é o vendor/codemirror.js, versionado no repositório e
+// guardado logo abaixo, junto com os arquivos estáticos.
 const CDN_ASSETS = [
-  'https://unpkg.com/tiny-markdown-editor@0.1.8/dist/tiny-mde.min.js',
   'https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js',
   'https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js',
   'https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap',
 ];
-const CDN_HOSTS = ['unpkg.com', 'cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com'];
+const CDN_HOSTS = ['cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 
 // Static assets to cache for offline use
 const STATIC_ASSETS = [
   './index.html',
   './style.css',
   './app.js',
+  './vendor/codemirror.js',
   './manifest.json',
   './icon-192.png',
   './icon-512.png',

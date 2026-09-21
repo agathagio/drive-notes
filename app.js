@@ -138,10 +138,10 @@ const App = {
   },
 
   // ── Editor ──
-  // O app fala só com App.Editor. Atrás dele há três implementações (o CodeMirror 6, o TinyMDE
-  // antigo e um textarea de reserva); nenhuma delas vaza pra fora daqui. Em especial, linha e
-  // coluna ({row, col}) são vocabulário do TinyMDE: quem precisa de posição recebe uma marca
-  // opaca e devolve ela.
+  // O app fala só com App.Editor. Atrás dele há duas implementações (o CodeMirror 6 e um textarea
+  // de reserva); nenhuma delas vaza pra fora daqui. Em especial, posição dentro do texto é
+  // vocabulário de cada implementação: quem precisa de posição recebe uma marca opaca e devolve
+  // ela.
   //
   // Duas regras que valem pra toda implementação, presente ou futura:
   //
@@ -231,8 +231,8 @@ const App = {
       },
     });
 
-    // Decoração de embed. Ao contrário do TinyMDE, que zerava class e style a cada redesenho
-    // e obrigava a reaplicar, aqui a decoração é parte do estado e sobrevive sozinha.
+    // Decoração de embed. Ela é parte do estado do editor, então sobrevive sozinha a cada
+    // redesenho da linha: ninguém precisa reaplicar class e style depois de uma mudança.
     let infoDaLinha = () => null;    // trocada por decorarEmbeds
     let ultimaAssinatura = '';       // pra saber se alguma linha mudou de verdade
     const refazerEmbeds = StateEffect.define();
@@ -297,7 +297,7 @@ const App = {
       { tag: t.emphasis, fontStyle: 'italic' },
       { tag: t.link, color: 'var(--accent-hover)', textDecoration: 'underline' },
       { tag: t.url, color: 'var(--accent-hover)' },
-      { tag: t.monospace, background: 'rgba(255,255,255,0.08)' },
+      { tag: t.monospace, background: 'var(--code-bg)' },
       { tag: t.quote, color: 'var(--text-secondary)' },
       { tag: [t.processingInstruction, t.contentSeparator], color: 'var(--text-secondary)' },
     ]);
@@ -327,7 +327,7 @@ const App = {
         keymap.of([
           // nonTightLists:false: sem isso, sair de uma lista de tarefa de um item so custa tres
           // Enters em vez de um (o segundo insere uma linha em branco no meio e so o terceiro
-          // encerra). O TinyMDE encerrava no segundo Enter, e e isso que continua acontecendo aqui.
+          // encerra). Com ele, o segundo Enter encerra a lista, que e o que o app sempre fez.
           { key: 'Enter', run: insertNewlineContinueMarkupCommand({ nonTightLists: false }) },
           ...defaultKeymap,
           ...historyKeymap,
@@ -453,159 +453,6 @@ const App = {
     view.dispatch({ changes: { from: view.state.doc.length, insert: texto }, userEvent: 'input.type' });
   },
 
-  /** O editor rico de hoje, o TinyMDE 0.1.8. A instância fica pendurada em App.editor porque é por
-      lá que a suíte de navegador dirige o editor; as funções da fachada não leem de lá, recebem a
-      instância pronta. */
-  implTinyMDE(elemento, aoMudar) {
-    const ed = new TinyMDE.Editor({ element: elemento });
-    this.editor = ed;
-
-    ed.addEventListener('change', () => {
-      aoMudar();
-    });
-    this.guardComposition();
-
-    return this.apiTinyMDE(ed);
-  },
-
-  /** As onze funções da fachada sobre uma instância do TinyMDE já montada. Separado da construção
-      para que um editor de mentira possa ocupar o lugar dela (é o que o teste da fila de fotos faz). */
-  apiTinyMDE(ed) {
-    return {
-      texto() {
-        return ed.getContent();
-      },
-
-      definirTexto(t) {
-        ed.setContent(t);
-      },
-
-      focar() {
-        // TinyMDE: o foco vai no contentEditable de dentro, que é o ed.e
-        ed.e?.focus();
-      },
-
-      cursorNoFim() {
-        const row = ed.lines.length - 1;
-        ed.setSelection({ row, col: ed.lines[row].length });
-      },
-
-      marcarCursor() {
-        return ed.getSelection(false);
-      },
-
-      inserirEmLinhaPropria(texto, marca) {
-        const last = ed.lines.length - 1;
-        const wanted = ed.getSelection(false) || marca || { row: last, col: ed.lines[last].length };
-        // A nota pode ter encolhido enquanto a foto subia
-        const row = Math.min(wanted.row, last);
-        const pos = { row, col: Math.min(wanted.col, ed.lines[row].length) };
-        const before = ed.lines[row].slice(0, pos.col).trim() ? '\n' : '';
-        ed.paste(`${before}${texto}\n`, pos, { ...pos });
-        return { row: pos.row + (before ? 2 : 1), col: 0 };
-      },
-
-      formatar(nome) {
-        const format = App.FORMATS[nome];
-        if (!format) return;
-        if (format.command) {
-          ed.setCommandState(format.command, ed.getCommandState()[format.command] !== true);
-        } else if (format.wrap) {
-          ed.wrapSelection(...format.wrap);
-        } else {
-          // No TinyMDE command for this marker: same steps its own line commands take
-          const focus = ed.getSelection(false);
-          const anchor = ed.getSelection(true) || focus;
-          if (!focus) return;
-          const first = Math.min(focus.row, anchor.row);
-          const last = Math.max(focus.row, anchor.row);
-          for (let row = first; row <= last; row++) {
-            ed.lines[row] = App.toggleLinePrefix(ed.lines[row], format.line);
-            ed.lineDirty[row] = true;
-          }
-          ed.updateFormatting();
-          ed.setSelection({ row: last, col: ed.lines[last].length });
-        }
-      },
-
-      // O TinyMDE não tem pilha própria de desfazer: é por isso que a troca de editor existe
-      desfazer() { return false; },
-      refazer() { return false; },
-
-      decorarEmbeds(infoDaLinha) {
-        let changed = false;
-
-        ed.lines.forEach((line, row) => {
-          const el = ed.lineElements[row];
-          if (!el?.style) return;
-          const info = infoDaLinha(line);
-
-          if (!info) {
-            if (el.classList.contains('embed-line')) {
-              el.classList.remove('embed-line');
-              el.style.removeProperty('--embed');
-              el.style.removeProperty('--embed-h');
-              changed = true;
-            }
-            return;
-          }
-
-          // As wide as the line at most, never blown up, and a tall screenshot does not take over the screen
-          const width = Math.min(el.clientWidth || info.width, info.width);
-          const height = `${Math.round(Math.min(width * info.height / info.width, App.EMBED_MAX_HEIGHT))}px`;
-          // TinyMDE wipes class and style whenever it redraws the line, so this is put back after every change
-          if (!el.classList.contains('embed-line') || el.style.getPropertyValue('--embed-h') !== height) {
-            el.classList.add('embed-line');
-            el.style.setProperty('--embed', `url("${info.url}")`);
-            el.style.setProperty('--embed-h', height);
-            changed = true;
-          }
-        });
-
-        return changed;
-      },
-
-      rolarAteOCursor() {
-        const scroller = ed.e;
-        const selection = window.getSelection();
-        if (!scroller || !selection.rangeCount || !scroller.contains(selection.focusNode)) return;
-
-        // A collapsed range at the end of a line can report an empty box: use its line instead
-        let rect = selection.getRangeAt(0).getBoundingClientRect();
-        if (!rect.height) {
-          const node = selection.focusNode;
-          rect = (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement).getBoundingClientRect();
-        }
-        const box = scroller.getBoundingClientRect();
-        if (rect.bottom > box.bottom - 12) scroller.scrollTop += rect.bottom - box.bottom + 32;
-        else if (rect.top < box.top) scroller.scrollTop -= box.top - rect.top + 12;
-      },
-    };
-  },
-
-  /** TinyMDE redraws the line and resets the caret on every input event. While the keyboard is
-      composing (voice typing, swipe, word suggestions) that throws away the region the keyboard is
-      working on, and each partial result lands as new text: "NãoNão consigoNão consigo ditar".
-      So composition updates are kept from TinyMDE, and it gets one input event when the composition ends. */
-  guardComposition() {
-    const editable = this.editor.e;
-    if (!editable) return;
-
-    editable.addEventListener('input', (e) => {
-      if (e.isComposing && /CompositionText$/.test(e.inputType || '')) {
-        e.stopImmediatePropagation();
-        this._composed = true;
-        this.markDirty(); // TinyMDE's change event is on hold with the rest
-      }
-    }, true);
-
-    editable.addEventListener('compositionend', () => {
-      if (!this._composed) return;
-      this._composed = false;
-      editable.dispatchEvent(new InputEvent('input', { inputType: 'insertText', bubbles: true }));
-    });
-  },
-
   /** O editor de reserva, para quando a biblioteca não carregou: um textarea puro. Ele toma o lugar
       do elemento no DOM e vira o els.editorElement, que é por onde o resto do app o alcança. */
   implTextarea(elemento, aoMudar) {
@@ -614,7 +461,6 @@ const App = {
     textarea.placeholder = 'Comece a escrever...';
     elemento.replaceWith(textarea);
     this.els.editorElement = textarea;
-    this.editor = null;
 
     textarea.addEventListener('input', () => {
       aoMudar();
@@ -1682,7 +1528,7 @@ const App = {
   // ── Pictures while editing ──
   // A line that is nothing but ![[image]] shows the picture right under it, so a note can be written
   // while looking at what it talks about. The picture is a background of the line plus bottom padding:
-  // the text stays raw markdown and TinyMDE, which rebuilds a line from its text, never meets an <img>.
+  // the text stays raw markdown and the editor, which draws a line from its text, never meets an <img>.
 
   EMBED_LINE: /^\s*!\[\[([^\]\n|#]+\.(?:png|jpe?g|gif|webp|bmp|avif|svg))(?:\|[^\]\n]*)?\]\]\s*$/i,
   EMBED_MAX_HEIGHT: 300,
@@ -2784,17 +2630,17 @@ const App = {
   // ── Toolbar formatting ──
 
   // `wrap` formats go around the selection; `line` formats toggle a marker at the start of every
-  // selected line, wherever the cursor is in it. `command` is the TinyMDE command doing the same job.
+  // selected line, wherever the cursor is in it.
   FORMATS: {
-    bold: { wrap: ['**', '**'], command: 'bold' },
-    // Asterisco e não sublinhado: é o que o app escrevia antes da troca de editor (o TinyMDE ia
-    // pelo `command` e ignorava o `wrap`), e é o que está escrito nas notas que já existem
-    italic: { wrap: ['*', '*'], command: 'italic' },
-    code: { wrap: ['`', '`'], command: 'code' },
+    bold: { wrap: ['**', '**'] },
+    // Asterisco e não sublinhado: é o que o app escrevia antes da troca de editor, e é o que
+    // está escrito nas notas que já existem
+    italic: { wrap: ['*', '*'] },
+    code: { wrap: ['`', '`'] },
     link: { wrap: ['[', '](url)'] },
-    heading: { line: '## ', command: 'h2' },
-    list: { line: '- ', command: 'ul' },
-    quote: { line: '> ', command: 'blockquote' },
+    heading: { line: '## ' },
+    list: { line: '- ' },
+    quote: { line: '> ' },
     checklist: { line: '- [ ] ' },
   },
 
@@ -2970,7 +2816,8 @@ const App = {
   /** Open the drawing screen over the editor. Only from the edit view, with a note open. */
   sketchOpen() {
     if (this.mode !== 'edit' || !this.currentFile || this.sketch) return;
-    // A marca vem a null depois que o foco some, então o cursor é lido antes do blur
+    // O cursor é lido antes do blur: é o lugar onde o desenho foi pedido, e é ele que a marca
+    // tem que guardar. A marca em si sobrevive ao blur e às edições que vierem depois
     const at = this.Editor.marcarCursor();
     // Without the blur the keyboard sits over half the canvas
     document.activeElement?.blur?.();

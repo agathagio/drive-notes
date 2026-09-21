@@ -30,16 +30,21 @@ function tmpDir() {
   return TMP;
 }
 
-/** Versions the app loads in production, read from the script tags in index.html */
+/**
+ * Versions the app loads in production, read from the script tags in index.html.
+ *
+ * So o marked e o dompurify: o editor nao e mais uma CDN com versao no caminho, e sim o
+ * vendor/codemirror.js versionado no repositorio, que nao tem numero nenhum pra comparar.
+ */
 function cdnVersions() {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const find = (name) => new RegExp(`${name}@([0-9.]+)/`).exec(html)?.[1];
-  return { 'tiny-markdown-editor': find('tiny-markdown-editor'), marked: find('marked'), dompurify: find('dompurify') };
+  return { marked: find('marked'), dompurify: find('dompurify') };
 }
 
 function installedVersions() {
   const read = (name) => JSON.parse(fs.readFileSync(path.join(MODULES, name, 'package.json'), 'utf8')).version;
-  return { 'tiny-markdown-editor': read('tiny-markdown-editor'), marked: read('marked'), dompurify: read('dompurify') };
+  return { marked: read('marked'), dompurify: read('dompurify') };
 }
 
 /** Chromium-based browser to drive. Set BROWSER_PATH to pick one. */
