@@ -195,6 +195,18 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     }
     const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
     check('sw.js guarda no cache offline essas mesmas versoes', Object.keys(cdn).every(name => sw.includes(`${name}@${cdn[name]}/`)));
+
+    // O sw.js e quem decide se o celular pega a versao nova ou fica na velha. Arquivo nosso que o
+    // index.html carrega e que nao esta no STATIC_ASSETS nunca entra no cache: o app abre pela
+    // metade sem rede, e ninguem percebe ate o aparelho estar offline. Foi assim que o
+    // vendor/codemirror.js quase ficou de fora na troca de editor.
+    const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    const estaticos = /const STATIC_ASSETS = \[([\s\S]*?)\]/.exec(sw)[1];
+    const nossos = [...html.matchAll(/<script[^>]*\ssrc="(?!https?:|\/\/|data:)([^"]+)"/g)]
+      .map(m => m[1].replace(/^\.\//, ''));
+    check('todo arquivo nosso que o index.html carrega esta no STATIC_ASSETS do sw.js',
+      nossos.length > 0 && nossos.every(src => estaticos.includes(`'./${src}'`)),
+      { nossos, faltando: nossos.filter(src => !estaticos.includes(`'./${src}'`)) });
   }
 
   console.log('1. Trocar de arquivo com edicao pendente salva o arquivo anterior');
@@ -632,16 +644,35 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     check('no mesmo segundo, a segunda e a terceira ganham -2 e -3', /^foto-\d{4}-\d{2}-\d{2}-\d{6}\.jpg$/.test(leva[0])
       && leva[1] === leva[0].replace('.jpg', '-2.jpg') && leva[2] === leva[0].replace('.jpg', '-3.jpg'), leva);
 
-    // No celular o editor volta do seletor sem cursor: cada foto tem que cair embaixo da anterior,
-    // nao todas na posicao guardada (a ultima ficaria em cima). No editor de verdade, e a marca
-    // devolvida por cada insercao que segura essa ordem, entao a prova roda no CM6, nao no textarea
+    // Uma leva de fotos tem que cair uma embaixo da outra, e nao todas na mesma posicao guardada
+    // (a ultima ficaria em cima). Quem segura isso e a marca que cada insercao devolve, entao a
+    // prova roda no editor de verdade, nao no textarea.
     {
       const { App: comEditor } = await boot({ editor: true });
+      const view = comEditor.Editor._impl.view;
+
+      // Caminho de reserva: a camera tocada antes de o dedo encostar no texto. Sem cursor posto, a
+      // foto vai pro fim da nota, e o fim anda junto com a leva.
       comEditor.Editor.definirTexto('linha um');
       let at = comEditor.Editor.marcarCursor();
       check('o editor voltou do seletor sem cursor nenhum', at === null, at);
       for (const n of [1, 2, 3]) at = comEditor.insertOnOwnLine(`![[f${n}]]`, at) || at;
       check('sem cursor no editor, a fila continua na ordem',
+        comEditor.Editor.texto() === 'linha um\n![[f1]]\n![[f2]]\n![[f3]]\n', comEditor.Editor.texto());
+
+      // O caso do celular: o cursor foi posto no texto e o seletor de foto levou o foco embora
+      // (no CM6 a marca sobrevive a isso). So aqui a ordem depende MESMO de cada insercao devolver
+      // a marca da linha seguinte: sem esse retorno, a marca velha e mapeada pra ANTES do que
+      // acabou de entrar e a leva sai de tras pra frente, que e o bug do commit 439b920. Partir de
+      // marca nula, como o caminho de cima, deixaria a ordem certa por acidente.
+      comEditor.Editor.definirTexto('linha um');
+      comEditor.Editor.focar();
+      view.dispatch({ selection: { anchor: 'linha um'.length } });
+      view.contentDOM.blur();
+      at = comEditor.Editor.marcarCursor();
+      check('cursor posto antes de o seletor roubar o foco: a marca existe', !!at, at);
+      for (const n of [1, 2, 3]) at = comEditor.insertOnOwnLine(`![[f${n}]]`, at) || at;
+      check('com cursor posto, a fila empilha a partir dele, na ordem',
         comEditor.Editor.texto() === 'linha um\n![[f1]]\n![[f2]]\n![[f3]]\n', comEditor.Editor.texto());
     }
 
@@ -1700,7 +1731,9 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     const fonteDoApp = require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
     const foraDaFachada = fonteDoApp.split('// ── Editor ──')[0]
       + fonteDoApp.split('// ── Google Auth ──').slice(1).join('');
-    const VOCABULARIO_DA_LIB = /window\.CM6|EditorView|view\.state|\.dispatch\(|doc\.line/;
+    // `Editor\._impl` fecha a fuga mais obvia: um chamador que pegasse a implementacao pela
+    // fachada (`App.Editor._impl.view.focus()`) nao casaria com nenhum dos outros pedacos
+    const VOCABULARIO_DA_LIB = /window\.CM6|EditorView|view\.state|\.dispatch\(|doc\.line|Editor\._impl/;
     check('nenhum chamador fora da fachada toca a lib',
       !VOCABULARIO_DA_LIB.test(foraDaFachada), VOCABULARIO_DA_LIB.exec(foraDaFachada)?.[0]);
     // ... e a checagem acima so vale se ela souber achar a lib quando ela aparece de verdade
@@ -1731,9 +1764,15 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
       App.Editor.texto() === `${NOTA}\n![[foto.png]]\n`, App.Editor.texto());
     check('a insercao devolve marca, e marca nunca e falsy', !!marcaDoFim, marcaDoFim);
 
-    // A leva da galeria, pelo caminho do savePhoto: cada foto usa o retorno da anterior
+    // A leva da galeria, pelo caminho do savePhoto: cada foto usa o retorno da anterior. Parte de
+    // cursor posto de proposito: com marca nula toda insercao cairia no fim do documento e a ordem
+    // sairia certa por acidente, mesmo se o retorno da marca sumisse (o bug do commit 439b920).
     App.Editor.definirTexto('nota com fotos');
+    App.Editor.focar();
+    view.dispatch({ selection: { anchor: 'nota com fotos'.length } });
+    view.contentDOM.blur();
     let at = App.Editor.marcarCursor();
+    check('cursor posto antes de a leva comecar: a marca existe', !!at, at);
     for (const nome of ['um.jpg', 'dois.jpg', 'tres.jpg']) at = App.insertOnOwnLine(`![[${nome}]]`, at) || at;
     check('a leva de fotos sai na ordem em que foi escolhida',
       App.Editor.texto() === 'nota com fotos\n![[um.jpg]]\n![[dois.jpg]]\n![[tres.jpg]]\n', App.Editor.texto());

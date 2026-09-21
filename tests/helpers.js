@@ -121,9 +121,40 @@ async function launch(port) {
   };
   const open = async (url) => { await send('Page.navigate', { url }); await sleep(1200); };
 
+  /**
+   * Espera a pagina responder verdadeiro a `expressao`, em vez de dormir um tempo fixo.
+   * Devolve true se chegou, false se estourou o limite (quem chama decide o que fazer).
+   *
+   * Por que existe: toque e tecla injetados por `Input.dispatch*` entram por uma fila do
+   * navegador que NAO e a mesma do `Runtime.evaluate`. Quando o renderizador headless engasga
+   * (medido: cinco segundos entre o toque e o app reagir), uma leitura marcada no relogio chega
+   * antes de o app ter visto o gesto e a checagem fica vermelha sem nada estar quebrado. Quem
+   * espera uma condicao paga so o tempo que precisa, e no limite devolve false em vez de mentir.
+   *
+   * Espere um sinal ANTERIOR ao que a checagem olha (o app ter registrado o arrasto, e nao a seta
+   * estar pintada): assim uma regressao de verdade continua ficando vermelha, so que mais devagar.
+   * A expressao pode estourar enquanto a pagina nao esta pronta, e isso conta como "ainda nao".
+   */
+  const esperar = async (expressao, limite = 8000, passo = 50) => {
+    let ate = Date.now() + limite;
+    for (;;) {
+      const t0 = Date.now();
+      let pronto = false;
+      try { pronto = await js(`!!(${expressao})`, false) === true; } catch { /* ainda nao */ }
+      // O tempo que o navegador levou pra responder nao conta no limite. Quando ele engasga, a
+      // resposta demora e chega descrevendo um instante anterior aos eventos que ainda estao na
+      // fila: sem descontar, uma unica pergunta lenta gastaria o limite inteiro e a espera
+      // desistiria sem nunca ter perguntado de novo (visto na primeira versao desta funcao).
+      ate += Date.now() - t0;
+      if (pronto) return true;
+      if (Date.now() >= ate) return false;
+      await sleep(passo);
+    }
+  };
+
   await send('Page.enable');
   await send('Emulation.setFocusEmulationEnabled', { enabled: true });
-  return { send, js, open, close: () => { ws.close(); proc.kill(); } };
+  return { send, js, open, esperar, close: () => { ws.close(); proc.kill(); } };
 }
 
 /** Counts and prints checks; done() prints the verdict and exits with it */

@@ -34,7 +34,7 @@ const FAKE_DRIVE = `
 
 (async () => {
   const browser = await launch(9334);
-  const { send, js, open } = browser;
+  const { send, js, open, esperar } = browser;
   try {
     const currentApp = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
 
@@ -442,23 +442,57 @@ const FAKE_DRIVE = `
     await open(buildPage('swipe', currentApp));
     await js(FAKE_DRIVE);
     await js(`__App.browseVault().then(() => 'ok')`);
-    await js(`[...document.querySelectorAll('.browser-item')].find(li => li.textContent.includes('com link')).click(); 'ok'`); await sleep(300);
-    await js(`document.querySelector('#preview-container a.wikilink').click(); 'ok'`); await sleep(400);
+    await js(`[...document.querySelectorAll('.browser-item')].find(li => li.textContent.includes('com link')).click(); 'ok'`);
+    await esperar(`__App.currentFile && __App.currentFile.id === 'N1'`);
+    await js(`document.querySelector('#preview-container a.wikilink').click(); 'ok'`);
+    await esperar(`__App.currentFile && __App.currentFile.id === 'N2' && __App.navStack.length === 3`);
+    // Este cenario era o unico que lia o estado no relogio (`sleep(400)` depois de soltar), e era
+    // o unico intermitente. Duas coisas separam o toque injetado do que o app viu:
+    //
+    // 1. `Input.dispatchTouchEvent` entra por uma fila do navegador que NAO e a do
+    //    `Runtime.evaluate`. Com o renderizador headless engasgado (medido: cinco segundos entre o
+    //    toque e o app reagir), a leitura marcada no relogio chega antes de o app ver o gesto.
+    //    Por isso cada etapa agora espera o app dizer que viu, com `esperar`.
+    // 2. O navegador as vezes manda `touchcancel` no meio da sequencia injetada, e o app faz o
+    //    certo: abandona o gesto (`endSwipe`, sem agir). Isso e artefato da injecao, nao do app,
+    //    entao o arrasto e refeito, ate tres vezes, e so o que sobrar vira checagem.
+    //
+    // O sinal esperado e sempre ANTERIOR ao que as checagens olham (elas olham classe, retangulo
+    // e cor da seta, e o par arquivo/pilha depois do gesto): espera-se o `_swipe.armed` do app e a
+    // pilha mudar. Se a seta parar de ser pintada ou o gesto parar de navegar, fica vermelho.
+    await js(`window.__cancelados = 0; document.addEventListener('touchcancel', () => window.__cancelados++, true); 'ok'`);
+    const LIMITE_DO_GESTO = 4000;
     const drag = async (x0, x1, y, shot) => {
-      await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y }] });
-      for (let i = 1; i <= 8; i++) {
-        await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x0 + (x1 - x0) * i / 8, y }] });
-        await sleep(16);
+      let hint = null;
+      for (let tentativa = 1; tentativa <= 3; tentativa++) {
+        const pilhaAntes = Number(await js('__App.navStack.length'));
+        await js('window.__cancelados = 0; "ok"');
+        await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y }] });
+        for (let i = 1; i <= 8; i++) {
+          await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x0 + (x1 - x0) * i / 8, y }] });
+          await sleep(16);
+        }
+        // `armed` e nao a puxada cheia: o navegador junta movimentos do mesmo quadro e o ultimo as
+        // vezes nao chega (medido: `pull` parando em 119 dos 136 arrastados). O que decide o gesto,
+        // na hora de soltar, e ter passado do gatilho, e e isso que o app anota aqui.
+        const armado = await esperar(`__App._swipe && __App._swipe.armed === true`, LIMITE_DO_GESTO);
+        // O print do meio do gesto so na primeira tentativa: capturar quadro com o dedo na tela e
+        // um dos jeitos de provocar o `touchcancel` que faz a tentativa ser refeita
+        if (shot && tentativa === 1) {
+          const { data } = (await send('Page.captureScreenshot', { format: 'png' })).result;
+          fs.mkdirSync(path.join(ROOT, 'tests', '.tmp'), { recursive: true });
+          fs.writeFileSync(path.join(ROOT, 'tests', '.tmp', shot), Buffer.from(data, 'base64'));
+        }
+        hint = JSON.parse(await js(`(() => { const h = document.getElementById('swipe-hint'); const b = h.getBoundingClientRect();
+          return JSON.stringify({ visible: h.classList.contains('visible'), armed: h.classList.contains('armed'), left: b.left, right: b.right, bg: getComputedStyle(h).backgroundColor }); })()`));
+        await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        let navegou = await esperar(`__App._swipe === null && __App.navStack.length !== ${pilhaAntes}`, LIMITE_DO_GESTO);
+        // Uma ultima leitura direta: o limite pode ter estourado justamente na virada
+        if (!navegou) navegou = Number(await js('__App.navStack.length')) !== pilhaAntes;
+        if (armado && navegou) return hint;
+        console.log(`     (tentativa ${tentativa} do gesto perdida: armado=${armado} navegou=${navegou}`
+          + ` touchcancel=${await js('window.__cancelados')})`);
       }
-      if (shot) {
-        const { data } = (await send('Page.captureScreenshot', { format: 'png' })).result;
-        fs.mkdirSync(path.join(ROOT, 'tests', '.tmp'), { recursive: true });
-        fs.writeFileSync(path.join(ROOT, 'tests', '.tmp', shot), Buffer.from(data, 'base64'));
-      }
-      const hint = JSON.parse(await js(`(() => { const h = document.getElementById('swipe-hint'); const b = h.getBoundingClientRect();
-        return JSON.stringify({ visible: h.classList.contains('visible'), armed: h.classList.contains('armed'), left: b.left, right: b.right, bg: getComputedStyle(h).backgroundColor }); })()`));
-      await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-      await sleep(400);
       return hint;
     };
     let seta = await drag(4, 140, 400, 'swipe-voltar.png');
