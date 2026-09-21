@@ -1935,5 +1935,64 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
       view.hasFocus);
   }
 
+  console.log('42. Foto desenhada na linha, no CM6');
+  {
+    const { App, w } = await boot({ editor: true });
+    App._embedInfo.set('foto.png', { url: 'blob:x', width: 800, height: 400 });
+    App.Editor.definirTexto('antes\n![[foto.png]]\ndepois');
+    const mudou = App.Editor.decorarEmbeds((linha) => App.embedDaLinha(linha));
+    check('a decoracao disse que mudou algo', mudou === true);
+
+    const linhas = [...w.document.querySelectorAll('.cm-line')];
+    const comFoto = linhas.filter((el) => el.classList.contains('embed-line'));
+    check('so a linha da foto foi decorada', comFoto.length === 1, linhas.map(e => e.className));
+    check('a linha decorada e a do meio', comFoto[0].textContent === '![[foto.png]]', comFoto[0].textContent);
+    check('a imagem entrou como variavel de CSS', /blob:x/.test(comFoto[0].getAttribute('style') || ''));
+
+    // Editar uma linha depois da foto (a de cima nao muda de posicao) nao pode fazer a decoracao
+    // sumir nem acusar mudanca: a posicao da linha da foto e o estilo dela continuam os mesmos.
+    // Medido: editar uma linha ANTES da foto desloca o offset dela no documento, e a assinatura
+    // (que leva a posicao) acusa mudanca corretamente ali, entao o teste evita esse caso pra isolar
+    // o que quer provar
+    App.Editor.definirTexto('antes\n![[foto.png]]\ndepois editado');
+    const mudouOutraLinha = App.Editor.decorarEmbeds((linha) => App.embedDaLinha(linha));
+    check('editar uma linha depois da foto nao acusa mudanca (mesma posicao, mesmo estilo)',
+      mudouOutraLinha === false, mudouOutraLinha);
+    check('a foto continua desenhada depois de editar outra linha',
+      w.document.querySelectorAll('.cm-line.embed-line').length === 1);
+
+    // Trocar a foto por outra do mesmo tamanho mantem a posicao e a contagem de decoracoes iguais:
+    // so o estilo muda. Contar decoracoes nao bastaria pra pegar isso (armadilha do brief); a
+    // assinatura tem que levar o estilo, nao so a posicao
+    App._embedInfo.set('foto.png', { url: 'blob:novo', width: 800, height: 400 });
+    const mudouTrocaDeFoto = App.Editor.decorarEmbeds((linha) => App.embedDaLinha(linha));
+    check('trocar a foto por outra do mesmo tamanho e detectado como mudanca de verdade',
+      mudouTrocaDeFoto === true, mudouTrocaDeFoto);
+
+    // A medida real chega depois, por uma busca assincrona no Drive: o texto do editor nao muda
+    // nada, so a resposta de infoDaLinha. E por isso que o campo se refaz por StateEffect, nao so
+    // quando o documento muda
+    // Medido: a decoracao que havia (a da troca de foto, acima) some, e isso e uma mudanca real na
+    // tela (o espaco da foto fecha), entao decorarEmbeds acusa mudou=true aqui tambem, nao so
+    // quando uma decoracao aparece
+    App._embedInfo.delete('foto.png');
+    App.Editor.definirTexto('antes\n![[foto.png]]\ndepois');
+    let semMedidaAinda = App.Editor.decorarEmbeds((linha) => App.embedDaLinha(linha));
+    check('sem medida ainda, nenhuma linha decorada, e o sumico da decoracao anterior conta como mudanca',
+      w.document.querySelectorAll('.cm-line.embed-line').length === 0 && semMedidaAinda === true,
+      semMedidaAinda);
+
+    App._embedInfo.set('foto.png', { url: 'blob:chegou-depois', width: 800, height: 400 });
+    const medidaChegouDepois = App.Editor.decorarEmbeds((linha) => App.embedDaLinha(linha));
+    check('a medida chegando depois decora sozinha, sem o texto ter mudado',
+      medidaChegouDepois === true && w.document.querySelectorAll('.cm-line.embed-line').length === 1,
+      medidaChegouDepois);
+
+    App.Editor.definirTexto('so texto');
+    App.Editor.decorarEmbeds((linha) => App.embedDaLinha(linha));
+    check('sem embed, nenhuma linha decorada',
+      w.document.querySelectorAll('.cm-line.embed-line').length === 0);
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });

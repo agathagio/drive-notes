@@ -205,7 +205,7 @@ const App = {
       As onze funções da fachada saem daqui; `iniciar` e `ativo` são da fachada, não desta. */
   implCM6(elemento, aoMudar) {
     const {
-      EditorView, StateField, StateEffect, Transaction, keymap, drawSelection,
+      EditorView, StateField, StateEffect, Transaction, Decoration, keymap, drawSelection,
       history, undo, redo, defaultKeymap, historyKeymap,
       markdown, markdownLanguage, insertNewlineContinueMarkupCommand,
       syntaxHighlighting, HighlightStyle, tags: t, lineWrapping,
@@ -230,6 +230,46 @@ const App = {
         return novo;
       },
     });
+
+    // Decoração de embed. Ao contrário do TinyMDE, que zerava class e style a cada redesenho
+    // e obrigava a reaplicar, aqui a decoração é parte do estado e sobrevive sozinha.
+    let infoDaLinha = () => null;    // trocada por decorarEmbeds
+    let ultimaAssinatura = '';       // pra saber se alguma linha mudou de verdade
+    const refazerEmbeds = StateEffect.define();
+
+    const construirEmbeds = (state) => {
+      const marcas = [];
+      for (let n = 1; n <= state.doc.lines; n++) {
+        const linha = state.doc.line(n);
+        const info = infoDaLinha(linha.text);
+        if (!info) continue;
+        const largura = Math.min(view?.contentDOM.clientWidth || info.width, info.width);
+        const altura = Math.round(Math.min(largura * info.height / info.width, App.EMBED_MAX_HEIGHT));
+        marcas.push(Decoration.line({
+          attributes: { class: 'embed-line', style: `--embed: url("${info.url}"); --embed-h: ${altura}px` },
+        }).range(linha.from));
+      }
+      return Decoration.set(marcas);
+    };
+
+    const campoEmbeds = StateField.define({
+      create: (state) => construirEmbeds(state),
+      update(marcas, tr) {
+        if (!tr.docChanged && !tr.effects.some((e) => e.is(refazerEmbeds))) return marcas;
+        return construirEmbeds(tr.state);
+      },
+      provide: (campo) => EditorView.decorations.from(campo),
+    });
+
+    // Contar decorações não basta pra saber se algo mudou: trocar uma foto por outra do mesmo
+    // tamanho mantém a contagem e muda a tela. Por isso a assinatura leva o estilo, não só a posição.
+    const assinaturaDos = (conjunto) => {
+      const partes = [];
+      conjunto.between(0, Number.MAX_SAFE_INTEGER, (de, ate, deco) => {
+        partes.push(`${de}:${deco.spec.attributes.style}`);
+      });
+      return partes.join('|');
+    };
 
     const pintura = HighlightStyle.define([
       { tag: t.heading1, fontSize: '1.5em', fontWeight: '700', color: 'var(--accent-hover)' },
@@ -266,6 +306,7 @@ const App = {
         markdown({ base: markdownLanguage, codeLanguages: [] }),
         syntaxHighlighting(pintura),
         campoMarcas,
+        campoEmbeds,
         keymap.of([
           // nonTightLists:false: sem isso, sair de uma lista de tarefa de um item so custa tres
           // Enters em vez de um (o segundo insere uma linha em branco no meio e so o terceiro
@@ -373,7 +414,14 @@ const App = {
         view.dispatch({ changes: mudancas, userEvent: 'input' });
         view.focus();
       },
-      decorarEmbeds: () => false,  // tarefa 7
+      decorarEmbeds: (fn) => {
+        infoDaLinha = fn;
+        view.dispatch({ effects: refazerEmbeds.of(null) });
+        const agora = assinaturaDos(view.state.field(campoEmbeds));
+        const mudou = agora !== ultimaAssinatura;
+        ultimaAssinatura = agora;
+        return mudou;
+      },
       rolarAteOCursor: () => view.dispatch({
         effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'nearest', yMargin: 32 }),
       }),

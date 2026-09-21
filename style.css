@@ -220,7 +220,7 @@ body {
 .TinyMDE .TMBlockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--text-secondary); }
 
 /* A line that is only ![[image]]: the picture sits under the text, as a background (see decorateEditorEmbeds) */
-.TinyMDE .embed-line {
+.cm-line.embed-line {
   background: var(--embed) no-repeat left bottom / auto var(--embed-h);
   padding-bottom: calc(var(--embed-h) + 8px);
   color: var(--text-secondary);
