@@ -1705,6 +1705,28 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
           .split('// ── Editor ──')[0]));
   }
 
+  console.log('39d. CM6: texto, desfazer e a marca de cursor');
+  {
+    const { App } = await boot({ editor: true });
+    check('o editor ativo e o CM6', App.Editor.ativo() === 'cm6', App.Editor.ativo());
+
+    App.Editor.definirTexto('linha um\nlinha dois');
+    check('texto ida e volta', App.Editor.texto() === 'linha um\nlinha dois');
+
+    const marca = App.Editor.marcarCursor();
+    // a nota encolhe DEPOIS da marca: e o caso da foto que sobe enquanto se escreve
+    App.Editor.definirTexto('curta');
+    App.Editor.inserirEmLinhaPropria('![[foto.png]]', marca);
+    check('a marca sobreviveu a nota mudar, sem estourar',
+      App.Editor.texto().includes('![[foto.png]]'), App.Editor.texto());
+
+    App.Editor.definirTexto('base');
+    App.cm6Digitar(' mais');
+    check('digitou', App.Editor.texto() === 'base mais', App.Editor.texto());
+    check('desfez', App.Editor.desfazer() && App.Editor.texto() === 'base', App.Editor.texto());
+    check('refez', App.Editor.refazer() && App.Editor.texto() === 'base mais', App.Editor.texto());
+  }
+
   console.log('40. Edicao: Enter numa tarefa continua a lista de tarefas');
   {
     // Este e o unico bloco que roda o TinyMDE de verdade: o boot() nao carrega a lib (o app cai no

@@ -158,14 +158,23 @@ const App = {
     _tipo: 'textarea',
 
     iniciar(elemento, aoMudar) {
-      try {
-        if (typeof TinyMDE === 'undefined') throw new Error('sem TinyMDE');
-        this._impl = App.implTinyMDE(elemento, aoMudar);
-        this._tipo = 'tinymde';
-      } catch (e) {
-        console.warn('editor rico indisponivel, usando textarea:', e.message);
-        this._impl = App.implTextarea(elemento, aoMudar);
-        this._tipo = 'textarea';
+      const tentativas = [
+        ['cm6', () => {
+          if (!window.CM6) throw new Error('sem CM6');
+          return App.implCM6(elemento, aoMudar);
+        }],
+        ['textarea', () => App.implTextarea(elemento, aoMudar)],
+      ];
+      for (const [tipo, montar] of tentativas) {
+        try {
+          this._impl = montar();
+          this._tipo = tipo;
+          return tipo;
+        } catch (e) {
+          // O erro inteiro, não só a mensagem: um bug dentro da implementação vira um aviso com
+          // arquivo e linha, em vez de o app cair calado no textarea
+          console.warn(`editor ${tipo} indisponivel:`, e);
+        }
       }
       return this._tipo;
     },
@@ -188,6 +197,136 @@ const App = {
     this.Editor.iniciar(this.els.editorElement, () => this.markDirty());
   },
 
+  /** O editor de verdade: o CodeMirror 6. `window.CM6` é o pacote único de vendor/codemirror.js.
+      As onze funções da fachada saem daqui; `iniciar` e `ativo` são da fachada, não desta. */
+  implCM6(elemento, aoMudar) {
+    const {
+      EditorView, EditorState, StateField, StateEffect, Transaction, keymap, drawSelection,
+      history, undo, redo, defaultKeymap, historyKeymap,
+      markdown, markdownLanguage, insertNewlineContinueMarkup,
+      syntaxHighlighting, HighlightStyle, tags: t, lineWrapping,
+    } = window.CM6;
+
+    // Marcas de cursor. O CM6 sabe carregar uma posição através das edições que
+    // aconteceram depois dela (mapPos), e é isso que faz a foto cair no lugar certo.
+    const porMarca = StateEffect.define();
+    const campoMarcas = StateField.define({
+      create: () => new Map(),
+      update(marcas, tr) {
+        let novo = marcas;
+        if (tr.docChanged) {
+          novo = new Map();
+          for (const [id, pos] of marcas) novo.set(id, tr.changes.mapPos(pos));
+        }
+        for (const efeito of tr.effects) {
+          if (!efeito.is(porMarca)) continue;
+          novo = new Map(novo);
+          novo.set(efeito.value.id, efeito.value.pos);
+        }
+        return novo;
+      },
+    });
+
+    const pintura = HighlightStyle.define([
+      { tag: t.heading1, fontSize: '1.5em', fontWeight: '700', color: 'var(--accent-hover)' },
+      { tag: t.heading2, fontSize: '1.3em', fontWeight: '600', color: 'var(--accent-hover)' },
+      { tag: t.heading3, fontSize: '1.1em', fontWeight: '600', color: 'var(--accent-hover)' },
+      { tag: [t.heading4, t.heading5, t.heading6], fontWeight: '600', color: 'var(--accent-hover)' },
+      { tag: t.strong, fontWeight: '700' },
+      { tag: t.emphasis, fontStyle: 'italic' },
+      { tag: t.link, color: 'var(--accent-hover)', textDecoration: 'underline' },
+      { tag: t.url, color: 'var(--accent-hover)' },
+      { tag: t.monospace, background: 'rgba(255,255,255,0.08)' },
+      { tag: t.quote, color: 'var(--text-secondary)' },
+      { tag: [t.processingInstruction, t.contentSeparator], color: 'var(--text-secondary)' },
+    ]);
+
+    // `let` e não `const`: o campo de decoração da tarefa 7 roda durante a construção do
+    // EditorView e precisa consultar `view`. Com `const`, essa leitura cairia na zona morta
+    // temporal e estouraria ReferenceError em vez de devolver null.
+    let view = null;
+    view = new EditorView({
+      parent: elemento,
+      extensions: [
+        history(),
+        drawSelection(),
+        lineWrapping,
+        markdown({ base: markdownLanguage, codeLanguages: [] }),
+        syntaxHighlighting(pintura),
+        campoMarcas,
+        keymap.of([
+          { key: 'Enter', run: insertNewlineContinueMarkup },
+          ...defaultKeymap,
+          ...historyKeymap,
+        ]),
+        EditorView.updateListener.of((u) => { if (u.docChanged) aoMudar(); }),
+      ],
+    });
+
+    // Abrir uma nota troca o texto inteiro, e isso não é uma edição do usuário: sem esta marcação,
+    // um desfazer logo depois de escrever apaga a nota e traz de volta o texto da nota anterior.
+    const semHistorico = Transaction.addToHistory.of(false);
+
+    let proximaMarca = 0;
+    const novaMarca = (pos) => {
+      const id = `m${proximaMarca++}`;
+      return { id, efeito: porMarca.of({ id, pos }) };
+    };
+    const posDaMarca = (marca) => {
+      if (marca == null) return null;
+      const pos = view.state.field(campoMarcas).get(marca);
+      return pos == null ? null : Math.min(pos, view.state.doc.length);
+    };
+
+    return {
+      view,
+      texto: () => view.state.doc.toString(),
+      definirTexto: (t2) => view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: t2 },
+        annotations: semHistorico,
+      }),
+      focar: () => view.focus(),
+      cursorNoFim: () => view.dispatch({ selection: { anchor: view.state.doc.length } }),
+      marcarCursor: () => {
+        const nova = novaMarca(view.state.selection.main.head);
+        view.dispatch({ effects: nova.efeito });
+        return nova.id;
+      },
+      inserirEmLinhaPropria: (texto, marca) => {
+        const pos = posDaMarca(marca) ?? view.state.selection.main.head;
+        const linha = view.state.doc.lineAt(pos);
+        // Se há texto antes do cursor na linha, a inserção começa numa linha nova
+        const antes = view.state.doc.sliceString(linha.from, pos).trim() ? '\n' : '';
+        // Começo da linha seguinte, já no documento novo. Não dá pra devolver a marca recebida:
+        // uma posição mapeada por uma inserção no próprio ponto fica ANTES do que foi inserido,
+        // e a foto seguinte da leva entraria em cima desta (a ordem invertida do commit 439b920).
+        const seguinte = pos + antes.length + texto.length + 1;
+        const nova = novaMarca(seguinte);
+        view.dispatch({
+          changes: { from: pos, insert: `${antes}${texto}\n` },
+          selection: { anchor: seguinte },
+          effects: nova.efeito,
+        });
+        return nova.id;
+      },
+      desfazer: () => undo(view),
+      refazer: () => redo(view),
+      formatar: () => {},          // tarefa 6
+      decorarEmbeds: () => false,  // tarefa 7
+      rolarAteOCursor: () => view.dispatch({
+        effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'nearest', yMargin: 32 }),
+      }),
+    };
+  },
+
+  /** Só pros testes: digita no fim do documento como uma edição de usuário. O `userEvent` é o que
+      faz o histórico do desfazer registrar a digitação. */
+  cm6Digitar(texto) {
+    const view = this.Editor._impl?.view;
+    if (!view) return;
+    view.dispatch({ changes: { from: view.state.doc.length, insert: texto }, userEvent: 'input.type' });
+  },
+
   /** O editor rico de hoje, o TinyMDE 0.1.8. A instância fica pendurada em App.editor porque é por
       lá que a suíte de navegador dirige o editor; as funções da fachada não leem de lá, recebem a
       instância pronta. */
@@ -204,7 +343,7 @@ const App = {
     return this.apiTinyMDE(ed);
   },
 
-  /** As treze funções da fachada sobre uma instância do TinyMDE já montada. Separado da construção
+  /** As onze funções da fachada sobre uma instância do TinyMDE já montada. Separado da construção
       para que um editor de mentira possa ocupar o lugar dela (é o que o teste da fila de fotos faz). */
   apiTinyMDE(ed) {
     return {

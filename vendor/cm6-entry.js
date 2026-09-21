@@ -6,7 +6,9 @@
 // gutter de dobra, painel de busca, autocompletar, fechamento de colchete, seleção
 // retangular e realce de linha ativa: peso e comportamento indesejado num celular.
 import { EditorView, drawSelection, keymap } from '@codemirror/view';
-import { EditorState, StateField, StateEffect } from '@codemirror/state';
+// Transaction vem pela anotação addToHistory: é ela que diz que trocar o texto inteiro
+// (abrir uma nota) não é uma edição do usuário e não entra na pilha do desfazer.
+import { EditorState, StateField, StateEffect, Transaction } from '@codemirror/state';
 import { Decoration } from '@codemirror/view';
 import { history, undo, redo, defaultKeymap, historyKeymap } from '@codemirror/commands';
 import { markdown, markdownLanguage, insertNewlineContinueMarkup } from '@codemirror/lang-markdown';
@@ -14,7 +16,7 @@ import { syntaxHighlighting, HighlightStyle, syntaxTree } from '@codemirror/lang
 import { tags } from '@lezer/highlight';
 
 window.CM6 = {
-  EditorView, EditorState, StateField, StateEffect, Decoration, keymap, drawSelection,
+  EditorView, EditorState, StateField, StateEffect, Transaction, Decoration, keymap, drawSelection,
   history, undo, redo, defaultKeymap, historyKeymap,
   markdown, markdownLanguage, insertNewlineContinueMarkup,
   syntaxHighlighting, HighlightStyle, syntaxTree,
