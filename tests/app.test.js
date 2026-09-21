@@ -185,6 +185,28 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
   return { w, App, drive, type, drafts };
 }
 
+/**
+ * Enter de verdade: um keydown no elemento editavel do CM6, que e por onde ele escuta, no celular
+ * e aqui. E a unica forma de testar Enter que prova alguma coisa. Chamar o comando na mao pula o
+ * keymap, e e no keymap que mora a ordem entre o Enter do app e o da biblioteca: foi assim que o
+ * binding do commit 5f96e08, que nunca rodou no app, passou batido pela suite inteira.
+ */
+function apertarEnter(w, view) {
+  view.contentDOM.dispatchEvent(new w.KeyboardEvent('keydown',
+    { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+}
+
+/** Poe o texto, poe o cursor, aperta Enter. Devolve o texto e onde o cursor parou (linha:coluna) */
+function enterEm(App, w, conteudo, em) {
+  const view = App.Editor._impl.view;
+  App.Editor.definirTexto(conteudo);
+  view.dispatch({ selection: { anchor: em } });
+  apertarEnter(w, view);
+  const cursor = view.state.selection.main.head;
+  const linha = view.state.doc.lineAt(cursor);
+  return { text: view.state.doc.toString(), at: `${linha.number - 1}:${cursor - linha.from}` };
+}
+
 (async () => {
   console.log('0. Os testes usam as mesmas versoes de biblioteca que o app publicado');
   {
@@ -1749,6 +1771,14 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     App.Editor.definirTexto('linha um\nlinha dois');
     check('texto ida e volta', App.Editor.texto() === 'linha um\nlinha dois');
 
+    // Abrir uma nota NAO pode entrar na pilha do desfazer. Se entrar, um toque em desfazer logo
+    // depois de abrir apaga a nota aberta e traz de volta o texto da anterior, que e o pior jeito
+    // de perder texto que este app tem. Quem garante isso e a anotacao addToHistory:false do
+    // definirTexto, mas quem executa e a biblioteca: e propriedade emergente dela, e sem esta
+    // checagem nada no projeto acusaria a volta do bug.
+    check('abrir uma nota nao entra na pilha: nao ha o que desfazer', App.Editor.desfazer() === false);
+    check('... e o texto aberto nao se mexe', App.Editor.texto() === 'linha um\nlinha dois', App.Editor.texto());
+
     // O jsdom nao tem layout e ninguem consegue tocar no texto: o view e usado so pra pôr o cursor
     // onde um dedo poria, que e o unico jeito de simular o uso real aqui.
     const view = App.Editor._impl.view;
@@ -1820,6 +1850,13 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     check('digitou', App.Editor.texto() === 'base mais', App.Editor.texto());
     check('desfez', App.Editor.desfazer() && App.Editor.texto() === 'base', App.Editor.texto());
     check('refez', App.Editor.refazer() && App.Editor.texto() === 'base mais', App.Editor.texto());
+
+    // O mesmo, mas com a pilha cheia: escreveu numa nota e abriu outra da lista. O que foi digitado
+    // na nota anterior nao pode sobrar pra ser desfeito em cima desta
+    App.Editor.definirTexto('outra nota, aberta da lista');
+    check('abrir outra nota depois de escrever: nao sobra o que desfazer', App.Editor.desfazer() === false);
+    check('... e o texto da nota aberta fica intacto',
+      App.Editor.texto() === 'outra nota, aberta da lista', App.Editor.texto());
   }
 
   console.log('40. Edicao: Enter numa tarefa continua a lista de tarefas');
@@ -1827,21 +1864,11 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     const { App, w } = await boot({ editor: true });
     const view = App.Editor._impl.view;
 
-    // O Enter no CM6 e um comando: e exatamente o que o keymap chama, no celular e aqui. Fora de
-    // lista ou tarefa o proprio pacote documenta que o comando nao faz nada (context.length vazio),
-    // por isso o keymap do app tem o Enter do defaultKeymap logo depois: aqui a queda pro mesmo
-    // comando repete essa ordem, senao "paragrafo comum" ficaria sem Enter nenhum, o que nao e
-    // o que acontece na tela.
-    const enterDoParagrafo = w.CM6.defaultKeymap.find(b => b.key === 'Enter').run;
-    const enter = (conteudo, em) => {
-      App.Editor.definirTexto(conteudo);
-      view.dispatch({ selection: { anchor: em } });
-      if (!w.CM6.insertNewlineContinueMarkup(view)) enterDoParagrafo(view);
-      const doc = view.state.doc;
-      const cursor = view.state.selection.main.head;
-      const linha = doc.lineAt(cursor);
-      return { text: doc.toString(), at: `${linha.number - 1}:${cursor - linha.from}` };
-    };
+    // Enter de verdade, pelo caminho do teclado. Este cenario chamava os comandos na mao e por
+    // isso deixou passar que o Enter configurado pelo app (o do commit 5f96e08) nunca rodava: o
+    // markdown() instala o dele em Prec.high e ganhava de qualquer binding do keymap do app.
+    // Agora o comando do app entra em Prec.highest, e e isto aqui que prova que ele chega la.
+    const enter = (conteudo, em) => enterEm(App, w, conteudo, em);
 
     check('o editor do teste e o CM6, nao o textarea', App.Editor.ativo() === 'cm6');
 
@@ -1855,21 +1882,27 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     r = enter('- [ ] ', 6);
     check('tarefa vazia encerra a lista', r.text === '' && r.at === '0:0', r);
 
-    // Regressao: com dois itens na lista (o de um item so cai no caso acima, que nao passa por
-    // aqui), sem nonTightLists:false o CM6 gastava tres Enters pra sair de uma lista de tarefa: o
-    // segundo inseria uma linha em branco e mantinha a caixinha, so o terceiro encerrava de vez. O
-    // app sempre encerrou no segundo, e e o comando configurado no keymap dele (nao o
-    // insertNewlineContinueMarkup cru) que faz isso continuar valendo.
+    // A checagem que estava faltando, e que e o motivo de este cenario apertar Enter de verdade:
+    // SAIR DE UMA LISTA DE UM ITEM SO CUSTA UM ENTER. Sem o nonTightLists:false chegando ao
+    // teclado, o segundo Enter insere uma linha em branco e mantem o marcador, e so o terceiro
+    // encerra. Era o que o app fazia de verdade enquanto esta suite achava que nao: o binding do
+    // commit 5f96e08 nunca rodou, porque o Enter do markdown() esta em Prec.high.
     {
-      const comandoDoApp = w.CM6.insertNewlineContinueMarkupCommand({ nonTightLists: false });
       App.Editor.definirTexto('- [ ] comprar pao');
       view.dispatch({ selection: { anchor: 17 } });
-      comandoDoApp(view);
+      apertarEnter(w, view);
       check('primeiro Enter: nasce uma segunda tarefa vazia',
         view.state.doc.toString() === '- [ ] comprar pao\n- [ ] ', view.state.doc.toString());
-      comandoDoApp(view);
+      apertarEnter(w, view);
       check('segundo Enter na tarefa vazia: encerra a lista de uma vez, sem linha em branco no meio',
         view.state.doc.toString() === '- [ ] comprar pao\n', view.state.doc.toString());
+
+      App.Editor.definirTexto('- item');
+      view.dispatch({ selection: { anchor: 6 } });
+      apertarEnter(w, view);
+      apertarEnter(w, view);
+      check('o mesmo na lista comum: dois Enters e a lista acabou, sem linha em branco no meio',
+        view.state.doc.toString() === '- item\n', view.state.doc.toString());
     }
 
     r = enter('  - [ ] sub', 11);
@@ -2048,6 +2081,97 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     check('o botao desfez', App.Editor.texto() === 'base', App.Editor.texto());
     refazer.dispatchEvent(new w.Event('click', { bubbles: true }));
     check('o botao refez', App.Editor.texto() === 'base mais', App.Editor.texto());
+  }
+
+  console.log('43b. Desfazer sem nada pra desfazer nao suja a nota');
+  {
+    // Nota recem aberta: a pilha esta vazia. Sem olhar o retorno de desfazer(), o botao marcava a
+    // nota como suja de qualquer jeito, e trinta segundos depois o autosave gravava no Drive com o
+    // updated de hoje sem uma unica edicao ter acontecido
+    const { App, w } = await boot({ editor: true });
+    const view = App.Editor._impl.view;
+    const NOTA = '---\ncreated: 2026-01-02\nupdated: 2026-01-03\n---\n\ntexto';
+    App.setContent(NOTA);
+    const desfazer = w.document.querySelector('.toolbar-btn[data-history="undo"]');
+    const refazer = w.document.querySelector('.toolbar-btn[data-history="redo"]');
+    check('nota recem aberta esta limpa', App.isDirty === false);
+    desfazer.dispatchEvent(new w.Event('click', { bubbles: true }));
+    check('desfazer sem nada pra desfazer nao suja a nota', App.isDirty === false, App.isDirty);
+    refazer.dispatchEvent(new w.Event('click', { bubbles: true }));
+    check('refazer sem nada pra refazer tambem nao', App.isDirty === false, App.isDirty);
+    check('e o texto continua o que foi aberto', App.Editor.texto() === NOTA, App.Editor.texto());
+
+    // E o botao continua marcando quando desfaz de verdade
+    App.cm6Digitar(' novo');
+    App.isDirty = false;
+    desfazer.dispatchEvent(new w.Event('click', { bubbles: true }));
+    check('desfazer de verdade marca a nota como nao salva', App.isDirty === true);
+    check('... e desfez mesmo', App.Editor.texto() === NOTA, App.Editor.texto());
+
+    // A pilha do desfazer nao pode atravessar a troca de nota. A edicao da nota A aqui e uma
+    // DELECAO (sair de uma lista de um item), que e o caso que sobrevivia ao remapeamento: desfazer
+    // na nota B colava o `- [ ] ` no fim dela, marcava como alterada e o autosave gravava isso no
+    // Drive trinta segundos depois. Corromper nota que a pessoa so abriu.
+    const NOTA_B = 'nota B, so aberta da lista e nao tocada';
+    App.setContent('- [ ] comprar pao');
+    view.dispatch({ selection: { anchor: 17 } });
+    apertarEnter(w, view);
+    apertarEnter(w, view);
+    check('na nota A, sair da lista deixou uma delecao pra tras',
+      App.Editor.texto() === '- [ ] comprar pao\n', App.Editor.texto());
+    App.setContent(NOTA_B);
+    check('nota B aberta e limpa', App.isDirty === false && App.Editor.texto() === NOTA_B, App.Editor.texto());
+    desfazer.dispatchEvent(new w.Event('click', { bubbles: true }));
+    check('desfazer na nota B nao traz pedaco da nota A', App.Editor.texto() === NOTA_B, App.Editor.texto());
+    check('... e a nota B continua limpa, entao o autosave nao tem o que gravar', App.isDirty === false);
+  }
+
+  console.log('44. Edicao: Enter continua a citacao, e a linha de citacao vazia encerra na hora');
+  {
+    const { App, w } = await boot({ editor: true });
+    const view = App.Editor._impl.view;
+
+    // Enter de verdade, como no cenario 40: o comando do app so chega ao teclado por estar em
+    // Prec.highest, acima do Enter que o markdown() instala em Prec.high
+    const enter = (conteudo, em) => enterEm(App, w, conteudo, em);
+
+    check('o editor do teste e o CM6, nao o textarea', App.Editor.ativo() === 'cm6');
+
+    let r = enter('> citacao', 9);
+    check('citacao com texto: o Enter continua a citacao', r.text === '> citacao\n> ' && r.at === '1:2', r);
+
+    r = enter('> citacao\n> ', 12);
+    check('citacao vazia: encerra com um Enter so, sem linha de citacao no meio',
+      r.text === '> citacao\n' && r.at === '1:0', r);
+
+    r = enter('> citacao\n>', 11);
+    check('citacao vazia sem o espaco depois do sinal tambem encerra',
+      r.text === '> citacao\n' && r.at === '1:0', r);
+
+    // O caso que motivou a decisao: sair de um bloco de callout sem gastar tres Enters
+    r = enter('> [!note] aviso\n> corpo\n> ', 26);
+    check('bloco de callout: a linha vazia encerra na hora',
+      r.text === '> [!note] aviso\n> corpo\n' && r.at === '2:0', r);
+
+    r = enter('  > recuada\n  > ', 16);
+    check('citacao recuada vazia tambem encerra', r.text === '  > recuada\n' && r.at === '1:0', r);
+
+    // O comando so pode pegar a linha que e SO citacao vazia: sinal de maior no meio da frase e
+    // texto comum, e um Enter ali e um Enter comum
+    r = enter('a > b', 5);
+    check('sinal de maior no meio da frase nao e citacao', r.text === 'a > b\n' && r.at === '1:0', r);
+
+    // Regressao: o que ja funcionava continua com a biblioteca, e igual ao cenario 40
+    r = enter('- item', 6);
+    check('lista comum continua lista comum', r.text === '- item\n- ' && r.at === '1:2', r);
+    r = enter('1. um', 5);
+    check('lista numerada continua contando', r.text === '1. um\n2. ' && r.at === '1:3', r);
+    r = enter('- [ ] comprar pao', 17);
+    check('tarefa com texto: a linha nova nasce tarefa', r.text === '- [ ] comprar pao\n- [ ] ' && r.at === '1:6', r);
+    r = enter('- [x] feito', 11);
+    check('tarefa marcada continua desmarcada', r.text === '- [x] feito\n- [ ] ' && r.at === '1:6', r);
+    r = enter('paragrafo', 9);
+    check('paragrafo comum nao ganha marcador', r.text === 'paragrafo\n' && r.at === '1:0', r);
   }
 
   done();

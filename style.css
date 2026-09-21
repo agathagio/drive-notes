@@ -240,6 +240,35 @@ body {
   background: var(--button-hover);
 }
 
+/* O bloco de propriedades (`---` ... `---` no começo da nota) e os colchetes que não são link.
+   Quem marca as linhas e os trechos é o campo de decoração do implCM6, no app.js: o parser de
+   markdown do CM6 lê o bloco como título setext de nível 2, e lê `[[wikilink]]`, `[!note]` e
+   `tags: [a, b]` como link de referência sem destino. Sem estas duas regras, as propriedades saem
+   grandes, roxas e em negrito na primeira tela de toda nota, e os três colchetes saem sublinhados.
+   As regras alcançam também os <span> de dentro da linha, que é onde o realce põe tamanho, peso e
+   cor: mexer só na linha não adiantaria.
+   `1em` e não `15px`: cada span volta ao tamanho do pai, então a conta continua saindo do
+   .cm-scroller se o tamanho do editor mudar. */
+.cm-editor .cm-line.frontmatter-line,
+.cm-editor .cm-line.frontmatter-line span {
+  font-size: 1em;
+  font-weight: 400;
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+/* `inherit` e não uma cor fixa: o span da decoração envolve os spans do realce (medido no pacote
+   real), então herdar devolve o colchete pra cor da linha onde ele está, e dentro do bloco de
+   propriedades quem manda é a regra de cima, que é mais específica.
+   Medido também: numa citação o realce pinta cada pedaço da linha num span irmão, e não num que
+   envolve a linha toda, então `[!note]` sai na cor do texto comum e não na cor apagada da citação
+   em volta. É texto comum, que é o que foi pedido, só um tom mais claro que a citação. */
+.cm-editor .plain-brackets,
+.cm-editor .plain-brackets span {
+  color: inherit;
+  text-decoration: none;
+}
+
 /* A line that is only ![[image]]: the picture sits under the text, as a background (see decorateEditorEmbeds) */
 .cm-line.embed-line {
   background: var(--embed) no-repeat left bottom / auto var(--embed-h);

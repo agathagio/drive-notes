@@ -205,10 +205,11 @@ const App = {
       As onze funções da fachada saem daqui; `iniciar` e `ativo` são da fachada, não desta. */
   implCM6(elemento, aoMudar) {
     const {
-      EditorView, StateField, StateEffect, Transaction, Decoration, keymap, drawSelection,
+      EditorView, StateField, StateEffect, Transaction, Prec, Compartment,
+      Decoration, keymap, drawSelection,
       history, undo, redo, defaultKeymap, historyKeymap,
       markdown, markdownLanguage, insertNewlineContinueMarkupCommand,
-      syntaxHighlighting, HighlightStyle, tags: t, lineWrapping,
+      syntaxHighlighting, HighlightStyle, syntaxTree, tags: t, lineWrapping,
     } = window.CM6;
 
     // Marcas de cursor. O CM6 sabe carregar uma posição através das edições que
@@ -302,6 +303,99 @@ const App = {
       { tag: [t.processingInstruction, t.contentSeparator], color: 'var(--text-secondary)' },
     ]);
 
+    // ── Duas coisas que o parser lê como marcação e a nota nunca quis pintadas ──
+    //
+    // 1. O bloco de propriedades. `---\ncreated: ...\nupdated: ...\n---` no começo da nota é, pro
+    //    markdown, uma linha horizontal seguida de um título setext de nível 2: as linhas de
+    //    propriedade saíam grandes, roxas e em negrito na primeira tela de TODA nota. O editor
+    //    antigo lia igual, mas o style.css nunca estilizava esse caso, e por isso saía como texto
+    //    comum. É pra lá que o bloco volta.
+    // 2. `[[wikilink]]`, `[!note]` e `tags: [a, b]`. Os três são, pro parser, um link de referência
+    //    sem destino: um `Link` que só tem LinkMark dentro. `[texto](url)` tem URL dentro e
+    //    `[texto][rotulo]` tem LinkLabel, então os dois continuam sendo link de verdade, roxos e
+    //    sublinhados. O style.css antigo tinha a mesma regra, nomeando os mesmos casos.
+    //
+    // Os dois viram decoração aqui e texto comum no style.css: é lá que dá pra alcançar também os
+    // <span> que o realce cria dentro da linha, que é onde moram o tamanho, o peso e a cor.
+    const LINHA_DE_PROPRIEDADE = Decoration.line({ class: 'frontmatter-line' });
+    const COLCHETE_COMUM = Decoration.mark({ class: 'plain-brackets' });
+    // A mesma cerca que o splitFrontmatter aceita
+    const CERCA = /^---[ \t]*$/;
+
+    const construirTextoComum = (state) => {
+      const marcas = [];
+      const doc = state.doc;
+      // Só é bloco de propriedades o que começa na primeira linha E fecha: `---` no meio da nota é
+      // linha horizontal, e nota que abre com `---` sem fechar não tem bloco nenhum
+      if (CERCA.test(doc.line(1).text)) {
+        for (let n = 2; n <= doc.lines; n++) {
+          if (!CERCA.test(doc.line(n).text)) continue;
+          for (let k = 1; k <= n; k++) marcas.push(LINHA_DE_PROPRIEDADE.range(doc.line(k).from));
+          break;
+        }
+      }
+      syntaxTree(state).iterate({
+        enter: (no) => {
+          if (no.name !== 'Link') return;
+          for (let filho = no.node.firstChild; filho; filho = filho.nextSibling) {
+            if (filho.name !== 'LinkMark') return;
+          }
+          marcas.push(COLCHETE_COMUM.range(no.from, no.to));
+        },
+      });
+      // Decoração de linha e de trecho no mesmo conjunto: o `true` ordena as duas famílias
+      return Decoration.set(marcas, true);
+    };
+
+    const campoTextoComum = StateField.define({
+      create: (state) => construirTextoComum(state),
+      update: (marcas, tr) => (tr.docChanged ? construirTextoComum(tr.state) : marcas),
+      provide: (campo) => EditorView.decorations.from(campo),
+    });
+
+    // ── O Enter do app, um comando só ──
+    //
+    // Ele faz duas coisas, nesta ordem:
+    //
+    // 1. Linha de citação vazia encerra a citação na hora, como no Obsidian. O comando da
+    //    biblioteca só encerra depois de DUAS linhas de citação vazias, e sair de um bloco
+    //    `> [!note]` custa três Enters.
+    // 2. No resto, devolve o controle pro comando da biblioteca configurado com
+    //    nonTightLists:false, sem o qual sair de uma lista de um item só custa três Enters em vez
+    //    de um (o segundo Enter insere uma linha em branco e mantém o marcador).
+    //
+    // A precedência é o ponto, e não é enfeite: o `markdown()` instala o Enter dele em Prec.high
+    // (o `addKeymap` do pacote), e precedência vence posição na lista de extensões. Um binding no
+    // `keymap.of([...])` comum roda SEMPRE depois do da biblioteca, que a essa altura já continuou
+    // a lista e devolveu true. Foi o que aconteceu com o binding do commit 5f96e08: ele nunca
+    // rodou, e o app continuou gastando três Enters pra sair de uma lista. Por isso o keymap deste
+    // comando entra em `Prec.highest`, e por isso o cenário 40 aperta Enter de verdade.
+    const LINHA_DE_CITACAO_VAZIA = /^\s*>\s*$/;
+    const encerrarCitacao = (v) => {
+      const linha = v.state.doc.lineAt(v.state.selection.main.head);
+      if (!LINHA_DE_CITACAO_VAZIA.test(linha.text)) return false;
+      v.dispatch({ changes: { from: linha.from, to: linha.to, insert: '' }, userEvent: 'input' });
+      return true;
+    };
+    const continuarMarcacao = insertNewlineContinueMarkupCommand({ nonTightLists: false });
+    const enterDoApp = (v) => encerrarCitacao(v) || continuarMarcacao(v);
+
+    // Trocar o texto inteiro é abrir outro documento, e a pilha do desfazer do anterior não vale
+    // mais nele. A anotação addToHistory:false impede que a troca ENTRE na pilha, mas não limpa o
+    // que já estava lá: os eventos da nota anterior são remapeados pelo documento novo, e uma
+    // deleção remapeada vira uma inserção no fim. Medido: sair de uma lista de um item na nota A,
+    // abrir a nota B e tocar em desfazer colava `- ` no fim da nota B, que ficava suja e subia
+    // assim pro Drive trinta segundos depois.
+    //
+    // Zerar é tirar o history() da configuração e pôr de volta. Reconfigurar com um `history()`
+    // novo NÃO basta (medido): o campo de estado dele é o mesmo objeto em toda chamada, e o CM6
+    // preserva o valor de campo que continua na configuração.
+    const compartimentoDoHistorico = new Compartment();
+    const zerarHistorico = () => {
+      view.dispatch({ effects: compartimentoDoHistorico.reconfigure([]) });
+      view.dispatch({ effects: compartimentoDoHistorico.reconfigure(history()) });
+    };
+
     // O cursor que está no texto é escolha de quem escreve, ou artefato de ter carregado a nota? A
     // diferença é esta marca. A seleção do CM6 é estado permanente: depois de carregar uma nota ela
     // fica em 0 sem ninguém ter escolhido isso, e uma foto tirada aí entraria na primeira linha, em
@@ -317,18 +411,19 @@ const App = {
     view = new EditorView({
       parent: elemento,
       extensions: [
-        history(),
+        // Num compartimento pra dar pra zerar a pilha ao abrir outra nota (ver zerarHistorico)
+        compartimentoDoHistorico.of(history()),
         drawSelection(),
         lineWrapping,
+        // Acima do Enter que o markdown() instala em Prec.high: ver o comentário do enterDoApp
+        Prec.highest(keymap.of([{ key: 'Enter', run: enterDoApp }])),
         markdown({ base: markdownLanguage, codeLanguages: [] }),
         syntaxHighlighting(pintura),
+        campoTextoComum,
         campoMarcas,
         campoEmbeds,
+        // O Enter nao mora aqui: ele esta la em cima, em Prec.highest, porque daqui nao alcanca
         keymap.of([
-          // nonTightLists:false: sem isso, sair de uma lista de tarefa de um item so custa tres
-          // Enters em vez de um (o segundo insere uma linha em branco no meio e so o terceiro
-          // encerra). Com ele, o segundo Enter encerra a lista, que e o que o app sempre fez.
-          { key: 'Enter', run: insertNewlineContinueMarkupCommand({ nonTightLists: false }) },
           ...defaultKeymap,
           ...historyKeymap,
         ]),
@@ -362,6 +457,11 @@ const App = {
           changes: { from: 0, to: view.state.doc.length, insert: t2 },
           annotations: semHistorico,
         });
+        // Documento novo, pilha nova. Vale pra todo chamador de setContent, e todos são troca de
+        // documento inteiro: abrir nota, nota nova, rascunho, marcar tarefa na leitura, alcançar
+        // as datas que subiram e a recarga depois de um conflito. Em nenhum deles a pilha antiga
+        // descreve o texto que está na tela.
+        zerarHistorico();
         // Texto novo. Se a troca pegou a pessoa dentro do editor (a recarga depois de um conflito),
         // ela está ali escrevendo e o cursor dela continua sendo a melhor aposta; com o editor fora
         // de foco é nota aberta da lista, e aí ninguém pôs cursor nenhum neste texto
@@ -3143,10 +3243,12 @@ const App = {
     // Desfazer e refazer: tocados no meio da escrita, entao nao podem roubar o foco (ver a nota
     // dos botoes de formatacao abaixo)
     document.querySelectorAll('.toolbar-btn[data-history]').forEach(btn => {
+      // So marca a nota como suja se algo mudou de verdade. Sem a condicao, tocar em desfazer numa
+      // nota recem aberta (pilha vazia, nada a desfazer) sujava a nota, e trinta segundos depois o
+      // autosave gravava no Drive com o updated de hoje sem nenhuma edicao ter acontecido.
       const agir = () => {
-        if (btn.dataset.history === 'undo') this.Editor.desfazer();
-        else this.Editor.refazer();
-        this.markDirty();
+        const mudou = btn.dataset.history === 'undo' ? this.Editor.desfazer() : this.Editor.refazer();
+        if (mudou) this.markDirty();
       };
       btn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
       btn.addEventListener('touchend', (e) => { e.preventDefault(); agir(); }, { passive: false });

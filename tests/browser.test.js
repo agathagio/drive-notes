@@ -533,6 +533,87 @@ const FAKE_DRIVE = `
       medida.conteudo > medida.visivel, medida);
     check('o alvo de dedo tem pelo menos 44px', medida.larguraBotao >= 44, medida);
     await send('Emulation.clearDeviceMetricsOverride');
+
+    // ── O bloco de propriedades e os colchetes que nao sao link saem como texto comum ──
+    console.log('12. Propriedades e colchetes como texto comum');
+    // So aqui da pra provar: a asserção e de estilo computado (tamanho, peso, cor e sublinhado que
+    // de fato chegaram na tela), e isso precisa de layout. O CM6 nao deixa classe estavel no
+    // realce (o nome sai do gerador de CSS dele e muda a cada build), entao nao ha classe pra
+    // procurar: o que vale e o pixel.
+    await open(buildPage('texto-comum', currentApp));
+    const NOTA_PROPS = '---\ncreated: 2026-09-21\nupdated: 2026-09-21\ntags: [casa, obra]\n---\n\n'
+      + '# Titulo grande\n\nvai [[destino]] e [link](http://x)\n\n> [!note] aviso e mais texto';
+    await editNote(NOTA_PROPS, 8, 0);
+    const ROXO = 'rgb(166, 141, 255)';   // --accent-hover, o roxo que escreve
+
+    // A linha e cada <span> que o realce criou dentro dela
+    const estilos = (i) => js(`(() => {
+      const el = [...document.querySelectorAll('.cm-line')][${i}];
+      return JSON.stringify([el, ...el.querySelectorAll('span')].map(a => {
+        const s = getComputedStyle(a);
+        return { txt: a.textContent, px: Math.round(parseFloat(s.fontSize)), peso: Number(s.fontWeight),
+          cor: s.color, risco: s.textDecorationLine };
+      }));
+    })()`).then(JSON.parse);
+
+    // O texto comum da nota, medido e nao chutado: e com ele que o bloco tem que se parecer
+    const comum = (await estilos(8))[0];
+    const igualAoComum = (p) => p.px === comum.px && p.peso === comum.peso && p.cor === comum.cor && p.risco === 'none';
+    const bloco = [].concat(...await Promise.all([0, 1, 2, 3, 4].map(estilos)));
+    check('o bloco de propriedades inteiro sai do tamanho, do peso e da cor do texto comum',
+      bloco.length >= 6 && bloco.every(igualAoComum), bloco.filter(p => !igualAoComum(p)));
+
+    // Controle: se a regra tivesse vazado pra fora do bloco, o titulo de verdade tambem apagaria
+    const titulo = await estilos(6);
+    check('titulo de verdade fora do bloco continua grande, negrito e roxo',
+      titulo.some(p => p.px > comum.px && p.peso > comum.peso && p.cor === ROXO), titulo);
+
+    // `[[wikilink]]`, `[!note]` e `tags: [a, b]`: o parser le os tres como link de referencia sem
+    // destino. A checagem olha o conjunto todo (o span da decoracao e os do realce dentro dele),
+    // porque e no de dentro que moram a cor e o sublinhado
+    const colchete = (trecho) => js(`(() => {
+      const marca = [...document.querySelectorAll('.cm-content .plain-brackets')]
+        .find(s => s.textContent === ${JSON.stringify(trecho)});
+      if (!marca) return JSON.stringify({ achou: false });
+      const dentro = [marca, ...marca.querySelectorAll('span')].map(e => getComputedStyle(e));
+      const vizinho = [...marca.closest('.cm-line').querySelectorAll('span')]
+        .find(s => s.textContent.includes('aviso'));
+      return JSON.stringify({
+        achou: true,
+        cores: [...new Set(dentro.map(s => s.color))],
+        riscos: [...new Set(dentro.map(s => s.textDecorationLine))],
+        corDaLinha: getComputedStyle(marca.closest('.cm-line')).color,
+        corDoVizinho: vizinho ? getComputedStyle(vizinho).color : null,
+      });
+    })()`).then(JSON.parse);
+
+    const wiki = await colchete('[destino]');
+    check('[[wikilink]]: uma cor so, a do texto em volta, e sem sublinhado',
+      wiki.achou && wiki.cores.length === 1 && wiki.cores[0] === wiki.corDaLinha
+      && wiki.cores[0] !== ROXO && wiki.riscos.every(r => r === 'none'), wiki);
+
+    const tags = await colchete('[casa, obra]');
+    check('tags: [a, b] no bloco de propriedades: sem roxo e sem sublinhado',
+      tags.achou && tags.cores.length === 1 && tags.cores[0] !== ROXO && tags.riscos.every(r => r === 'none'), tags);
+
+    // Dentro de uma citacao o realce pinta cada pedaco da linha num span irmao, entao o `[!note]`
+    // sai na cor do texto comum e nao na cor apagada da citacao em volta (medido, e anotado no
+    // style.css): e texto comum, so um tom mais claro que a citacao. O que nao pode e o roxo
+    // sublinhado de antes
+    const callout = await colchete('[!note]');
+    check('[!note] dentro da citacao sai como texto comum, sem roxo e sem sublinhado',
+      callout.achou && callout.cores.length === 1 && callout.cores[0] === comum.cor
+      && callout.cores[0] !== ROXO && callout.corDoVizinho !== ROXO
+      && callout.riscos.every(r => r === 'none'), callout);
+
+    // Controle do controle: link de verdade nao foi apagado junto
+    const link = JSON.parse(await js(`(() => {
+      const spans = [...document.querySelectorAll('.cm-content span')].filter(s => s.textContent === 'link');
+      const s = getComputedStyle(spans[spans.length - 1]);
+      return JSON.stringify({ cor: s.color, risco: s.textDecorationLine });
+    })()`));
+    check('[texto](url), que e link de verdade, continua roxo e sublinhado',
+      link.cor === ROXO && link.risco === 'underline', link);
   } finally {
     browser.close();
   }
