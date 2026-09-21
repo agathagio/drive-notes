@@ -363,7 +363,6 @@ const App = {
       aoMudar();
     });
     this.guardComposition();
-    this.continueTasksOnEnter(ed);
 
     return this.apiTinyMDE(ed);
   },
@@ -504,55 +503,6 @@ const App = {
       this._composed = false;
       editable.dispatchEvent(new InputEvent('input', { inputType: 'insertText', bubbles: true }));
     });
-  },
-
-  // A task line the way TinyMDE's own list grammar reads it: up to 3 spaces of indent, the marker,
-  // then the box. LIST_MARKER is the same prefix without the box, which is what the library copies.
-  TASK_LINE: /^( {0,3}[-*+] {1,4})\[[ xX]\]([ \t].*)?$/,
-  LIST_MARKER: /^ {0,3}[-*+] {1,4}$/,
-
-  /** TinyMDE 0.1.8 carries `- `, `1. ` and indented code over to the new line on Enter, and knows
-      nothing about tasks: to it `- [ ] comprar` is a list item whose content merely starts with a
-      bracket, so the new line comes with a bare `- ` and the box is gone. Wrapping the instance
-      method is what reaches the phone: the Android keyboard sends no real key on Enter (keydown
-      arrives with code 229), so the library's own input handler is the only path that runs there. */
-  continueTasksOnEnter(ed) {
-    const original = ed.processNewParagraph;
-    if (typeof original !== 'function') return;
-    ed.processNewParagraph = (sel) => {
-      const row = sel ? sel.row : -1;
-      original.call(ed, sel);
-      // The library mutates `sel` in place and its caller hands that same object to setSelection,
-      // so moving sel.col here is what places the caret. It only moves the row on when it did split
-      // a line; anything else is not an Enter with something to fix.
-      if (sel && sel.row === row + 1) this.continueTaskLine(ed, sel);
-    };
-  },
-
-  /** Runs right after TinyMDE continued (or ended) a list, with `sel` already on the new line.
-      A task with text continues as a task, always unticked; an empty task ends the list, which is
-      what the library already does for an empty `- `. Anything else is left just as it left it. */
-  continueTaskLine(ed, sel) {
-    const line = ed.lines[sel.row];
-    const task = this.TASK_LINE.exec(ed.lines[sel.row - 1] || '');
-    // sel.col is where the library left the caret: right after the marker it copied to the new line
-    if (!task || typeof line !== 'string' || !this.LIST_MARKER.test(line.slice(0, sel.col))) return false;
-
-    // Enter right after the box leaves an empty task above with its whole text below: that is a task
-    // pushed down, not an empty one being closed, and ending the list there would strip its box
-    if ((task[2] || '').trim() || line.slice(sel.col).trim()) {
-      ed.lines[sel.row] = `${line.slice(0, sel.col)}[ ] ${line.slice(sel.col)}`;
-      sel.col += 4;
-    } else {
-      ed.lines[sel.row - 1] = '';
-      ed.lines[sel.row] = line.slice(sel.col);
-      ed.lineDirty[sel.row - 1] = true;
-      sel.col = 0;
-    }
-    ed.lineDirty[sel.row] = true;
-    // Only these two lines are touched, and they are redrawn the way the library redraws its own
-    ed.updateFormatting();
-    return true;
   },
 
   /** O editor de reserva, para quando a biblioteca não carregou: um textarea puro. Ele toma o lugar
