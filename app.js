@@ -138,22 +138,185 @@ const App = {
   },
 
   // ── Editor ──
+  // O app fala só com App.Editor. Atrás dele há duas implementações; nenhuma delas vaza
+  // pra fora daqui. Em especial, linha e coluna ({row, col}) são vocabulário do TinyMDE:
+  // quem precisa de posição recebe uma marca opaca e devolve ela.
+  //
+  // Duas regras que valem pra toda implementação, presente ou futura:
+  //
+  // 1. `marcarCursor()` devolve uma marca opaca ou null, e nada fora daqui pode abrir a marca.
+  //    Ela nunca pode ser um valor falsy que não seja null (nem 0, nem ''): todo chamador testa a
+  //    marca com `||`, e uma marca falsy seria jogada fora sem ninguém perceber.
+  // 2. `inserirEmLinhaPropria(texto, marca)` devolve a marca da linha seguinte, a que ficou livre
+  //    embaixo do que foi inserido. Não é opcional: uma leva de fotos usa esse retorno pra cada uma
+  //    cair embaixo da anterior (ver savePhoto). Devolver undefined reintroduz o bug que o commit
+  //    439b920 consertou, em que a leva saía de trás pra frente. Quem não souber dizer onde ficou
+  //    (o textarea, cujo cursor anda sozinho) devolve undefined de propósito.
+
+  Editor: {
+    _impl: null,
+    _tipo: 'textarea',
+
+    iniciar(elemento, aoMudar) {
+      try {
+        if (typeof TinyMDE === 'undefined') throw new Error('sem TinyMDE');
+        this._impl = App.implTinyMDE(elemento, aoMudar);
+        this._tipo = 'tinymde';
+      } catch (e) {
+        console.warn('editor rico indisponivel, usando textarea:', e.message);
+        this._impl = App.implTextarea(elemento, aoMudar);
+        this._tipo = 'textarea';
+      }
+      return this._tipo;
+    },
+
+    ativo() { return this._tipo; },
+    texto() { return this._impl ? this._impl.texto() : ''; },
+    definirTexto(t) { this._impl?.definirTexto(t); },
+    focar() { this._impl?.focar(); },
+    cursorNoFim() { this._impl?.cursorNoFim(); },
+    marcarCursor() { return this._impl ? this._impl.marcarCursor() : null; },
+    inserirEmLinhaPropria(texto, marca) { return this._impl?.inserirEmLinhaPropria(texto, marca); },
+    formatar(nome) { this._impl?.formatar(nome); },
+    desfazer() { return this._impl ? this._impl.desfazer() : false; },
+    refazer() { return this._impl ? this._impl.refazer() : false; },
+    decorarEmbeds(infoDaLinha) { return this._impl ? this._impl.decorarEmbeds(infoDaLinha) : false; },
+    rolarAteOCursor() { this._impl?.rolarAteOCursor(); },
+  },
 
   initEditor() {
-    try {
-      this.editor = new TinyMDE.Editor({
-        element: this.els.editorElement,
-      });
+    this.Editor.iniciar(this.els.editorElement, () => this.markDirty());
+  },
 
-      this.editor.addEventListener('change', () => {
-        this.markDirty();
-      });
-      this.guardComposition();
-      this.continueTasksOnEnter(this.editor);
-    } catch (e) {
-      console.warn('TinyMDE failed to load, using fallback textarea:', e);
-      this.useFallbackEditor();
-    }
+  /** O editor rico de hoje, o TinyMDE 0.1.8. A instância fica pendurada em App.editor porque é por
+      lá que a suíte de navegador dirige o editor; as funções da fachada não leem de lá, recebem a
+      instância pronta. */
+  implTinyMDE(elemento, aoMudar) {
+    const ed = new TinyMDE.Editor({ element: elemento });
+    this.editor = ed;
+
+    ed.addEventListener('change', () => {
+      aoMudar();
+    });
+    this.guardComposition();
+    this.continueTasksOnEnter(ed);
+
+    return this.apiTinyMDE(ed);
+  },
+
+  /** As treze funções da fachada sobre uma instância do TinyMDE já montada. Separado da construção
+      para que um editor de mentira possa ocupar o lugar dela (é o que o teste da fila de fotos faz). */
+  apiTinyMDE(ed) {
+    return {
+      texto() {
+        return ed.getContent();
+      },
+
+      definirTexto(t) {
+        ed.setContent(t);
+      },
+
+      focar() {
+        // TinyMDE: o foco vai no contentEditable de dentro, que é o ed.e
+        ed.e?.focus();
+      },
+
+      cursorNoFim() {
+        const row = ed.lines.length - 1;
+        ed.setSelection({ row, col: ed.lines[row].length });
+      },
+
+      marcarCursor() {
+        return ed.getSelection(false);
+      },
+
+      inserirEmLinhaPropria(texto, marca) {
+        const last = ed.lines.length - 1;
+        const wanted = ed.getSelection(false) || marca || { row: last, col: ed.lines[last].length };
+        // A nota pode ter encolhido enquanto a foto subia
+        const row = Math.min(wanted.row, last);
+        const pos = { row, col: Math.min(wanted.col, ed.lines[row].length) };
+        const before = ed.lines[row].slice(0, pos.col).trim() ? '\n' : '';
+        ed.paste(`${before}${texto}\n`, pos, { ...pos });
+        return { row: pos.row + (before ? 2 : 1), col: 0 };
+      },
+
+      formatar(nome) {
+        const format = App.FORMATS[nome];
+        if (!format) return;
+        if (format.command) {
+          ed.setCommandState(format.command, ed.getCommandState()[format.command] !== true);
+        } else if (format.wrap) {
+          ed.wrapSelection(...format.wrap);
+        } else {
+          // No TinyMDE command for this marker: same steps its own line commands take
+          const focus = ed.getSelection(false);
+          const anchor = ed.getSelection(true) || focus;
+          if (!focus) return;
+          const first = Math.min(focus.row, anchor.row);
+          const last = Math.max(focus.row, anchor.row);
+          for (let row = first; row <= last; row++) {
+            ed.lines[row] = App.toggleLinePrefix(ed.lines[row], format.line);
+            ed.lineDirty[row] = true;
+          }
+          ed.updateFormatting();
+          ed.setSelection({ row: last, col: ed.lines[last].length });
+        }
+      },
+
+      // O TinyMDE não tem pilha própria de desfazer: é por isso que a troca de editor existe
+      desfazer() { return false; },
+      refazer() { return false; },
+
+      decorarEmbeds(infoDaLinha) {
+        let changed = false;
+
+        ed.lines.forEach((line, row) => {
+          const el = ed.lineElements[row];
+          if (!el?.style) return;
+          const info = infoDaLinha(line);
+
+          if (!info) {
+            if (el.classList.contains('embed-line')) {
+              el.classList.remove('embed-line');
+              el.style.removeProperty('--embed');
+              el.style.removeProperty('--embed-h');
+              changed = true;
+            }
+            return;
+          }
+
+          // As wide as the line at most, never blown up, and a tall screenshot does not take over the screen
+          const width = Math.min(el.clientWidth || info.width, info.width);
+          const height = `${Math.round(Math.min(width * info.height / info.width, App.EMBED_MAX_HEIGHT))}px`;
+          // TinyMDE wipes class and style whenever it redraws the line, so this is put back after every change
+          if (!el.classList.contains('embed-line') || el.style.getPropertyValue('--embed-h') !== height) {
+            el.classList.add('embed-line');
+            el.style.setProperty('--embed', `url("${info.url}")`);
+            el.style.setProperty('--embed-h', height);
+            changed = true;
+          }
+        });
+
+        return changed;
+      },
+
+      rolarAteOCursor() {
+        const scroller = ed.e;
+        const selection = window.getSelection();
+        if (!scroller || !selection.rangeCount || !scroller.contains(selection.focusNode)) return;
+
+        // A collapsed range at the end of a line can report an empty box: use its line instead
+        let rect = selection.getRangeAt(0).getBoundingClientRect();
+        if (!rect.height) {
+          const node = selection.focusNode;
+          rect = (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement).getBoundingClientRect();
+        }
+        const box = scroller.getBoundingClientRect();
+        if (rect.bottom > box.bottom - 12) scroller.scrollTop += rect.bottom - box.bottom + 32;
+        else if (rect.top < box.top) scroller.scrollTop -= box.top - rect.top + 12;
+      },
+    };
   },
 
   /** TinyMDE redraws the line and resets the caret on every input event. While the keyboard is
@@ -228,32 +391,99 @@ const App = {
     return true;
   },
 
-  useFallbackEditor() {
+  /** O editor de reserva, para quando a biblioteca não carregou: um textarea puro. Ele toma o lugar
+      do elemento no DOM e vira o els.editorElement, que é por onde o resto do app o alcança. */
+  implTextarea(elemento, aoMudar) {
     const textarea = document.createElement('textarea');
     textarea.className = 'editor-fallback';
     textarea.placeholder = 'Comece a escrever...';
-    this.els.editorElement.replaceWith(textarea);
+    elemento.replaceWith(textarea);
     this.els.editorElement = textarea;
     this.editor = null;
 
     textarea.addEventListener('input', () => {
-      this.markDirty();
+      aoMudar();
     });
+
+    return {
+      texto() {
+        return App.els.editorElement.value || '';
+      },
+
+      definirTexto(t) {
+        App.els.editorElement.value = t;
+      },
+
+      focar() {
+        App.els.editorElement.focus();
+      },
+
+      cursorNoFim() {
+        const el = App.els.editorElement;
+        el.selectionStart = el.selectionEnd = el.value.length;
+      },
+
+      marcarCursor() {
+        // Num objeto, nunca no número cru: a posição 0 é falsy e sumiria no `||` de quem recebe
+        return { pos: App.els.editorElement.selectionStart };
+      },
+
+      inserirEmLinhaPropria(texto) {
+        // O cursor do textarea sobrevive ao seletor de arquivo, então a marca não é usada aqui.
+        // Ninguém sabe dizer onde a linha seguinte ficou: devolve undefined, como manda o contrato.
+        const ta = App.els.editorElement;
+        const value = ta.value;
+        const index = ta.selectionStart;
+        const before = index > 0 && value[index - 1] !== '\n' ? '\n' : '';
+        ta.value = value.slice(0, index) + before + texto + '\n' + value.slice(index);
+        ta.selectionStart = ta.selectionEnd = index + before.length + texto.length + 1;
+      },
+
+      formatar(nome) {
+        const format = App.FORMATS[nome];
+        if (!format) return;
+        const ta = App.els.editorElement;
+
+        if (format.line) {
+          const value = ta.value;
+          const start = value.lastIndexOf('\n', ta.selectionStart - 1) + 1;
+          let end = value.indexOf('\n', ta.selectionEnd);
+          if (end < 0) end = value.length;
+
+          const block = value.slice(start, end).split('\n')
+            .map(line => App.toggleLinePrefix(line, format.line)).join('\n');
+          ta.value = value.slice(0, start) + block + value.slice(end);
+          ta.selectionStart = ta.selectionEnd = start + block.length;
+          ta.focus();
+          return;
+        }
+
+        const [prefix, suffix] = format.wrap;
+        const start = ta.selectionStart;
+        const end = ta.selectionEnd;
+        const selected = ta.value.substring(start, end) || 'texto';
+        ta.value = ta.value.substring(0, start) + prefix + selected + suffix + ta.value.substring(end);
+        ta.selectionStart = start + prefix.length;
+        ta.selectionEnd = start + prefix.length + selected.length;
+        ta.focus();
+      },
+
+      // A pilha do textarea é a do próprio navegador
+      desfazer() { return typeof document.execCommand === 'function' && document.execCommand('undo'); },
+      refazer() { return typeof document.execCommand === 'function' && document.execCommand('redo'); },
+
+      // Sem linhas próprias no DOM não há onde pendurar a imagem, e não há cursor a perseguir
+      decorarEmbeds() { return false; },
+      rolarAteOCursor() {},
+    };
   },
 
   getContent() {
-    if (this.editor) {
-      return this.editor.getContent();
-    }
-    return this.els.editorElement.value || '';
+    return this.Editor.texto();
   },
 
   setContent(text) {
-    if (this.editor) {
-      this.editor.setContent(text);
-    } else {
-      this.els.editorElement.value = text;
-    }
+    this.Editor.definirTexto(text);
     this.isDirty = false;
     this.updateFileNameDisplay();
     // Another note: pictures that were not found get another chance
@@ -1247,42 +1477,24 @@ const App = {
     this._embedTimer = setTimeout(() => this.decorateEditorEmbeds(), 120);
   },
 
+  /** A foto de uma linha que é só ![[imagem]], se as medidas dela já chegaram do Drive.
+      Devolve null e dispara a busca quando ainda não chegaram. */
+  embedDaLinha(linha) {
+    const nome = this.EMBED_LINE.exec(linha)?.[1].split('/').pop().trim();
+    if (!nome) return null;
+    const info = this._embedInfo.get(nome);
+    if (!info) {
+      if (!this._embedInfo.has(nome)) this.loadEmbedInfo(nome);
+      return null;
+    }
+    return info;
+  },
+
   decorateEditorEmbeds() {
-    if (!this.editor || this.mode !== 'edit') return;
-    const ed = this.editor;
-    let changed = false;
-
-    ed.lines.forEach((line, row) => {
-      const el = ed.lineElements[row];
-      if (!el?.style) return;
-      const name = this.EMBED_LINE.exec(line)?.[1].split('/').pop().trim();
-      const info = name ? this._embedInfo.get(name) : null;
-
-      if (!info) {
-        if (el.classList.contains('embed-line')) {
-          el.classList.remove('embed-line');
-          el.style.removeProperty('--embed');
-          el.style.removeProperty('--embed-h');
-          changed = true;
-        }
-        if (name && !this._embedInfo.has(name)) this.loadEmbedInfo(name);
-        return;
-      }
-
-      // As wide as the line at most, never blown up, and a tall screenshot does not take over the screen
-      const width = Math.min(el.clientWidth || info.width, info.width);
-      const height = `${Math.round(Math.min(width * info.height / info.width, this.EMBED_MAX_HEIGHT))}px`;
-      // TinyMDE wipes class and style whenever it redraws the line, so this is put back after every change
-      if (!el.classList.contains('embed-line') || el.style.getPropertyValue('--embed-h') !== height) {
-        el.classList.add('embed-line');
-        el.style.setProperty('--embed', `url("${info.url}")`);
-        el.style.setProperty('--embed-h', height);
-        changed = true;
-      }
-    });
-
+    if (this.mode !== 'edit') return;
+    const mudou = this.Editor.decorarEmbeds((linha) => this.embedDaLinha(linha));
     // Lines got taller or shorter: the one being typed must stay above the keyboard
-    if (changed) this.scrollCaretIntoView();
+    if (mudou) this.scrollCaretIntoView();
   },
 
   async loadEmbedInfo(name) {
@@ -1756,24 +1968,11 @@ const App = {
 
   /** Focus the editor for immediate typing */
   focusEditor() {
-    if (this.editor) {
-      // TinyMDE — focus its internal contentEditable element
-      const editable = this.els.editorElement.querySelector('[contenteditable]');
-      if (editable) editable.focus();
-      else this.els.editorElement.focus();
-    } else {
-      this.els.editorElement.focus();
-    }
+    this.Editor.focar();
   },
 
   caretToEnd() {
-    if (this.editor) {
-      const row = this.editor.lines.length - 1;
-      this.editor.setSelection({ row, col: this.editor.lines[row].length });
-    } else {
-      const el = this.els.editorElement;
-      el.selectionStart = el.selectionEnd = el.value.length;
-    }
+    this.Editor.cursorNoFim();
   },
 
   /** Run a Drive write after every write queued before it */
@@ -2383,40 +2582,10 @@ const App = {
   },
 
   applyFormat(name) {
-    const format = this.FORMATS[name];
-    if (!format) return;
-
-    if (this.editor) {
-      this.applyFormatTinyMDE(format);
-    } else if (format.line) {
-      this.toggleLinesInTextarea(format.line);
-    } else {
-      this.wrapInTextarea(...format.wrap);
-    }
-    // TinyMDE commands change the text without firing its change event
+    if (!this.FORMATS[name]) return;
+    this.Editor.formatar(name);
+    // Os comandos do editor mudam o texto sem disparar o evento de mudança dele
     this.markDirty();
-  },
-
-  applyFormatTinyMDE(format) {
-    const ed = this.editor;
-    if (format.command) {
-      ed.setCommandState(format.command, ed.getCommandState()[format.command] !== true);
-    } else if (format.wrap) {
-      ed.wrapSelection(...format.wrap);
-    } else {
-      // No TinyMDE command for this marker: same steps its own line commands take
-      const focus = ed.getSelection(false);
-      const anchor = ed.getSelection(true) || focus;
-      if (!focus) return;
-      const first = Math.min(focus.row, anchor.row);
-      const last = Math.max(focus.row, anchor.row);
-      for (let row = first; row <= last; row++) {
-        ed.lines[row] = this.toggleLinePrefix(ed.lines[row], format.line);
-        ed.lineDirty[row] = true;
-      }
-      ed.updateFormatting();
-      ed.setSelection({ row: last, col: ed.lines[last].length });
-    }
   },
 
   /** Put `prefix` at the start of the line, replacing any other block marker; take it off if it is already there */
@@ -2433,38 +2602,13 @@ const App = {
     return kindOf(marker) === kindOf(prefix) ? indent + rest : indent + prefix + rest;
   },
 
-  toggleLinesInTextarea(prefix) {
-    const ta = this.els.editorElement;
-    const value = ta.value;
-    const start = value.lastIndexOf('\n', ta.selectionStart - 1) + 1;
-    let end = value.indexOf('\n', ta.selectionEnd);
-    if (end < 0) end = value.length;
-
-    const block = value.slice(start, end).split('\n')
-      .map(line => this.toggleLinePrefix(line, prefix)).join('\n');
-    ta.value = value.slice(0, start) + block + value.slice(end);
-    ta.selectionStart = ta.selectionEnd = start + block.length;
-    ta.focus();
-  },
-
-  wrapInTextarea(prefix, suffix) {
-    const ta = this.els.editorElement;
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
-    const selected = ta.value.substring(start, end) || 'texto';
-    ta.value = ta.value.substring(0, start) + prefix + selected + suffix + ta.value.substring(end);
-    ta.selectionStart = start + prefix.length;
-    ta.selectionEnd = start + prefix.length + selected.length;
-    ta.focus();
-  },
-
   // ── Photo into the note ──
 
   /** Tap on a photo button: `source` is 'camera' or 'gallery'. The picker takes the focus away,
       so the cursor position is kept for later. */
   pickPhoto(source) {
     if (this.mode !== 'edit') return;
-    this._photoAt = this.editor ? this.editor.getSelection(false) : null;
+    this._photoAt = this.Editor.marcarCursor();
     const camera = source === 'camera';
     // With "capture" Android goes straight to the camera; without it, to the photo picker
     if (camera) this.els.photoInput.setAttribute('capture', 'environment');
@@ -2571,24 +2715,7 @@ const App = {
   /** Insert `text` as a line of its own: at the cursor, or where it was (`at`) when the editor lost the focus,
       or at the end. The cursor ends on a fresh line below; with the editor, answers where that is. */
   insertOnOwnLine(text, at) {
-    if (this.editor) {
-      const ed = this.editor;
-      const last = ed.lines.length - 1;
-      const wanted = ed.getSelection(false) || at || { row: last, col: ed.lines[last].length };
-      // The note may have got shorter while the photo was going up
-      const row = Math.min(wanted.row, last);
-      const pos = { row, col: Math.min(wanted.col, ed.lines[row].length) };
-      const before = ed.lines[row].slice(0, pos.col).trim() ? '\n' : '';
-      ed.paste(`${before}${text}\n`, pos, { ...pos });
-      return { row: pos.row + (before ? 2 : 1), col: 0 };
-    }
-
-    const ta = this.els.editorElement;
-    const value = ta.value;
-    const index = ta.selectionStart;
-    const before = index > 0 && value[index - 1] !== '\n' ? '\n' : '';
-    ta.value = value.slice(0, index) + before + text + '\n' + value.slice(index);
-    ta.selectionStart = ta.selectionEnd = index + before.length + text.length + 1;
+    return this.Editor.inserirEmLinhaPropria(text, at);
   },
 
   // ── Sketch (the drawing screen) ──
@@ -2626,8 +2753,8 @@ const App = {
   /** Open the drawing screen over the editor. Only from the edit view, with a note open. */
   sketchOpen() {
     if (this.mode !== 'edit' || !this.currentFile || this.sketch) return;
-    // getSelection returns null once the focus is gone, so the caret is read before the blur
-    const at = this.editor ? this.editor.getSelection(false) : null;
+    // A marca vem a null depois que o foco some, então o cursor é lido antes do blur
+    const at = this.Editor.marcarCursor();
     // Without the blur the keyboard sits over half the canvas
     document.activeElement?.blur?.();
 
@@ -2863,20 +2990,8 @@ const App = {
   // ── Events ──
 
   scrollCaretIntoView() {
-    if (this.mode !== 'edit' || !this.editor) return;
-    const scroller = this.editor.e;
-    const selection = window.getSelection();
-    if (!scroller || !selection.rangeCount || !scroller.contains(selection.focusNode)) return;
-
-    // A collapsed range at the end of a line can report an empty box: use its line instead
-    let rect = selection.getRangeAt(0).getBoundingClientRect();
-    if (!rect.height) {
-      const node = selection.focusNode;
-      rect = (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement).getBoundingClientRect();
-    }
-    const box = scroller.getBoundingClientRect();
-    if (rect.bottom > box.bottom - 12) scroller.scrollTop += rect.bottom - box.bottom + 32;
-    else if (rect.top < box.top) scroller.scrollTop -= box.top - rect.top + 12;
+    if (this.mode !== 'edit') return;
+    this.Editor.rolarAteOCursor();
   },
 
   /** Keep toolbar visible above virtual keyboard using visualViewport API */

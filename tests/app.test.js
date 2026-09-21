@@ -642,10 +642,13 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
       },
     };
     const editorBefore = App.editor;
+    const implBefore = App.Editor._impl;
     App.editor = fake;
+    App.Editor._impl = App.apiTinyMDE(fake);
     let at = { row: 1, col: 0 };
     for (const n of [1, 2, 3]) at = App.insertOnOwnLine(`![[f${n}]]`, at) || at;
     App.editor = editorBefore;
+    App.Editor._impl = implBefore;
     check('sem cursor no editor, a fila continua na ordem', fake.lines.join('\n') === 'linha um\n![[f1]]\n![[f2]]\n![[f3]]\n', fake.lines);
 
     // Erro no meio: o que ja entrou fica, o resto nem sobe
@@ -1682,6 +1685,24 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
       return nomes.includes('TaskMarker');
     })());
     view.destroy();
+  }
+
+  console.log('39c. Fachada: o app fala com o Editor, nao com a lib');
+  {
+    const { App } = await boot();
+    check('sem lib carregada a fachada cai no textarea', App.Editor.ativo() === 'textarea');
+    App.Editor.definirTexto('uma linha\noutra linha');
+    check('texto ida e volta', App.Editor.texto() === 'uma linha\noutra linha');
+
+    App.Editor.definirTexto('primeira\nsegunda');
+    const marca = App.Editor.marcarCursor();
+    App.Editor.inserirEmLinhaPropria('![[foto.png]]', marca);
+    check('inseriu em linha propria', App.Editor.texto().includes('![[foto.png]]'), App.Editor.texto());
+
+    check('nenhum chamador fora da fachada toca a lib',
+      !/this\.editor\.(getContent|setContent|paste|getSelection|setSelection|lines|lineElements|setCommandState|wrapSelection)/
+        .test(require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8')
+          .split('// ── Editor ──')[0]));
   }
 
   console.log('40. Edicao: Enter numa tarefa continua a lista de tarefas');
