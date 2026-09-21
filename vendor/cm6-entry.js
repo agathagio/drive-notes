@@ -11,14 +11,14 @@ import { EditorView, drawSelection, keymap } from '@codemirror/view';
 import { EditorState, StateField, StateEffect, Transaction } from '@codemirror/state';
 import { Decoration } from '@codemirror/view';
 import { history, undo, redo, defaultKeymap, historyKeymap } from '@codemirror/commands';
-import { markdown, markdownLanguage, insertNewlineContinueMarkup } from '@codemirror/lang-markdown';
+import { markdown, markdownLanguage, insertNewlineContinueMarkup, insertNewlineContinueMarkupCommand } from '@codemirror/lang-markdown';
 import { syntaxHighlighting, HighlightStyle, syntaxTree } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 
 window.CM6 = {
   EditorView, EditorState, StateField, StateEffect, Transaction, Decoration, keymap, drawSelection,
   history, undo, redo, defaultKeymap, historyKeymap,
-  markdown, markdownLanguage, insertNewlineContinueMarkup,
+  markdown, markdownLanguage, insertNewlineContinueMarkup, insertNewlineContinueMarkupCommand,
   syntaxHighlighting, HighlightStyle, syntaxTree,
   tags,
   lineWrapping: EditorView.lineWrapping,

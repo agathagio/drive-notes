@@ -207,7 +207,7 @@ const App = {
     const {
       EditorView, StateField, StateEffect, Transaction, keymap, drawSelection,
       history, undo, redo, defaultKeymap, historyKeymap,
-      markdown, markdownLanguage, insertNewlineContinueMarkup,
+      markdown, markdownLanguage, insertNewlineContinueMarkupCommand,
       syntaxHighlighting, HighlightStyle, tags: t, lineWrapping,
     } = window.CM6;
 
@@ -267,7 +267,10 @@ const App = {
         syntaxHighlighting(pintura),
         campoMarcas,
         keymap.of([
-          { key: 'Enter', run: insertNewlineContinueMarkup },
+          // nonTightLists:false: sem isso, sair de uma lista de tarefa de um item so custa tres
+          // Enters em vez de um (o segundo insere uma linha em branco no meio e so o terceiro
+          // encerra). O TinyMDE encerrava no segundo Enter, e e isso que continua acontecendo aqui.
+          { key: 'Enter', run: insertNewlineContinueMarkupCommand({ nonTightLists: false }) },
           ...defaultKeymap,
           ...historyKeymap,
         ]),

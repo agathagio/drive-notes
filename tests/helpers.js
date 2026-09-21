@@ -10,8 +10,8 @@ const MODULES = path.join(ROOT, 'node_modules');
 
 // Same files index.html loads from the CDNs, from the versions pinned in package.json
 const LIBS = {
-  // Ainda usado pelo cenario 40 (Enter numa tarefa), que so sai quando esse cenario for reescrito pra CM6
-  // numa tarefa seguinte do plano. Nesta tarefa (2) so acrescenta o cm6 abaixo.
+  // O cenario 40 (Enter numa tarefa) ja e CM6: quem ainda usa esta entrada e a suite de navegador
+  // (buildPage), ate a tarefa 9 tirar o TinyMDE do index.html de vez.
   tinymde: path.join(MODULES, 'tiny-markdown-editor', 'dist', 'tiny-mde.js'),
   // O pacote único gerado por esbuild, o mesmo arquivo que o index.html carrega
   cm6: path.join(ROOT, 'vendor', 'codemirror.js'),

@@ -1813,6 +1813,23 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     r = enter('- [ ] ', 6);
     check('tarefa vazia encerra a lista', r.text === '' && r.at === '0:0', r);
 
+    // Regressao: com dois itens na lista (o de um item so cai no caso acima, que nao passa por
+    // aqui), sem nonTightLists:false o CM6 gastava tres Enters pra sair de uma lista de tarefa: o
+    // segundo inseria uma linha em branco e mantinha a caixinha, so o terceiro encerrava de vez. O
+    // TinyMDE encerrava no segundo, e e o comando configurado no keymap do app (nao o
+    // insertNewlineContinueMarkup cru) que faz isso continuar valendo.
+    {
+      const comandoDoApp = w.CM6.insertNewlineContinueMarkupCommand({ nonTightLists: false });
+      App.Editor.definirTexto('- [ ] comprar pao');
+      view.dispatch({ selection: { anchor: 17 } });
+      comandoDoApp(view);
+      check('primeiro Enter: nasce uma segunda tarefa vazia',
+        view.state.doc.toString() === '- [ ] comprar pao\n- [ ] ', view.state.doc.toString());
+      comandoDoApp(view);
+      check('segundo Enter na tarefa vazia: encerra a lista de uma vez, sem linha em branco no meio',
+        view.state.doc.toString() === '- [ ] comprar pao\n', view.state.doc.toString());
+    }
+
     r = enter('  - [ ] sub', 11);
     check('sublista mantem o recuo', r.text === '  - [ ] sub\n  - [ ] ' && r.at === '1:8', r);
 
@@ -1826,6 +1843,13 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
 
     r = enter('- item', 6);
     check('lista comum continua lista comum', r.text === '- item\n- ' && r.at === '1:2', r);
+
+    r = enter('- ', 2);
+    check('item comum vazio tambem encerra a lista', r.text === '' && r.at === '0:0', r);
+
+    r = enter('titulo\n\n- [ ] um\n- [ ] dois', 16);
+    check('tarefa no meio da nota: so as duas linhas mexidas mudam',
+      r.text === 'titulo\n\n- [ ] um\n- [ ] \n- [ ] dois' && r.at === '3:6', r);
 
     r = enter('1. um', 5);
     check('lista numerada continua contando', r.text === '1. um\n2. ' && r.at === '1:3', r);
