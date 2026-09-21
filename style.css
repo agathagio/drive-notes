@@ -219,6 +219,56 @@ body {
 .TinyMDE .TMMark { color: var(--text-secondary); }
 .TinyMDE .TMBlockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--text-secondary); }
 
+/* ── Editor CodeMirror 6 ──
+   O CM6 monta .cm-editor > .cm-scroller > .cm-content dentro do #editor, e divide entre os três
+   o que o .TinyMDE fazia sozinho: quem entra no flex é o .cm-editor, quem rola por dentro é o
+   .cm-scroller (e é nele que o CM6 espera as regras de fonte), e o recuo do texto é do .cm-content.
+   Fonte, tamanho, entrelinha, recuo e fundo são os mesmos do .TinyMDE acima, de propósito.
+   As cores do texto vêm do syntaxHighlighting no app.js, não daqui.
+
+   Todo seletor daqui pra baixo leva o .cm-editor na frente, e não é enfeite: o CM6 injeta o tema
+   de fábrica com a classe dele na frente (`.ͼ1 .cm-scroller`), então um `.cm-scroller` sozinho
+   perde por especificidade e a regra não pega. Com duas classes dos dois lados o desempate é a
+   ordem, e o style.css vem depois (o CM6 monta o <style> dele como primeiro filho do <head>). */
+.cm-editor {
+  flex: 1 1 0;
+  min-height: 0;
+  background: var(--bg-editor);
+  color: var(--text-primary);
+}
+
+/* O CM6 de fábrica desenha um contorno pontilhado em volta do editor inteiro quando ele tem foco */
+.cm-editor.cm-focused {
+  outline: none;
+}
+
+.cm-editor .cm-scroller {
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.cm-editor .cm-content {
+  padding: 16px;
+}
+
+/* O drawSelection esconde o cursor e a seleção do navegador e desenha os dois em camadas
+   próprias. O tema de fábrica do CM6 pinta essas camadas pra fundo claro: cursor preto
+   (invisível aqui) e seleção cinza-clara (texto ilegível por cima). Não adianta pôr
+   `caret-color` no .cm-content: o drawSelection zera ele com `!important`, e quem aparece na
+   tela é o .cm-cursor. A segunda linha da seleção é comprida porque a do CM6 pro editor em
+   foco tem quatro classes, e um seletor mais curto perderia dela. */
+.cm-editor .cm-cursor {
+  border-left-color: var(--accent);
+}
+.cm-editor .cm-selectionBackground,
+.cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground {
+  background: var(--button-hover);
+}
+
 /* A line that is only ![[image]]: the picture sits under the text, as a background (see decorateEditorEmbeds) */
 .cm-line.embed-line {
   background: var(--embed) no-repeat left bottom / auto var(--embed-h);

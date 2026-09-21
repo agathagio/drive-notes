@@ -1870,7 +1870,7 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     };
 
     check('negrito envolve a selecao', formatar('uma palavra', 4, 11, 'bold') === 'uma **palavra**');
-    check('italico envolve a selecao', formatar('uma palavra', 4, 11, 'italic') === 'uma _palavra_');
+    check('italico envolve a selecao', formatar('uma palavra', 4, 11, 'italic') === 'uma *palavra*');
     check('codigo envolve a selecao', formatar('uma palavra', 4, 11, 'code') === 'uma `palavra`');
     check('sem selecao o negrito poe um lugar pra escrever', formatar('vazio', 5, 5, 'bold') === 'vazio**texto**');
     check('link usa o formato do app', formatar('site', 0, 4, 'link') === '[site](url)');

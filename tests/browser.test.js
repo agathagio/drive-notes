@@ -1,5 +1,5 @@
 // What jsdom cannot show, checked in a real headless browser over the DevTools protocol:
-// voice typing (IME composition) in TinyMDE, the formatting toolbar on TinyMDE, and the real CloseWatcher.
+// voice typing (IME composition) in the CodeMirror editor, its formatting toolbar, and the real CloseWatcher.
 //   npm run test:browser        (needs Edge or Chrome; set BROWSER_PATH to choose)
 const { execSync } = require('child_process');
 const fs = require('fs');
@@ -37,22 +37,48 @@ const FAKE_DRIVE = `
   const { send, js, open } = browser;
   try {
     const currentApp = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+
+    // O elemento editavel do CodeMirror, o que o TinyMDE chamava de `editor.e`
+    const CONTEUDO = `document.querySelector('.cm-content')`;
+
+    // Posicao no CM6 e um numero so, mas a suite continua falando {row, col} como sempre falou:
+    // a conta mora aqui, e nao repetida em oito lugares. Cuidado: a linha do CM6 conta a partir
+    // de 1, a do TinyMDE contava a partir de 0, e e dai que vem o `+ 1`.
+    //
+    // E um pedaco de codigo, e nao uma chamada pronta, pra quem chama poder emendar o que vem
+    // depois no mesmo `js()`. Assim mover o cursor e formatar continuam sendo uma viagem so ao
+    // navegador, como eram quando o `setSelection` do TinyMDE cabia na mesma linha.
+    const SELECIONAR = (foco, ancora) => `(() => {
+      const view = __App.Editor._impl.view;
+      const pos = ({ row, col }) => view.state.doc.line(row + 1).from + col;
+      view.dispatch({ selection: { anchor: pos(${JSON.stringify(ancora || foco)}), head: pos(${JSON.stringify(foco)}) } });
+    })();`;
+    const selecionar = (foco, ancora) => js(`${SELECIONAR(foco, ancora)} 'ok'`);
+
     const editNote = (content, row, col) => js(`__App.currentFile = { id: null, name: 't.md', draftKey: 'drivenotes_draft_t' };
+      __App.setContent(${JSON.stringify(content)}); __App.showEditor(); __App.isDirty = false; __App.Editor.focar();
+      ${SELECIONAR({ row, col })} 'ok'`);
+
+    // O mesmo helper falando TinyMDE. So o controle historico do cenario 1 usa isto: ele roda o
+    // app de um commit anterior a troca de editor, e naquele app a instancia do TinyMDE e a API.
+    const editNoteTinyMDE = (content, row, col) => js(`__App.currentFile = { id: null, name: 't.md', draftKey: 'drivenotes_draft_t' };
       __App.setContent(${JSON.stringify(content)}); __App.showEditor(); __App.isDirty = false; __App.editor.e.focus();
       __App.editor.setSelection({ row: ${row}, col: ${col} }); 'ok'`);
 
     // ── 1. Voice typing: growing partial results inside one composition, then the final commit ──
-    console.log('1. Ditado (composicao de IME) no TinyMDE');
-    const dictate = async (url) => {
+    console.log('1. Ditado (composicao de IME) no CodeMirror');
+    // `legado` roda a metade do controle historico, no app de antes da troca de editor
+    const dictate = async (url, legado) => {
       await open(url);
-      await editNote('linha um\n', 1, 0);
+      await (legado ? editNoteTinyMDE : editNote)('linha um\n', 1, 0);
       for (const partial of ['Não', 'Não consigo', 'Não consigo ditar', 'Não consigo ditar minhas']) {
         await send('Input.imeSetComposition', { text: partial, selectionStart: partial.length, selectionEnd: partial.length });
         await sleep(60);
       }
       await send('Input.insertText', { text: 'Não consigo ditar minhas notas' });
       await sleep(150);
-      return JSON.parse(await js(`JSON.stringify({ content: __App.getContent(), dom: __App.editor.e.innerText, dirty: __App.isDirty })`));
+      const naTela = legado ? '__App.editor.e' : CONTEUDO;
+      return JSON.parse(await js(`JSON.stringify({ content: __App.getContent(), dom: ${naTela}.innerText, dirty: __App.isDirty })`));
     };
     const expected = 'linha um\nNão consigo ditar minhas notas';
 
@@ -61,7 +87,7 @@ const FAKE_DRIVE = `
       buggyApp = execSync(`git -C "${ROOT}" show ${COMMIT_WITH_DICTATION_BUG}:app.js`, { encoding: 'utf8', maxBuffer: 1e7, stdio: ['ignore', 'pipe', 'ignore'] });
     } catch { /* shallow clone or no git: the control is skipped */ }
     if (buggyApp) {
-      const before = await dictate(buildPage('dictation-before', buggyApp));
+      const before = await dictate(buildPage('dictation-before', buggyApp, { tinymde: true }), true);
       console.log('     versao com o bug:', JSON.stringify(before.content));
       check('controle: o bug se reproduz na versao antiga (texto duplicado)', before.content !== expected);
     } else {
@@ -77,18 +103,23 @@ const FAKE_DRIVE = `
     await send('Input.imeSetComposition', { text: '# Titu', selectionStart: 6, selectionEnd: 6 });
     await send('Input.insertText', { text: '# Titulo ' });
     await sleep(150);
-    check('a formatacao do TinyMDE volta a rodar no fim da composicao', await js(`!!__App.editor.e.querySelector('.TMH1')`), await js('__App.editor.e.innerHTML'));
+    // O CM6 nao deixa classe estavel no realce: o nome sai do gerador de CSS dele (ͼo, ͼy) e muda
+    // a cada build. O que prova o realce e o tamanho que de fato chegou na tela, o 1.5em do
+    // heading1 sobre os 15px do editor, num <span> que o parser de markdown criou dentro da linha.
+    const realceDeTitulo = `[...${CONTEUDO}.querySelectorAll('span')]
+      .some(s => s.textContent.includes('Titulo') && parseFloat(getComputedStyle(s).fontSize) > 20)`;
+    check('a formatacao do editor volta a rodar no fim da composicao', await js(realceDeTitulo), await js(`${CONTEUDO}.innerHTML`));
 
-    // ── 2. Formatting toolbar on the real TinyMDE ──
-    console.log('2. Barra de formatacao no TinyMDE');
+    // ── 2. Formatting toolbar on the real CodeMirror ──
+    console.log('2. Barra de formatacao no CodeMirror');
     await open(buildPage('current', currentApp));
     await editNote('primeira linha\nsegunda linha\nterceira', 1, 5);
     const format = async (name, focus, anchor) => {
-      await js(`__App.editor.setSelection(${JSON.stringify(focus)}${anchor ? ', ' + JSON.stringify(anchor) : ''}); __App.applyFormat('${name}'); 'ok'`);
+      await js(`${SELECIONAR(focus, anchor)} __App.applyFormat('${name}'); 'ok'`);
       return js('__App.getContent()');
     };
-    const end = (row) => js(`__App.editor.lines[${row}].length`);
-    check('tinymde carregado', await js('!!__App.editor'));
+    const end = (row) => js(`__App.Editor._impl.view.state.doc.line(${row} + 1).text.length`);
+    check('codemirror carregado', await js('__App.Editor.ativo()') === 'cm6', await js('__App.Editor.ativo()'));
     check('titulo: cursor no meio, marcador no comeco da linha', await format('heading', { row: 1, col: 5 }) === 'primeira linha\n## segunda linha\nterceira');
     check('... e marca a nota como nao salva', await js('__App.isDirty') === true);
     check('titulo de novo remove', await format('heading', { row: 1, col: 4 }) === 'primeira linha\nsegunda linha\nterceira');
@@ -100,7 +131,9 @@ const FAKE_DRIVE = `
     check('negrito na selecao', await format('bold', { row: 0, col: 8 }, { row: 0, col: 0 }) === '**primeira** linha\nsegunda linha\n- terceira');
     check('italico na selecao', await format('italic', { row: 1, col: 7 }, { row: 1, col: 0 }) === '**primeira** linha\n*segunda* linha\n- terceira');
     check('codigo na selecao', await format('code', { row: 2, col: 10 }, { row: 2, col: 2 }) === '**primeira** linha\n*segunda* linha\n- `terceira`');
-    check('link com selecao vazia', await format('link', { row: 1, col: await end(1) }) === '**primeira** linha\n*segunda* linha[](url)\n- `terceira`');
+    // Sem selecao o link nasce com o rascunho "texto" ja selecionado, de proposito (tarefa 6): no
+    // celular e a pista visual do que preencher, e quem digitar em seguida sobrescreve o rascunho
+    check('link com selecao vazia poe o rascunho "texto"', await format('link', { row: 1, col: await end(1) }) === '**primeira** linha\n*segunda* linha[texto](url)\n- `terceira`');
 
     // ── 3. The real CloseWatcher: on desktop the Esc key is its "back button" ──
     console.log('3. CloseWatcher de verdade (Esc = botao voltar)');
@@ -127,8 +160,8 @@ const FAKE_DRIVE = `
     check('voltar 3: tela inicial', v.view === 'welcome' && v.stack === 0, v);
     check('historico do navegador nunca foi tocado', v.hist === hist0, [hist0, v.hist]);
 
-    // ── 4. Photo: the real canvas shrinks it, the real TinyMDE receives the embed ──
-    console.log('4. Foto na nota: reducao por canvas e insercao no TinyMDE');
+    // ── 4. Photo: the real canvas shrinks it, the real editor receives the embed ──
+    console.log('4. Foto na nota: reducao por canvas e insercao no editor');
     await open(buildPage('current', currentApp));
     await editNote('linha um\nlinha dois', 0, 8);
     const photo = JSON.parse(await js(`(async () => {
@@ -153,8 +186,8 @@ const FAKE_DRIVE = `
       const tiny = new File([await new Promise(r => { const c = document.createElement('canvas'); c.width = 800; c.height = 600; c.toBlob(r, 'image/png'); })], 'print.png', { type: 'image/png' });
 
       // What the button does, then the picker taking the focus away
-      __App._photoAt = __App.editor.getSelection(false);
-      __App.editor.e.blur(); getSelection().removeAllRanges();
+      __App._photoAt = __App.Editor.marcarCursor();
+      ${CONTEUDO}.blur(); getSelection().removeAllRanges();
       await __App.insertPhoto(file);
       return JSON.stringify({
         original: file.size, sent: posts[0]?.size, type: small.type, width: dims.width, height: dims.height,
@@ -181,9 +214,12 @@ const FAKE_DRIVE = `
         const u = new URL(url);
         if (u.pathname.endsWith('/WIDE')) return { ok: true, status: 200, blob: async () => new Blob([svg(400, 100)], { type: 'image/svg+xml' }) };
         if (u.pathname.endsWith('/TALL')) return { ok: true, status: 200, blob: async () => new Blob([svg(900, 2000)], { type: 'image/svg+xml' }) };
+        // Mais larga que o editor de proposito: e a unica que obriga o app a medir a largura
+        // disponivel, em vez de cair no tamanho da propria imagem
+        if (u.pathname.endsWith('/HUGE')) return { ok: true, status: 200, blob: async () => new Blob([svg(4000, 1000)], { type: 'image/svg+xml' }) };
         window.__searches++;
         const q = u.searchParams.get('q') || '';
-        const hit = q.includes("'larga.png'") ? 'WIDE' : q.includes("'alta.png'") ? 'TALL' : null;
+        const hit = q.includes("'larga.png'") ? 'WIDE' : q.includes("'alta.png'") ? 'TALL' : q.includes("'gigante.png'") ? 'HUGE' : null;
         return { ok: true, status: 200, json: async () => ({ files: hit ? [{ id: hit, name: 'x.png', mimeType: 'image/png', parents: ['m'] }] : [] }) };
       };
       return 'ok';
@@ -191,11 +227,11 @@ const FAKE_DRIVE = `
     const NOTE = 'antes\n![[larga.png]]\nmeio ![[larga.png]] no meio da frase\n![[alta.png|300]]\n![[sumiu.png]]\nfim';
     await editNote(NOTE, 0, 5);
     await sleep(600);
-    const lines = () => js(`JSON.stringify([...__App.editor.lineElements].map(el => ({
+    const lines = () => js(`JSON.stringify([...document.querySelectorAll('.cm-line')].map(el => ({
       on: el.classList.contains('embed-line'), pad: Math.round(parseFloat(getComputedStyle(el).paddingBottom)),
       bg: getComputedStyle(el).backgroundImage.startsWith('url("blob:') })))`).then(JSON.parse);
     let l = await lines();
-    const lineWidth = Number(await js('__App.editor.lineElements[1].clientWidth'));
+    const lineWidth = Number(await js(`document.querySelectorAll('.cm-line')[1].clientWidth`));
     check('linha que e so o embed ganha a imagem, na proporcao certa e sem esticar', l[1].on && l[1].bg && Math.abs(l[1].pad - (Math.round(Math.min(lineWidth, 400) / 4) + 8)) <= 1, [l[1], lineWidth]);
     check('embed no meio de uma frase nao ganha', !l[2].on && !l[0].on && !l[5].on, l);
     check('imagem alta para em 300px de altura', l[3].on && l[3].pad === 308, l[3]);
@@ -203,14 +239,14 @@ const FAKE_DRIVE = `
     check('o texto da nota nao muda e a nota nao fica suja', await js('__App.getContent()') === NOTE && await js('__App.isDirty') === false);
 
     const searches = Number(await js('window.__searches'));
-    await js(`__App.editor.setSelection({ row: 5, col: 3 }); 'ok'`);
+    await selecionar({ row: 5, col: 3 });
     await send('Input.insertText', { text: ' da nota' });
     await sleep(400);
     l = await lines();
     check('digitar em outra linha: imagens seguem la, texto certo', l[1].on && l[3].on && (await js('__App.getContent()')).endsWith('fim da nota'));
     check('... sem procurar de novo no Drive (nem a que sumiu)', Number(await js('window.__searches')) === searches, [searches, await js('window.__searches')]);
 
-    await js(`__App.editor.setSelection({ row: 1, col: 0 }); 'ok'`);
+    await selecionar({ row: 1, col: 0 });
     await send('Input.insertText', { text: 'x ' });
     await sleep(400);
     l = await lines();
@@ -221,8 +257,23 @@ const FAKE_DRIVE = `
     l = await lines();
     check('ir pro modo leitura e voltar mantem a imagem', l[3].on && l[3].bg, l[3]);
 
-    // ── 6. Dates: the caret of a new note in TinyMDE, and the editor catching up out of sight ──
-    console.log('6. created e updated no TinyMDE');
+    // Foto mais larga que o editor: ela e desenhada com a largura que sobra na linha. O fundo
+    // entra com `auto var(--embed-h)`, entao a largura desenhada e a altura vezes a proporcao da
+    // imagem (4000x1000 = 4:1). Regressao: medindo o clientWidth do .cm-content, que inclui os
+    // 16px de recuo de cada lado, a conta dava 32px a mais que a linha e a foto saia cortada na
+    // direita (num celular de 390px, uns 34px). So esta suite tem layout de verdade pra ver isso.
+    await editNote('![[gigante.png]]', 0, 0);
+    await sleep(600);
+    const desenho = JSON.parse(await js(`(() => {
+      const el = document.querySelectorAll('.cm-line')[0];
+      const altura = parseFloat(getComputedStyle(el).getPropertyValue('--embed-h'));
+      return JSON.stringify({ embed: el.classList.contains('embed-line'), desenhada: altura * 4, linha: el.clientWidth });
+    })()`));
+    check('a foto desenhada cabe na largura real da linha, sem corte',
+      desenho.embed && desenho.desenhada <= desenho.linha + 1 && desenho.desenhada >= desenho.linha - 4, desenho);
+
+    // ── 6. Dates: the caret of a new note in the editor, and the editor catching up out of sight ──
+    console.log('6. created e updated no CodeMirror');
     await open(buildPage('current', currentApp));
     await js(`(() => {
       localStorage.clear();
@@ -246,13 +297,17 @@ const FAKE_DRIVE = `
     check('nota nova: o que se digita cai embaixo das propriedades', await js('__App.getContent()') === `---\ncreated: ${today}\nupdated: ${today}\n---\n\nideia`, await js('__App.getContent()'));
 
     await js(`__App.isDirty = false; __App.openFile('OLD', 'velha.md').then(() => 'ok')`);
-    await js(`__App.setMode('edit'); __App.editor.e.focus(); __App.editor.setSelection({ row: 5, col: 5 }); 'ok'`);
+    await js(`__App.setMode('edit'); __App.Editor.focar(); ${SELECIONAR({ row: 5, col: 5 })} 'ok'`);
     await send('Input.insertText', { text: ' novo' });
     await sleep(200);
     await js(`__App.save().then(() => 'ok')`);
     const dated = `---\ncreated: 2026-01-02\nupdated: ${today}\n---\n\ntexto novo`;
+    // Onde o cursor esta, em linha:coluna, que e como o TinyMDE respondia e como o cenario fala
+    const cursor = () => js(`(() => { const view = __App.Editor._impl.view;
+      const cabeca = view.state.selection.main.head; const linha = view.state.doc.lineAt(cabeca);
+      return (linha.number - 1) + ':' + (cabeca - linha.from); })()`);
     check('o Drive recebe o updated de hoje', JSON.parse(await js('JSON.stringify(window.__written)'))[0] === dated, await js('JSON.stringify(window.__written)'));
-    check('com o teclado aberto o editor fica como esta, cursor no lugar', await js('__App.getContent()') === dated.replace(today, '2026-01-03') && await js(`(({ row, col }) => row + ':' + col)(__App.editor.getSelection())`) === '5:10', await js('JSON.stringify(__App.editor.getSelection())'));
+    check('com o teclado aberto o editor fica como esta, cursor no lugar', await js('__App.getContent()') === dated.replace(today, '2026-01-03') && await cursor() === '5:10', await cursor());
     const saveShown = () => js(`getComputedStyle(document.getElementById('btn-save')).display !== 'none'`);
     await js(`__App.setMode('preview'); 'ok'`);
     await sleep(200);
@@ -261,7 +316,7 @@ const FAKE_DRIVE = `
     await js(`__App.save().then(() => 'ok')`);
     check('sem escrita extra', Number(await js('window.__written.length')) === 1);
 
-    await js(`__App.setMode('edit'); __App.editor.e.focus(); __App.editor.setSelection({ row: 5, col: 10 }); 'ok'`);
+    await js(`__App.setMode('edit'); __App.Editor.focar(); ${SELECIONAR({ row: 5, col: 10 })} 'ok'`);
     await send('Input.insertText', { text: '!' });
     await sleep(200);
     await js(`__App.setMode('preview'); 'ok'`);
@@ -356,8 +411,8 @@ const FAKE_DRIVE = `
     check('o dedo alcanca o "Descartar"', dialogo.okAlcancavel, dialogo);
     check('o dedo alcanca o "Cancelar"', dialogo.cancelarAlcancavel, dialogo);
 
-    // ── Tarefa: um clique de verdade na caixa, com o TinyMDE guardando o texto ──
-    console.log('9. Tarefa marcada no modo leitura, com o TinyMDE');
+    // ── Tarefa: um clique de verdade na caixa, com o CodeMirror guardando o texto ──
+    console.log('9. Tarefa marcada no modo leitura, com o CodeMirror');
     await open(buildPage('tarefa', currentApp));
     await js(FAKE_DRIVE);
     await editNote('- [ ] Agatha\n- [ ] Banguela\n', 0, 0);
@@ -375,7 +430,7 @@ const FAKE_DRIVE = `
     check('a caixa fica marcada na tela e a nota tem o que salvar', await js(`document.querySelectorAll('#preview-container input[type="checkbox"]')[1].checked && __App.isDirty`) === true);
     await js(`__App.setMode('edit'); 'ok'`);
     await sleep(200);
-    check('na edicao o TinyMDE mostra o [x]', (await js('__App.editor.e.textContent')).includes('- [x] Banguela'), await js('__App.editor.e.textContent'));
+    check('na edicao o editor mostra o [x]', (await js(`${CONTEUDO}.textContent`)).includes('- [x] Banguela'), await js(`${CONTEUDO}.textContent`));
 
     // ── Deslizar da borda: toque de verdade, numa tela de celular, com o CloseWatcher real ──
     console.log('10. Deslizar da borda com toque de verdade');

@@ -237,13 +237,27 @@ const App = {
     let ultimaAssinatura = '';       // pra saber se alguma linha mudou de verdade
     const refazerEmbeds = StateEffect.define();
 
+    // Quanto de largura a foto tem de verdade: o `clientWidth` do contentDOM inclui o recuo de
+    // 16px de cada lado que o style.css põe nele, e a linha não tem essa sobra. Contando o recuo,
+    // a foto sai 32px mais larga que a linha e o lado direito fica cortado (num celular de 390px
+    // são uns 34px). O desconto vem do estilo computado, e não de um número fixo, pra acompanhar
+    // o style.css se o recuo mudar. Sem layout (jsdom) devolve 0, e quem chama cai no tamanho
+    // da própria imagem, como já caía quando o clientWidth era 0.
+    const larguraDisponivel = () => {
+      if (!view) return 0;
+      const estilo = getComputedStyle(view.contentDOM);
+      const recuo = (parseFloat(estilo.paddingLeft) || 0) + (parseFloat(estilo.paddingRight) || 0);
+      return Math.max(view.contentDOM.clientWidth - recuo, 0);
+    };
+
     const construirEmbeds = (state) => {
       const marcas = [];
+      const disponivel = larguraDisponivel();   // uma medida só por redesenho, não uma por linha
       for (let n = 1; n <= state.doc.lines; n++) {
         const linha = state.doc.line(n);
         const info = infoDaLinha(linha.text);
         if (!info) continue;
-        const largura = Math.min(view?.contentDOM.clientWidth || info.width, info.width);
+        const largura = Math.min(disponivel || info.width, info.width);
         const altura = Math.round(Math.min(largura * info.height / info.width, App.EMBED_MAX_HEIGHT));
         marcas.push(Decoration.line({
           attributes: { class: 'embed-line', style: `--embed: url("${info.url}"); --embed-h: ${altura}px` },
@@ -2770,7 +2784,9 @@ const App = {
   // selected line, wherever the cursor is in it. `command` is the TinyMDE command doing the same job.
   FORMATS: {
     bold: { wrap: ['**', '**'], command: 'bold' },
-    italic: { wrap: ['_', '_'], command: 'italic' },
+    // Asterisco e não sublinhado: é o que o app escrevia antes da troca de editor (o TinyMDE ia
+    // pelo `command` e ignorava o `wrap`), e é o que está escrito nas notas que já existem
+    italic: { wrap: ['*', '*'], command: 'italic' },
     code: { wrap: ['`', '`'], command: 'code' },
     link: { wrap: ['[', '](url)'] },
     heading: { line: '## ', command: 'h2' },
