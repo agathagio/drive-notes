@@ -1881,6 +1881,19 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     check('citacao em duas linhas de uma vez',
       formatar('uma\ndois', 1, 6, 'quote') === '> uma\n> dois');
 
+    // Regressao: a nota termina em \n, entao o CM6 conta uma terceira linha vazia depois do
+    // ultimo Enter. Selecionar a nota inteira e formatar e uso comum, e essa linha vazia nao foi
+    // tocada de verdade pela selecao (a selecao termina exatamente no comeco dela): nao pode
+    // ganhar o marcador
+    {
+      const notaComQuebra = 'compra\nleite\n';
+      App.Editor.definirTexto(notaComQuebra);
+      view.dispatch({ selection: { anchor: 0, head: notaComQuebra.length } });
+      App.Editor.formatar('quote');
+      check('selecao ate o fim do texto nao marca a linha vazia que a quebra final cria',
+        App.Editor.texto() === '> compra\n> leite\n', App.Editor.texto());
+    }
+
     // Sem selecao, o negrito precisa deixar a selecao no miolo (em cima de "texto"), senao quem
     // digitar em seguida escreve fora dos asteriscos
     App.Editor.definirTexto('vazio');
@@ -1892,14 +1905,17 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
       view.state.doc.sliceString(sel.from, sel.to));
 
     // Com selecao, formatar tambem deixa a selecao abrangendo so o texto formatado, nao os
-    // marcadores: quem digitar em seguida substitui a palavra, nao apaga os asteriscos junto
+    // marcadores: quem digitar em seguida substitui a palavra, nao apaga os asteriscos junto.
+    // A selecao armada aqui (a frase inteira) e de proposito diferente da selecao final esperada
+    // (so o texto, sem as marcas): se o codigo nao somar antes.length certinho, ou nao mexer na
+    // selecao, o resultado nao bate nem no texto nem na posicao
     App.Editor.definirTexto('uma palavra');
-    view.dispatch({ selection: { anchor: 4, head: 11 } });
+    view.dispatch({ selection: { anchor: 0, head: 11 } });
     App.Editor.formatar('bold');
     const sel2 = view.state.selection.main;
-    check('com selecao, a selecao final cobre so a palavra, sem os asteriscos',
-      view.state.doc.sliceString(sel2.from, sel2.to) === 'palavra',
-      view.state.doc.sliceString(sel2.from, sel2.to));
+    check('com selecao mais ampla que o esperado, a selecao final encolhe pro texto formatado, sem as marcas',
+      view.state.doc.sliceString(sel2.from, sel2.to) === 'uma palavra' && sel2.from === 2 && sel2.to === 13,
+      { from: sel2.from, to: sel2.to, texto: view.state.doc.sliceString(sel2.from, sel2.to) });
 
     // O botao e tocado com o teclado aberto: se o foco nao voltar pro editor, o teclado fecha.
     // Os dois caminhos do formatar (wrap e marcador de linha) retornam em pontos diferentes do

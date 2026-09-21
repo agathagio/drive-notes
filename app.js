@@ -341,7 +341,7 @@ const App = {
       refazer: () => redo(view),
       formatar: (nome) => {
         const formato = App.FORMATS[nome];
-        if (!formato) return;
+        if (!formato) { view.focus(); return; }
         const sel = view.state.selection.main;
 
         if (formato.wrap) {
@@ -357,9 +357,14 @@ const App = {
           return;
         }
 
-        // Marcador de linha: vale pra toda linha tocada pela seleção
+        // Marcador de linha: vale pra toda linha tocada pela seleção. Se a seleção termina
+        // exatamente no começo de uma linha, essa linha não foi tocada de verdade (é só onde a
+        // seleção parou), e não entra, a não ser que seja a única linha da seleção. É a mesma
+        // guarda do changeBySelectedLine do próprio CM6 (@codemirror/commands, usada por
+        // indentMore e por toggleLineComment), adaptada pra uma seleção só em vez de várias.
         const primeira = view.state.doc.lineAt(sel.from).number;
-        const ultima = view.state.doc.lineAt(sel.to).number;
+        let ultima = view.state.doc.lineAt(sel.to).number;
+        if (!sel.empty && ultima > primeira && sel.to <= view.state.doc.line(ultima).from) ultima--;
         const mudancas = [];
         for (let n = primeira; n <= ultima; n++) {
           const linha = view.state.doc.line(n);
