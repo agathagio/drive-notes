@@ -128,7 +128,7 @@ function fakeCtx(canvas) {
   return ctx;
 }
 
-async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
+async function boot({ auth = true, seedStorage = {}, watcher = false, editor = false } = {}) {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const dom = new JSDOM(html, { url: 'http://localhost:8000/', runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
@@ -167,6 +167,20 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     App.els.editorElement.dispatchEvent(new w.Event('input'));
   };
   const drafts = () => App.listDrafts();
+  if (editor) {
+    // O jsdom nao tem layout: o CM6 mede texto por Range.getClientRects e estoura dentro de um
+    // requestAnimationFrame (erro assincrono, barulhento, que nao quebra asserção mas polui).
+    // Devolver lista vazia cala a medicao sem tocar no estado, que e o que os testes checam.
+    const vazio = () => Object.assign([], { item: () => null });
+    w.Range.prototype.getClientRects = vazio;
+    w.Range.prototype.getBoundingClientRect = () => new w.DOMRect(0, 0, 0, 0);
+    w.Element.prototype.getClientRects = vazio;
+    w.eval(fs.readFileSync(LIBS.cm6, 'utf8'));
+    const host = w.document.createElement('div');
+    w.document.body.appendChild(host);
+    App.els.editorElement = host;
+    App.initEditor();
+  }
   return { w, App, drive, type, drafts };
 }
 
@@ -1642,6 +1656,32 @@ async function boot({ auth = true, seedStorage = {}, watcher = false } = {}) {
     drive.put('G', 'g.md', '- [[zebra]]\n\n- [[outra|texto]]\n');
     await App.openFile('G', 'g.md');
     check('item com wikilink continua virando link', c.querySelectorAll('li a.wikilink').length === 2 && c.querySelector('li.gap a.wikilink').textContent === 'texto', c.innerHTML);
+  }
+
+  console.log('39b. Infra: o CodeMirror 6 sobe no jsdom');
+  {
+    const { w } = await boot({ editor: true });
+    check('o pacote expos o window.CM6', !!w.CM6 && !!w.CM6.EditorView);
+
+    const host = w.document.createElement('div');
+    w.document.body.appendChild(host);
+    const view = new w.CM6.EditorView({
+      doc: '# titulo\n\n- [ ] tarefa\n',
+      parent: host,
+      extensions: [w.CM6.lineWrapping, w.CM6.markdown({ base: w.CM6.markdownLanguage })],
+    });
+    // A string termina em \n, que pro CM6 conta como uma quarta linha vazia (doc.lines = numero de \n + 1,
+    // contagem de texto puro, sem depender de layout): medido com o pacote real, nao e efeito do jsdom.
+    check('o editor desenhou as linhas no DOM', host.querySelectorAll('.cm-line').length === 4,
+      host.querySelectorAll('.cm-line').length);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: 'fim' } });
+    check('escrever por transacao funciona', view.state.doc.toString().endsWith('fim'));
+    check('a arvore de sintaxe reconhece tarefa', (() => {
+      const nomes = [];
+      w.CM6.syntaxTree(view.state).iterate({ enter: (n) => nomes.push(n.name) });
+      return nomes.includes('TaskMarker');
+    })());
+    view.destroy();
   }
 
   console.log('40. Edicao: Enter numa tarefa continua a lista de tarefas');
