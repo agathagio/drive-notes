@@ -138,9 +138,10 @@ const App = {
   },
 
   // ── Editor ──
-  // O app fala só com App.Editor. Atrás dele há duas implementações; nenhuma delas vaza
-  // pra fora daqui. Em especial, linha e coluna ({row, col}) são vocabulário do TinyMDE:
-  // quem precisa de posição recebe uma marca opaca e devolve ela.
+  // O app fala só com App.Editor. Atrás dele há três implementações (o CodeMirror 6, o TinyMDE
+  // antigo e um textarea de reserva); nenhuma delas vaza pra fora daqui. Em especial, linha e
+  // coluna ({row, col}) são vocabulário do TinyMDE: quem precisa de posição recebe uma marca
+  // opaca e devolve ela.
   //
   // Duas regras que valem pra toda implementação, presente ou futura:
   //
@@ -174,6 +175,9 @@ const App = {
           // O erro inteiro, não só a mensagem: um bug dentro da implementação vira um aviso com
           // arquivo e linha, em vez de o app cair calado no textarea
           console.warn(`editor ${tipo} indisponivel:`, e);
+          // A tentativa pode ter estourado já com meio editor pendurado no elemento: a próxima
+          // precisa de um host limpo, senão a reserva aparece em cima do lixo da anterior
+          elemento.replaceChildren();
         }
       }
       return this._tipo;
@@ -201,7 +205,7 @@ const App = {
       As onze funções da fachada saem daqui; `iniciar` e `ativo` são da fachada, não desta. */
   implCM6(elemento, aoMudar) {
     const {
-      EditorView, EditorState, StateField, StateEffect, Transaction, keymap, drawSelection,
+      EditorView, StateField, StateEffect, Transaction, keymap, drawSelection,
       history, undo, redo, defaultKeymap, historyKeymap,
       markdown, markdownLanguage, insertNewlineContinueMarkup,
       syntaxHighlighting, HighlightStyle, tags: t, lineWrapping,
@@ -241,6 +245,14 @@ const App = {
       { tag: [t.processingInstruction, t.contentSeparator], color: 'var(--text-secondary)' },
     ]);
 
+    // O cursor que está no texto é escolha de quem escreve, ou artefato de ter carregado a nota? A
+    // diferença é esta marca. A seleção do CM6 é estado permanente: depois de carregar uma nota ela
+    // fica em 0 sem ninguém ter escolhido isso, e uma foto tirada aí entraria na primeira linha, em
+    // cima do frontmatter, deixando a nota sem `created` nem `updated`. Já um cursor posto pela
+    // usuária vale mesmo depois que o foco vai embora, porque o seletor de foto rouba o foco e a
+    // foto tem que cair onde ela deixou o cursor.
+    let cursorPosto = false;
+
     // `let` e não `const`: o campo de decoração da tarefa 7 roda durante a construção do
     // EditorView e precisa consultar `view`. Com `const`, essa leitura cairia na zona morta
     // temporal e estouraria ReferenceError em vez de devolver null.
@@ -259,7 +271,10 @@ const App = {
           ...defaultKeymap,
           ...historyKeymap,
         ]),
-        EditorView.updateListener.of((u) => { if (u.docChanged) aoMudar(); }),
+        EditorView.updateListener.of((u) => {
+          if (u.docChanged) aoMudar();
+          if (u.focusChanged && u.view.hasFocus) cursorPosto = true;
+        }),
       ],
     });
 
@@ -281,19 +296,29 @@ const App = {
     return {
       view,
       texto: () => view.state.doc.toString(),
-      definirTexto: (t2) => view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: t2 },
-        annotations: semHistorico,
-      }),
+      definirTexto: (t2) => {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: t2 },
+          annotations: semHistorico,
+        });
+        // Texto novo. Se a troca pegou a pessoa dentro do editor (a recarga depois de um conflito),
+        // ela está ali escrevendo e o cursor dela continua sendo a melhor aposta; com o editor fora
+        // de foco é nota aberta da lista, e aí ninguém pôs cursor nenhum neste texto
+        cursorPosto = view.hasFocus;
+      },
       focar: () => view.focus(),
       cursorNoFim: () => view.dispatch({ selection: { anchor: view.state.doc.length } }),
       marcarCursor: () => {
+        if (!cursorPosto) return null;
         const nova = novaMarca(view.state.selection.main.head);
         view.dispatch({ effects: nova.efeito });
         return nova.id;
       },
       inserirEmLinhaPropria: (texto, marca) => {
-        const pos = posDaMarca(marca) ?? view.state.selection.main.head;
+        // Sem marca e sem cursor posto (nota aberta da lista e câmera tocada antes do texto), o
+        // lugar seguro é o fim da nota: o começo é onde mora o frontmatter
+        const pos = posDaMarca(marca)
+          ?? (cursorPosto ? view.state.selection.main.head : view.state.doc.length);
         const linha = view.state.doc.lineAt(pos);
         // Se há texto antes do cursor na linha, a inserção começa numa linha nova
         const antes = view.state.doc.sliceString(linha.from, pos).trim() ? '\n' : '';

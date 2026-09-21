@@ -1713,12 +1713,65 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     App.Editor.definirTexto('linha um\nlinha dois');
     check('texto ida e volta', App.Editor.texto() === 'linha um\nlinha dois');
 
+    // O jsdom nao tem layout e ninguem consegue tocar no texto: o view e usado so pra pôr o cursor
+    // onde um dedo poria, que e o unico jeito de simular o uso real aqui.
+    const view = App.Editor._impl.view;
+    const NOTA = '---\ncreated: 2026-09-21\nupdated: 2026-09-21\n---\n\ntexto da nota';
+
+    // Nota aberta da lista e camera tocada antes de tocar no texto: a selecao esta em 0 por
+    // artefato de carregar o texto, nao por escolha, e a foto ali comeria o frontmatter
+    App.Editor.definirTexto(NOTA);
+    check('editor nunca focado: nao ha cursor de que falar, a marca e null',
+      App.Editor.marcarCursor() === null, App.Editor.marcarCursor());
+    const marcaDoFim = App.Editor.inserirEmLinhaPropria('![[foto.png]]', App.Editor.marcarCursor());
+    check('editor nunca focado: a foto entra no fim, o frontmatter fica na primeira linha',
+      App.Editor.texto() === `${NOTA}\n![[foto.png]]\n`, App.Editor.texto());
+    check('a insercao devolve marca, e marca nunca e falsy', !!marcaDoFim, marcaDoFim);
+
+    // A leva da galeria, pelo caminho do savePhoto: cada foto usa o retorno da anterior
+    App.Editor.definirTexto('nota com fotos');
+    let at = App.Editor.marcarCursor();
+    for (const nome of ['um.jpg', 'dois.jpg', 'tres.jpg']) at = App.insertOnOwnLine(`![[${nome}]]`, at) || at;
+    check('a leva de fotos sai na ordem em que foi escolhida',
+      App.Editor.texto() === 'nota com fotos\n![[um.jpg]]\n![[dois.jpg]]\n![[tres.jpg]]\n', App.Editor.texto());
+
+    // O uso normal: o cursor foi posto no meio do texto e o foco foi embora depois (o seletor de
+    // foto rouba). A foto cai no cursor, que e onde ela foi pedida, e nao no fim
+    App.Editor.definirTexto(NOTA);
+    App.Editor.focar();
+    view.dispatch({ selection: { anchor: NOTA.indexOf('texto da nota') + 5 } });
+    view.contentDOM.blur();
+    check('o foco foi mesmo embora', !view.hasFocus);
+    const marcaDoMeio = App.Editor.marcarCursor();
+    check('cursor posto antes de o foco sumir: a marca existe', !!marcaDoMeio, marcaDoMeio);
+    App.Editor.inserirEmLinhaPropria('![[meio.png]]', marcaDoMeio);
+    check('sem foco mas com cursor posto: a foto entra no cursor e o frontmatter fica inteiro',
+      App.Editor.texto() === `---\ncreated: 2026-09-21\nupdated: 2026-09-21\n---\n\ntexto\n![[meio.png]]\n da nota`,
+      App.Editor.texto());
+
+    // A nota cresce enquanto a foto sobe: a marca anda junto e a foto cai onde foi pedida
+    App.Editor.definirTexto('uma nota\ncom tres linhas\nde texto');
+    App.Editor.focar();
+    App.Editor.cursorNoFim();
     const marca = App.Editor.marcarCursor();
-    // a nota encolhe DEPOIS da marca: e o caso da foto que sobe enquanto se escreve
+    App.cm6Digitar('\nescrito enquanto a foto subia');
+    App.Editor.inserirEmLinhaPropria('![[tarde.png]]', marca);
+    check('a foto entra na marca, e o que foi escrito depois continua embaixo',
+      App.Editor.texto() === 'uma nota\ncom tres linhas\nde texto\n![[tarde.png]]\n\nescrito enquanto a foto subia',
+      App.Editor.texto());
+
+    // Recarga depois de conflito com a pessoa dentro do editor: o texto troca debaixo dela, mas ela
+    // continua ali escrevendo, entao o cursor dela continua valendo (nao vira nota aberta da lista)
+    check('o editor continua focado', view.hasFocus);
+    App.Editor.definirTexto('texto novo, que chegou do Drive');
+    check('texto trocado com o editor focado: ainda ha cursor de que falar',
+      App.Editor.marcarCursor() !== null, App.Editor.marcarCursor());
+
+    // E a nota encolher inteira embaixo da marca (recarregada durante o upload) nao pode estourar
     App.Editor.definirTexto('curta');
-    App.Editor.inserirEmLinhaPropria('![[foto.png]]', marca);
-    check('a marca sobreviveu a nota mudar, sem estourar',
-      App.Editor.texto().includes('![[foto.png]]'), App.Editor.texto());
+    App.Editor.inserirEmLinhaPropria('![[depois.png]]', marca);
+    check('marca de nota que encolheu nao estoura: cai no comeco do texto novo',
+      App.Editor.texto() === '![[depois.png]]\ncurta', App.Editor.texto());
 
     App.Editor.definirTexto('base');
     App.cm6Digitar(' mais');
