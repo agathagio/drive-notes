@@ -1858,5 +1858,66 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     check('paragrafo comum nao ganha marcador', r.text === 'paragrafo\n' && r.at === '1:0', r);
   }
 
+  console.log('41. Barra de formatacao no CM6');
+  {
+    const { App } = await boot({ editor: true });
+    const view = App.Editor._impl.view;
+    const formatar = (texto, de, ate, nome) => {
+      App.Editor.definirTexto(texto);
+      view.dispatch({ selection: { anchor: de, head: ate } });
+      App.Editor.formatar(nome);
+      return App.Editor.texto();
+    };
+
+    check('negrito envolve a selecao', formatar('uma palavra', 4, 11, 'bold') === 'uma **palavra**');
+    check('italico envolve a selecao', formatar('uma palavra', 4, 11, 'italic') === 'uma _palavra_');
+    check('codigo envolve a selecao', formatar('uma palavra', 4, 11, 'code') === 'uma `palavra`');
+    check('sem selecao o negrito poe um lugar pra escrever', formatar('vazio', 5, 5, 'bold') === 'vazio**texto**');
+    check('link usa o formato do app', formatar('site', 0, 4, 'link') === '[site](url)');
+    check('titulo entra no comeco da linha', formatar('uma linha', 3, 3, 'heading') === '## uma linha');
+    check('titulo de novo tira', formatar('## uma linha', 4, 4, 'heading') === 'uma linha');
+    check('lista troca o marcador do titulo', formatar('## uma linha', 4, 4, 'list') === '- uma linha');
+    check('tarefa entra', formatar('uma linha', 3, 3, 'checklist') === '- [ ] uma linha');
+    check('citacao em duas linhas de uma vez',
+      formatar('uma\ndois', 1, 6, 'quote') === '> uma\n> dois');
+
+    // Sem selecao, o negrito precisa deixar a selecao no miolo (em cima de "texto"), senao quem
+    // digitar em seguida escreve fora dos asteriscos
+    App.Editor.definirTexto('vazio');
+    view.dispatch({ selection: { anchor: 5, head: 5 } });
+    App.Editor.formatar('bold');
+    const sel = view.state.selection.main;
+    check('sem selecao a marcacao fica selecionada, nao so o cursor no fim',
+      view.state.doc.sliceString(sel.from, sel.to) === 'texto',
+      view.state.doc.sliceString(sel.from, sel.to));
+
+    // Com selecao, formatar tambem deixa a selecao abrangendo so o texto formatado, nao os
+    // marcadores: quem digitar em seguida substitui a palavra, nao apaga os asteriscos junto
+    App.Editor.definirTexto('uma palavra');
+    view.dispatch({ selection: { anchor: 4, head: 11 } });
+    App.Editor.formatar('bold');
+    const sel2 = view.state.selection.main;
+    check('com selecao, a selecao final cobre so a palavra, sem os asteriscos',
+      view.state.doc.sliceString(sel2.from, sel2.to) === 'palavra',
+      view.state.doc.sliceString(sel2.from, sel2.to));
+
+    // O botao e tocado com o teclado aberto: se o foco nao voltar pro editor, o teclado fecha.
+    // Os dois caminhos do formatar (wrap e marcador de linha) retornam em pontos diferentes do
+    // codigo, entao os dois precisam ser conferidos.
+    view.contentDOM.blur();
+    App.Editor.definirTexto('uma linha');
+    view.dispatch({ selection: { anchor: 3, head: 3 } });
+    App.Editor.formatar('heading');
+    check('o foco volta pro editor depois de formatar por marcador de linha (senao o teclado fecha)',
+      view.hasFocus);
+
+    view.contentDOM.blur();
+    App.Editor.definirTexto('uma palavra');
+    view.dispatch({ selection: { anchor: 4, head: 11 } });
+    App.Editor.formatar('bold');
+    check('o foco volta pro editor depois de formatar por wrap (senao o teclado fecha)',
+      view.hasFocus);
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });

@@ -339,7 +339,35 @@ const App = {
       },
       desfazer: () => undo(view),
       refazer: () => redo(view),
-      formatar: () => {},          // tarefa 6
+      formatar: (nome) => {
+        const formato = App.FORMATS[nome];
+        if (!formato) return;
+        const sel = view.state.selection.main;
+
+        if (formato.wrap) {
+          const [antes, depois] = formato.wrap;
+          const escolhido = view.state.doc.sliceString(sel.from, sel.to) || 'texto';
+          view.dispatch({
+            changes: { from: sel.from, to: sel.to, insert: `${antes}${escolhido}${depois}` },
+            // a seleção fica no miolo, pra sobrescrever "texto" digitando
+            selection: { anchor: sel.from + antes.length, head: sel.from + antes.length + escolhido.length },
+            userEvent: 'input',
+          });
+          view.focus();
+          return;
+        }
+
+        // Marcador de linha: vale pra toda linha tocada pela seleção
+        const primeira = view.state.doc.lineAt(sel.from).number;
+        const ultima = view.state.doc.lineAt(sel.to).number;
+        const mudancas = [];
+        for (let n = primeira; n <= ultima; n++) {
+          const linha = view.state.doc.line(n);
+          mudancas.push({ from: linha.from, to: linha.to, insert: App.toggleLinePrefix(linha.text, formato.line) });
+        }
+        view.dispatch({ changes: mudancas, userEvent: 'input' });
+        view.focus();
+      },
       decorarEmbeds: () => false,  // tarefa 7
       rolarAteOCursor: () => view.dispatch({
         effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'nearest', yMargin: 32 }),
