@@ -4,7 +4,7 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { ROOT, sleep, buildPage, launch, reporter } = require('./helpers');
+const { ROOT, LIBS, sleep, buildPage, launch, reporter } = require('./helpers');
 
 const { check, done } = reporter();
 
@@ -86,12 +86,15 @@ const FAKE_DRIVE = `
     try {
       buggyApp = execSync(`git -C "${ROOT}" show ${COMMIT_WITH_DICTATION_BUG}:app.js`, { encoding: 'utf8', maxBuffer: 1e7, stdio: ['ignore', 'pipe', 'ignore'] });
     } catch { /* shallow clone or no git: the control is skipped */ }
-    if (buggyApp) {
+    // O app antigo e TinyMDE puro: sem a biblioteca ele cai no textarea de reserva e o helper
+    // legado estoura, derrubando o cenario e a suite junto. Pulado e melhor que vermelho falso.
+    const temTinyMDE = fs.existsSync(LIBS.tinymde);
+    if (buggyApp && temTinyMDE) {
       const before = await dictate(buildPage('dictation-before', buggyApp, { tinymde: true }), true);
       console.log('     versao com o bug:', JSON.stringify(before.content));
       check('controle: o bug se reproduz na versao antiga (texto duplicado)', before.content !== expected);
     } else {
-      console.log('     (controle pulado: commit antigo indisponivel)');
+      console.log(`     (controle pulado: ${buggyApp ? 'tiny-markdown-editor nao instalado' : 'commit antigo indisponivel'})`);
     }
     const after = await dictate(buildPage('current', currentApp));
     console.log('     versao atual:    ', JSON.stringify(after.content));

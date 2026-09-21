@@ -225,6 +225,10 @@ body {
    .cm-scroller (e é nele que o CM6 espera as regras de fonte), e o recuo do texto é do .cm-content.
    Fonte, tamanho, entrelinha, recuo e fundo são os mesmos do .TinyMDE acima, de propósito.
    As cores do texto vêm do syntaxHighlighting no app.js, não daqui.
+   Uma ressalva no recuo: os 16px do .cm-content são os mesmos, mas o tema de fábrica do CM6 põe
+   `padding: 0 2px 0 6px` na .cm-line, então o texto começa a 22px da borda e termina a 18px, onde
+   o .TinyMDE tinha 16px dos dois lados. Fica assim de propósito: esses 6px são o que impede o
+   cursor na coluna 0 de ficar colado na borda.
 
    Todo seletor daqui pra baixo leva o .cm-editor na frente, e não é enfeite: o CM6 injeta o tema
    de fábrica com a classe dele na frente (`.ͼ1 .cm-scroller`), então um `.cm-scroller` sozinho

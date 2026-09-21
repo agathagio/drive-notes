@@ -252,11 +252,14 @@ const App = {
 
     const construirEmbeds = (state) => {
       const marcas = [];
-      const disponivel = larguraDisponivel();   // uma medida só por redesenho, não uma por linha
+      // Uma medida por redesenho, e nenhuma quando a nota não tem foto: isto roda em toda tecla
+      // digitada, e ler o DOM aqui dentro força o navegador a recalcular estilo e layout na hora
+      let disponivel = null;
       for (let n = 1; n <= state.doc.lines; n++) {
         const linha = state.doc.line(n);
         const info = infoDaLinha(linha.text);
         if (!info) continue;
+        if (disponivel === null) disponivel = larguraDisponivel();
         const largura = Math.min(disponivel || info.width, info.width);
         const altura = Math.round(Math.min(largura * info.height / info.width, App.EMBED_MAX_HEIGHT));
         marcas.push(Decoration.line({
