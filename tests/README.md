@@ -23,7 +23,8 @@ O editor aqui é o textarea de fallback. A exceção são os cenários que pedem
 - desenho: canvas com `devicePixelRatio`, ponta de traço redonda, o traço nascendo sob o dedo (e não deslocado pela faixa do topo), borracha apagando pra transparente e o PNG recortado no traço;
 - tarefa: um clique de verdade na caixa do modo leitura vira `[x]` no editor;
 - deslizar da borda: toque emulado em tela de celular, com o CloseWatcher real; a seta sai da borda certa e fica roxa, e os prints do meio do gesto saem em `tests/.tmp/`;
-- retomar a nota onde parou: sair e voltar, e a página recarregada como o app que o Android matou, reabrem no mesmo parágrafo, inclusive com uma foto de cima chegando do Drive depois (quem segura o lugar enquanto ela cresce é a ancoragem de rolagem do navegador). Tem um controle que roda o app do `7bed916` e confere que nele a nota reabre no topo.
+- retomar a nota onde parou: sair e voltar, e a página recarregada como o app que o Android matou, reabrem no mesmo parágrafo, inclusive com uma foto de cima chegando do Drive depois (quem segura o lugar enquanto ela cresce é a ancoragem de rolagem do navegador). Tem um controle que roda o app do `7bed916` e confere que nele a nota reabre no topo;
+- Ler e Editar no mesmo trecho: com o CodeMirror de verdade, o Editar abre o editor no parágrafo que estava no topo da leitura, sem pegar o foco (sem teclado), o Ler faz o caminho inverso, três idas e voltas não escorregam, e um parágrafo enorme lido até a metade abre na metade dele. Tem um controle que roda o app do `cf8d4f1` e confere que nele o Editar abre no topo da nota.
 
 Pra escolher o navegador: variável de ambiente `BROWSER_PATH`.
 

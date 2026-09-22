@@ -220,6 +220,11 @@ const App = {
     // number the text does not have, so the caller never has to know how long the text is.
     lineText(number) { return this._impl ? this._impl.lineText(number) : null; },
     removeLine(number) { return this._impl ? this._impl.removeLine(number) : false; },
+    // Where the screen is, so that Ler and Editar agree on it: a line counted from 1, with a fraction
+    // for how far down that line (a long paragraph is one line wrapped into many rows). Scrolling there
+    // moves neither the caret nor the focus, so no keyboard comes up.
+    topLine() { return this._impl ? this._impl.topLine() : null; },
+    showLine(at) { this._impl?.showLine(at); },
     // Extract to a new note. The stretch is opaque, like a mark: `text` is the only field anyone
     // outside may read. The fallback textarea has neither: no stretch, and nothing gets replaced.
     selectedStretch() { return this._impl?.selectedStretch?.() ?? null; },
@@ -806,6 +811,21 @@ const App = {
         });
         return true;
       },
+      // Read and written at App.VIEW_INSET below the top edge, where the first line sits unscrolled
+      topLine: () => {
+        const probe = view.scrollDOM.getBoundingClientRect().top + App.VIEW_INSET - view.documentTop;
+        const block = view.lineBlockAtHeight(Math.max(probe, 0));
+        const share = block.height > 0 ? Math.min(Math.max((probe - block.top) / block.height, 0), 0.999) : 0;
+        return view.state.doc.lineAt(block.from).number + share;
+      },
+      showLine: (at) => {
+        const doc = view.state.doc;
+        const line = doc.line(Math.min(Math.max(Math.floor(at), 1), doc.lines));
+        const pos = line.from + Math.floor((at % 1) * line.length);
+        // The library's own scroll, done in its measuring pass: the editor has just come out of hiding,
+        // and until then it could only guess the height of its lines
+        view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: App.VIEW_INSET }) });
+      },
       scrollToCaret: () => {
         // Only while the editor has the focus, which is what the old editor did by asking whether
         // the DOM selection was inside it. Whoever calls this does not check: the embed decoration
@@ -921,6 +941,18 @@ const App = {
       // With no lines of its own in the DOM there is nowhere to hang the picture, and no caret to chase
       decorateEmbeds() { return false; },
       scrollToCaret() {},
+
+      // No rows to measure either: the lines are shared out over the height, roughly
+      topLine() {
+        const ta = App.els.editorElement;
+        const total = (ta.value || '').split('\n').length;
+        return ta.scrollHeight > 0 ? 1 + (ta.scrollTop / ta.scrollHeight) * total : 1;
+      },
+      showLine(at) {
+        const ta = App.els.editorElement;
+        const total = (ta.value || '').split('\n').length;
+        ta.scrollTop = ((at - 1) / total) * ta.scrollHeight;
+      },
     };
   },
 
@@ -2136,6 +2168,101 @@ const App = {
     this.log(`resume block ${place.block}`);
   },
 
+  // ── The same stretch in both modes ──
+  //
+  // "Editar" opens the editor on the stretch of the note that was at the top of the reading view, and
+  // "Ler" does the reverse: switching modes never throws the screen back to the top of the note. The two
+  // views meet in the note's lines. Each block of the reading view knows the lines it comes from
+  // (noteBlocks), and the editor speaks lines (Editor.topLine, Editor.showLine).
+
+  // Both views start their text 16px below the top edge (the padding in the style.css), and that is the
+  // height where "the top of the screen" is read and written: going back and forth does not creep
+  VIEW_INSET: 16,
+
+  /** The lines each block of the reading view comes from, in screen order: [{ from, to }], counted from 1
+      like the editor's, the property block first when there is one. The blocks are cut by the renderer's
+      own tokenizer, so they are the ones renderPreview draws; what draws nothing is skipped: blank lines,
+      link definitions, and raw HTML the sanitizer leaves empty (a comment, a web clipping's iframe). Those
+      two were 290 of the vault's 2380 notes, measured in 22 set 2026. What still does not match is HTML
+      that opens in one block and closes in another (a clipping wrapped in a <div>): see readingBlocks. */
+  noteBlocks(content) {
+    if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') return [];
+    const { frontmatter, body } = this.splitFrontmatter(content);
+    const newlines = (s) => s.split('\n').length - 1;
+    const drawsNothing = (token) => {
+      if (token.type === 'space' || token.type === 'def') return true;
+      if (token.type !== 'html') return false;
+      const probe = document.createElement('template');
+      probe.innerHTML = DOMPurify.sanitize(token.raw);
+      return probe.content.children.length === 0;
+    };
+    const head = content.slice(0, content.length - body.length);
+    const blocks = frontmatter ? [{ from: 1, to: newlines(head.replace(/\n$/, '')) + 1 }] : [];
+    let line = 1 + newlines(head);
+    for (const token of marked.lexer(body)) {
+      if (!drawsNothing(token)) {
+        blocks.push({ from: line, to: line + newlines(token.raw.replace(/\n+$/, '')) });
+      }
+      line += newlines(token.raw);
+    }
+    return blocks;
+  },
+
+  /** noteBlocks for the reading view on screen. When the count does not match what is drawn (raw HTML in
+      the note can draw more or fewer elements than it has blocks), the note is shared out evenly over the
+      blocks instead: rougher, but still near the stretch. */
+  readingBlocks() {
+    const count = this.els.previewContainer.children.length;
+    const content = this.getContent();
+    const blocks = this.noteBlocks(content);
+    if (blocks.length === count) return blocks;
+    this.log(`blocks ${blocks.length} drawn ${count}`);
+    const total = content.split('\n').length;
+    return Array.from({ length: count }, (_, i) => {
+      const from = 1 + Math.floor(i * total / count);
+      return { from, to: Math.max(from, Math.floor((i + 1) * total / count)) };
+    });
+  },
+
+  /** The line at the top of the reading view, with the share of it already scrolled past */
+  readingTopLine() {
+    const container = this.els.previewContainer;
+    const els = [...container.children];
+    if (!els.length) return null;
+    const probe = container.getBoundingClientRect().top + this.VIEW_INSET;
+    let i = els.findIndex((el) => el.getBoundingClientRect().bottom > probe);
+    if (i < 0) i = els.length - 1;
+    const { from, to } = this.readingBlocks()[i];
+    const rect = els[i].getBoundingClientRect();
+    const height = rect.bottom - rect.top;
+    const share = height > 0 ? Math.min(Math.max((probe - rect.top) / height, 0), 0.999) : 0;
+    return from + share * (to - from + 1);
+  },
+
+  /** The reading view scrolled so that this line is at the top */
+  showReadingLine(at) {
+    const container = this.els.previewContainer;
+    const els = [...container.children];
+    if (!els.length || !at) return;
+    const blocks = this.readingBlocks();
+    const line = Math.floor(at);
+    // The block holding the line, or the next one when the line is a blank one between two blocks
+    let i = blocks.findIndex((b) => b.to >= line);
+    if (i < 0) i = blocks.length - 1;
+    const { from, to } = blocks[i];
+    const share = line < from ? 0 : Math.min((at - from) / (to - from + 1), 1);
+    const rect = els[i].getBoundingClientRect();
+    container.scrollTop += rect.top + share * (rect.bottom - rect.top) - (container.getBoundingClientRect().top + this.VIEW_INSET);
+  },
+
+  /** Into the editor on the stretch the reading view shows. Also the reopening after a new version in
+      edit mode, whose reading view has just been put back where it was (landInNote). */
+  editAtReading() {
+    const at = this._previewOf === this.currentFile ? this.readingTopLine() : null;
+    this.setMode('edit');
+    if (at) this.Editor.showLine(at);
+  },
+
   // ── UI State ──
 
   showBrowser() {
@@ -2907,7 +3034,7 @@ const App = {
 
   /** Right after the reload from the bar: back to the view it was tapped on, in the same mode, and with
       "back" going where it went before. The reading view comes back where it was, as in any opening
-      (landInNote); the caret in the editor is still the next step (card "Retomar a nota onde parou"). */
+      (landInNote), and the editor opens on that same stretch (editAtReading). */
   async reopenAfterUpdate() {
     let kept = null;
     try {
@@ -2931,7 +3058,7 @@ const App = {
       return;
     }
     if (kept.mode === 'edit' && kept.view.view === 'file' && this.currentFile?.id === kept.view.id && this.mode === 'preview') {
-      this.setMode('edit');
+      this.editAtReading();
     }
   },
 
@@ -2960,8 +3087,15 @@ const App = {
     this.offerUpdate();
   },
 
+  /** Ler / Editar on the note on screen: the stretch at the top of one is at the top of the other */
   togglePreview() {
-    this.setMode(this.mode === 'edit' ? 'preview' : 'edit');
+    if (this.mode !== 'edit') {
+      this.editAtReading();
+      return;
+    }
+    const at = this.Editor.topLine();
+    this.setMode('preview');
+    this.showReadingLine(at);
   },
 
   markDirty() {

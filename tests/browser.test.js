@@ -1018,6 +1018,130 @@ const FAKE_DRIVE = `
     }
     await js(APAGAR_BANCO);
     await send('Emulation.clearDeviceMetricsOverride');
+
+    console.log('19. Ler e Editar no mesmo trecho, com o CodeMirror de verdade');
+    // O topo de cada modo e lido 16px abaixo da borda (App.VIEW_INSET), onde o texto comeca sem rolar
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    const NOTA_TRECHO = '---\ncreated: 2026-09-01\nupdated: 2026-09-01\n---\n\n# Trecho\n\n'
+      + Array.from({ length: 60 }, (_, i) => i === 20
+        ? 'paragrafo longo ' + 'palavra '.repeat(400).trim()
+        : 'paragrafo ' + i + ' ' + 'texto '.repeat((i % 7) * 6)).join('\n\n');
+    const DRIVE_DO_TRECHO = `
+      localStorage.clear();
+      localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
+      __App.accessToken = 'fake';
+      window.__nota = ${JSON.stringify(NOTA_TRECHO)};
+      window.fetch = async (url) => {
+        const u = new URL(url);
+        const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o });
+        if (u.searchParams.get('alt') === 'media') return ok(window.__nota);
+        if (u.pathname.endsWith('/N4')) return ok({ id: 'N4', name: 'trecho.md', parents: ['F1'], modifiedTime: 't1' });
+        return ok({ files: [] });
+      };
+      'ok'`;
+    const nome = (s) => s.split(' texto')[0].split(' palavra')[0].trim();
+    const leitura = async () => {
+      const r = JSON.parse(await js(`(() => {
+        const c = document.getElementById('preview-container');
+        const probe = c.getBoundingClientRect().top + 16;
+        const el = [...c.children].find(e => e.getBoundingClientRect().bottom > probe);
+        return JSON.stringify({ texto: el.textContent, px: Math.round(el.getBoundingClientRect().top - probe) });
+      })()`));
+      return { texto: nome(r.texto), px: r.px };
+    };
+    const editor = async () => {
+      const r = JSON.parse(await js(`(() => {
+        const v = __App.Editor._impl.view;
+        const top = v.scrollDOM.getBoundingClientRect().top;
+        const b = v.lineBlockAtHeight(top + 16 - v.documentTop);
+        const line = v.state.doc.lineAt(b.from);
+        // Onde, dentro da linha, esta o que aparece na altura da leitura: 0 = comeco, 1 = fim
+        const at = v.posAtCoords({ x: v.contentDOM.getBoundingClientRect().left + 40, y: top + 20 });
+        return JSON.stringify({ texto: line.text, px: Math.round(v.coordsAtPos(line.from).top - (top + 16)),
+          dentro: at == null ? -1 : Math.round((at - line.from) / Math.max(line.length, 1) * 100) / 100, foco: v.hasFocus });
+      })()`));
+      return { texto: nome(r.texto), px: r.px, dentro: r.dentro, foco: r.foco };
+    };
+    const tocarNoBotao = async () => {
+      const r = JSON.parse(await js(`JSON.stringify(document.getElementById('btn-preview').getBoundingClientRect())`));
+      for (const type of ['mousePressed', 'mouseReleased']) {
+        await send('Input.dispatchMouseEvent', { type, x: r.x + r.width / 2, y: r.y + r.height / 2, button: 'left', clickCount: 1 });
+      }
+      await sleep(500);
+    };
+    const leituraEm = (inicio, px = 0) => js(`(() => {
+      const c = document.getElementById('preview-container');
+      const p = [...c.children].find(e => e.textContent.startsWith(${JSON.stringify(inicio)}));
+      c.scrollTop += p.getBoundingClientRect().top - (c.getBoundingClientRect().top + 16) + ${px};
+      return 'ok';
+    })()`);
+    const abrirTrecho = async (app) => {
+      await open(buildPage('trecho', app));
+      await js(APAGAR_BANCO);
+      await js(DRIVE_DO_TRECHO);
+      await js(`__App.openFile('N4', 'trecho.md').then(() => 'ok')`);
+      await sleep(200);
+    };
+
+    await abrirTrecho(currentApp);
+    await leituraEm('paragrafo 30 ');
+    const lendo = await leitura();
+    check('(lendo, com o paragrafo 30 no topo)', lendo.texto === 'paragrafo 30' && lendo.px === 0, lendo);
+    await tocarNoBotao();
+    const editando = await editor();
+    console.log('     Editar:', JSON.stringify(editando));
+    check('Editar: o editor abre com o paragrafo 30 no topo', await js('__App.mode') === 'edit' && editando.texto === 'paragrafo 30' && Math.abs(editando.px) <= 3, editando);
+    check('... sem pegar o foco, entao sem teclado', editando.foco === false, editando);
+
+    await js(`(() => {
+      const v = __App.Editor._impl.view;
+      const line = [...Array(v.state.doc.lines).keys()].map(n => v.state.doc.line(n + 1)).find(l => l.text.startsWith('paragrafo 45 '));
+      v.dispatch({ effects: CM6.EditorView.scrollIntoView(line.from, { y: 'start', yMargin: 16 }) });
+      return 'ok';
+    })()`);
+    await sleep(300);
+    await tocarNoBotao();
+    const lendoDeNovo = await leitura();
+    console.log('     Ler:', JSON.stringify(lendoDeNovo));
+    check('Ler: a leitura abre no paragrafo que estava no topo do editor', await js('__App.mode') === 'preview' && lendoDeNovo.texto === 'paragrafo 45' && Math.abs(lendoDeNovo.px) <= 3, lendoDeNovo);
+
+    const idas = [];
+    for (let i = 0; i < 3; i++) {
+      await tocarNoBotao();
+      await tocarNoBotao();
+      idas.push(await leitura());
+    }
+    console.log('     tres idas e voltas:', JSON.stringify(idas));
+    check('... e tres idas e voltas nao escorregam', idas.every(l => l.texto === 'paragrafo 45' && Math.abs(l.px - lendoDeNovo.px) <= 3), idas);
+
+    // Um paragrafo de uma linha so, enorme: lido ate a metade, o editor abre na metade dele
+    await js(`(() => {
+      const c = document.getElementById('preview-container');
+      const p = [...c.children].find(e => e.textContent.startsWith('paragrafo longo'));
+      c.scrollTop += p.getBoundingClientRect().top - (c.getBoundingClientRect().top + 16) + p.getBoundingClientRect().height / 2;
+      return 'ok';
+    })()`);
+    await tocarNoBotao();
+    const noMeio = await editor();
+    console.log('     paragrafo longo lido ate a metade:', JSON.stringify(noMeio));
+    check('paragrafo enorme lido ate a metade: o editor abre perto da metade dele', noMeio.texto === 'paragrafo longo' && noMeio.dentro > 0.35 && noMeio.dentro < 0.65, noMeio);
+
+    // Controle: a v48 abre o editor no topo da nota
+    let appDaV48 = null;
+    try {
+      appDaV48 = execSync(`git -C "${ROOT}" show cf8d4f1:app.js`, { encoding: 'utf8', maxBuffer: 1e7, stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch { /* shallow clone or no git: the control is skipped */ }
+    if (appDaV48) {
+      await abrirTrecho(appDaV48);
+      await leituraEm('paragrafo 30 ');
+      await tocarNoBotao();
+      const naV48 = await editor();
+      check('controle: sem a fatia 2 (cf8d4f1), o Editar abre no topo da nota', naV48.texto === '---', naV48);
+    } else {
+      console.log('     (controle pulado: commit antigo indisponivel)');
+    }
+    await js(APAGAR_BANCO);
+    await send('Emulation.clearDeviceMetricsOverride');
   } finally {
     browser.close();
   }

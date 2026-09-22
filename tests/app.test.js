@@ -3724,27 +3724,27 @@ function enterEm(App, w, conteudo, em) {
     }
   }
 
+  // jsdom has no layout. Stand-in for the reading view: every block is 100px tall, stacked from the top of
+  // the container, which sits at 50px on screen. Installed before the app runs (boot's beforeApp), so it
+  // also holds for what init opens by itself. The real layout is test:browser 18 and 19.
+  const layout = (w) => {
+    const c = w.document.getElementById('preview-container');
+    let scroll = 0;
+    Object.defineProperty(c, 'scrollTop', { configurable: true, get: () => scroll, set: (v) => { scroll = Math.max(0, v); } });
+    c.getBoundingClientRect = () => ({ top: 50, bottom: 850, height: 800 });
+    const real = w.Element.prototype.getBoundingClientRect;
+    w.Element.prototype.getBoundingClientRect = function () {
+      const i = this.parentElement === c ? [...c.children].indexOf(this) : -1;
+      if (i < 0) return real.call(this);
+      return { top: 50 + i * 100 - scroll, bottom: 150 + i * 100 - scroll, height: 100 };
+    };
+    w.__scroll = (px) => { scroll = px; };
+    // The block at the top of the screen, and how far into it
+    w.__at = () => ({ block: Math.floor(scroll / 100), into: scroll % 100 });
+  };
+
   console.log('69. Retomar a nota onde parou: a leitura reabre no bloco em que ficou');
   {
-    // jsdom has no layout. Stand-in: every block of the reading view is 100px tall, stacked from the top
-    // of the container, which sits at 50px on screen. Installed before the app runs (boot's beforeApp), so
-    // it also holds for what init opens by itself. The real layout, with a picture arriving late above
-    // the place, is test:browser 18.
-    const layout = (w) => {
-      const c = w.document.getElementById('preview-container');
-      let scroll = 0;
-      Object.defineProperty(c, 'scrollTop', { configurable: true, get: () => scroll, set: (v) => { scroll = Math.max(0, v); } });
-      c.getBoundingClientRect = () => ({ top: 50, bottom: 850 });
-      const real = w.Element.prototype.getBoundingClientRect;
-      w.Element.prototype.getBoundingClientRect = function () {
-        const i = this.parentElement === c ? [...c.children].indexOf(this) : -1;
-        if (i < 0) return real.call(this);
-        return { top: 50 + i * 100 - scroll, bottom: 150 + i * 100 - scroll };
-      };
-      w.__scroll = (px) => { scroll = px; };
-      // The block at the top of the screen, and how far into it
-      w.__at = () => ({ block: Math.floor(scroll / 100), into: scroll % 100 });
-    };
     // 31 blocks: the title, then paragraph i at block i + 1
     const LONG = '# Titulo\n\n' + Array.from({ length: 30 }, (_, i) => `paragrafo ${i}`).join('\n\n');
     const places = (w) => JSON.parse(w.localStorage.getItem('drivenotes_places') || '[]');
@@ -3848,6 +3848,77 @@ function enterEm(App, w, conteudo, em) {
       check('depois de recarregar pela faixa: a mesma nota, no mesmo ponto da leitura',
         App2.mode === 'preview' && w2.__at().block === 18 && w2.__at().into === 40, [App2.mode, w2.__at()]);
     }
+  }
+
+  console.log('70. Ler e Editar no mesmo trecho: o que esta no topo de um fica no topo do outro');
+  {
+    // Lines:  1-4 properties, 6 title, 8-9 paragraph, 11 comment, 13-15 list, 17-19 code, 21 iframe, 23 last
+    const NOTE = '---\ncreated: 2026-09-01\nupdated: 2026-09-01\n---\n\n# Titulo\n\nprimeiro paragrafo\ncontinua aqui\n\n'
+      + '<!-- comentario -->\n\n- um\n- dois\n- tres\n\n```\ncodigo\n```\n\n<iframe src="https://example.com"></iframe>\n\nultimo';
+    const { App, w, drive } = await boot({ beforeApp: layout });
+    drive.put('A', 'a.md', NOTE);
+    await App.openFile('A', 'a.md');
+    const blocks = App.noteBlocks(App.getContent());
+    check('cada bloco da leitura sabe de que linhas veio; comentario e iframe nao desenham nada e ficam de fora',
+      JSON.stringify(blocks) === JSON.stringify([{ from: 1, to: 4 }, { from: 6, to: 6 }, { from: 8, to: 9 }, { from: 13, to: 15 }, { from: 17, to: 19 }, { from: 23, to: 23 }]),
+      blocks);
+    check('... um por bloco que a leitura desenhou', App.els.previewContainer.children.length === blocks.length, App.els.previewContainer.children.length);
+
+    // The editor is a stand-in here: what is checked is the line the app hands it and reads from it
+    const shown = [];
+    App.Editor.showLine = (at) => shown.push(at);
+    w.__scroll(350);
+    App.togglePreview();
+    check('Editar com o meio da lista no topo: o editor abre na linha do meio da lista',
+      App.mode === 'edit' && Math.floor(shown[0]) === 14, shown);
+
+    App.Editor.topLine = () => 17.5;
+    App.togglePreview();
+    check('Ler com o bloco de codigo no topo do editor: a leitura abre nele',
+      App.mode === 'preview' && Math.round(App.els.previewContainer.scrollTop) === 401, App.els.previewContainer.scrollTop);
+    App.togglePreview();
+    check('... e ir e voltar nao escorrega: o editor volta na mesma linha', Math.abs(shown.at(-1) - 17.5) < 0.01, shown);
+
+    App.Editor.topLine = () => 20;
+    App.togglePreview();
+    check('linha em branco entre dois blocos: a leitura abre no bloco seguinte', Math.round(App.els.previewContainer.scrollTop) === 484,
+      App.els.previewContainer.scrollTop);
+
+    App.togglePreview();
+    App.Editor.topLine = () => 1;
+    App.togglePreview();
+    check('no topo do editor, a leitura fica no topo', App.mode === 'preview' && App.els.previewContainer.scrollTop === 0,
+      [App.mode, App.els.previewContainer.scrollTop]);
+  }
+
+  {
+    // The reopening after a new version, in edit mode: the fallback textarea's own showLine this time,
+    // spied through its scroll (jsdom gives it no height, so one is lent here)
+    const withTextareaHeight = (w) => {
+      layout(w);
+      w.__taScroll = [];
+      Object.defineProperty(w.HTMLTextAreaElement.prototype, 'scrollHeight', { configurable: true, get: () => 1000 });
+      Object.defineProperty(w.HTMLTextAreaElement.prototype, 'scrollTop', { configurable: true, get: () => 0, set: (v) => w.__taScroll.push(v) });
+    };
+    const LONG = '# Titulo\n\n' + Array.from({ length: 30 }, (_, i) => `paragrafo ${i}`).join('\n\n');
+    const drive = makeDrive();
+    drive.put('A', 'a.md', LONG);
+    const until = async (cond, limit = 3000) => {
+      const end = Date.now() + limit;
+      while (!cond() && Date.now() < end) await sleep(10);
+    };
+    const { App, w } = await boot({ beforeApp: withTextareaHeight, drive, watcher: true,
+      seedStorage: { drivenotes_token: 'fake', drivenotes_token_expires: String(Date.now() + 3600e3),
+        drivenotes_places: JSON.stringify([{ id: 'A', block: 12, into: 0 }]) },
+      seedSession: { drivenotes_reopen: JSON.stringify({ view: { view: 'file', id: 'A', name: 'a.md' }, mode: 'edit', navStack: [], fwdStack: [] }) } });
+    // The screen, not App.mode: the mode starts out as 'edit' before any note is open
+    await until(() => App.currentFile?.id === 'A' && w.document.body.dataset.view === 'edit');
+    // Block 12 is "paragrafo 11", line 25 of 61, and the top is read 16px into it (VIEW_INSET, 16 of its
+    // 100px): line 25.16, and the textarea scrolls to (25.16 - 1) / 61 of its height
+    const expected = Math.round((24.16 / 61) * 1000);
+    const scrolled = w.__taScroll.map(Math.round);
+    check('recarregado pela faixa em modo edicao: o editor abre no trecho em que a leitura estava',
+      App.mode === 'edit' && scrolled.some(v => Math.abs(v - expected) <= 2), [scrolled, expected]);
   }
 
   done();
