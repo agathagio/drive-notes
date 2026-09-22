@@ -445,6 +445,34 @@ const App = {
     // because the picture chooser steals the focus and the picture has to land where she left it.
     let caretPlaced = false;
 
+    // ── What the phone keyboard is told about capitals ──
+    //
+    // The CM6 puts autocapitalize="off" on its writing area, and with that the Android keyboard
+    // stopped raising the first letter of every sentence, which is what the old editor (a plain
+    // contenteditable) let happen. The spell checking stays off, as it comes from the library:
+    // the text is markdown, full of markers it would underline.
+    //
+    // 'sentences' on its own is not enough on a line that opens with a block marker. To decide on
+    // the capital the keyboard walks back from the caret, skips the spaces and looks at what it
+    // finds: the start of the line or a full stop means a new sentence, anything else does not. On
+    // `- [ ] |` it finds the `]` and leaves the letter small, and the same goes for `- `, `> `,
+    // `## ` and `1. `, whether the marker was typed by hand, put there by the toolbar or carried
+    // over by the Enter. While the caret sits right after a marker and nothing else, the attribute
+    // is 'words', which raises the letter that opens a word; it goes back to 'sentences' as soon as
+    // there is text in front of the caret, so only the first letter of the line comes up.
+    //
+    // Why the keyboard is asked to do it instead of the app upper-casing the typed letter itself:
+    // the Android composes a whole word before handing it over, and an edit made in the middle of
+    // that composition is thrown away by the next keystroke.
+    const ONLY_MARKERS = /^\s*(?:(?:#{1,6}|[0-9]{1,9}[).]|>|[-*+](?: \[[ xX]\])?)\s+)+$/;
+    const capsMode = (state) => {
+      const sel = state.selection.main;
+      // With something selected the typing replaces it, and where it lands is not known from here
+      if (!sel.empty) return 'sentences';
+      const line = state.doc.lineAt(sel.head);
+      return ONLY_MARKERS.test(line.text.slice(0, sel.head - line.from)) ? 'words' : 'sentences';
+    };
+
     // `let` and not `const`: the decoration field of task 7 runs while the EditorView is being
     // built and needs to read `view`. With `const`, that read would fall in the temporal dead zone
     // and throw a ReferenceError instead of answering null.
@@ -456,11 +484,7 @@ const App = {
         historyCompartment.of(history()),
         drawSelection(),
         lineWrapping,
-        // The CM6 puts autocapitalize="off" on its writing area, and with that the Android keyboard
-        // stopped raising the first letter of every sentence, which is what the old editor (a plain
-        // contenteditable) let happen. The spell checking stays off, as it comes from the library:
-        // the text is markdown, full of markers it would underline.
-        EditorView.contentAttributes.of({ autocapitalize: 'sentences' }),
+        EditorView.contentAttributes.of((v) => ({ autocapitalize: capsMode(v.state) })),
         // Above the Enter the markdown() installs in Prec.high: see the appEnter comment
         Prec.highest(keymap.of([{ key: 'Enter', run: appEnter }])),
         markdown({ base: markdownLanguage, codeLanguages: [] }),

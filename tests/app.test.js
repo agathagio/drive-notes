@@ -2165,6 +2165,40 @@ function enterEm(App, w, conteudo, em) {
     check('a area de escrita pede maiuscula no comeco de frase',
       contentDOM.getAttribute('autocapitalize') === 'sentences',
       contentDOM.getAttribute('autocapitalize'));
+
+    // Depois de um marcador o 'sentences' nao basta: o Android anda pra tras a partir do cursor,
+    // pula os espacos, acha o marcador (o `]` da tarefa, o `-` da lista) e conclui que esta no meio
+    // de uma frase. Enquanto o cursor esta logo depois do marcador o atributo vira 'words', que
+    // sobe a letra que comeca palavra, e volta pra 'sentences' quando ha texto na frente.
+    const view = App.Editor._impl.view;
+    const modoEm = (texto, coluna) => {
+      App.Editor.setText(texto);
+      view.dispatch({ selection: { anchor: coluna } });
+      return contentDOM.getAttribute('autocapitalize');
+    };
+
+    for (const [texto, coluna] of [['- [ ] ', 6], ['- ', 2], ['## ', 3], ['> ', 2], ['1. ', 3],
+                                   ['  - ', 4], ['> - ', 4], ['- [ ] compras', 6]]) {
+      check(`cursor logo depois de ${JSON.stringify(texto.slice(0, coluna))} pede maiuscula`,
+        modoEm(texto, coluna) === 'words', modoEm(texto, coluna));
+    }
+
+    for (const [texto, coluna] of [['', 0], ['texto', 5], ['- feira', 7], ['- a', 3], ['   ', 3],
+                                   ['- ', 1]]) {
+      check(`cursor depois de ${JSON.stringify(texto.slice(0, coluna))} segue no modo de frase`,
+        modoEm(texto, coluna) === 'sentences', modoEm(texto, coluna));
+    }
+
+    // O caminho de verdade: a nota vazia, o toque no botao da barra, e a letra que vem depois
+    App.Editor.setText('');
+    App.Editor.format('checklist');
+    check('tocar em tarefa deixa o teclado pronto pra subir a letra',
+      contentDOM.getAttribute('autocapitalize') === 'words',
+      { texto: App.Editor.getText(), modo: contentDOM.getAttribute('autocapitalize') });
+    view.dispatch({ changes: { from: 6, insert: 'F' }, selection: { anchor: 7 } });
+    check('com a letra escrita o teclado volta ao modo de frase',
+      contentDOM.getAttribute('autocapitalize') === 'sentences',
+      contentDOM.getAttribute('autocapitalize'));
   }
 
   console.log('42. Foto desenhada na linha, no CM6');
