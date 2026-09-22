@@ -1,8 +1,20 @@
 // Drive Notes: Service Worker
-const CACHE_NAME = 'drivenotes-v45';
+const CACHE_NAME = 'drivenotes-v46';
 
 // Renderer and sanitizer come from CDNs; without them offline the reading view falls back to
-// plain text. Must match the script tags in index.html.
+// plain text. Must match the script tags in index.html, hash included (scenario 0 of
+// tests/app.test.js checks both files against node_modules).
+//
+// The page checks the hash of whatever it gets, the cached copy too, so a changed file never
+// runs. The service worker checks it as well, because the page's hash does not reach it: in
+// Chrome the request arrives here with `integrity` empty (measured on 22 Sep 2026), and a plain
+// fetch(event.request) would store a changed file over the good copy, leaving the reading view
+// without formatting from the next opening on. Those copies are also fetched in CORS mode (the
+// default for a url), since the page cannot check an opaque response.
+const CDN_SCRIPTS = {
+  'https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js': 'sha384-H+hy9ULve6xfxRkWIh/YOtvDdpXgV2fmAGQkIDTxIgZwNoaoBal14Di2YTMR6MzR',
+  'https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js': 'sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3',
+};
 // The Google Fonts stylesheet is here too, but the font files it names live on
 // fonts.gstatic.com under urls we cannot predict: those are caught at runtime by CDN_HOSTS
 // the first time a page renders, so the second visit already has the letters offline.
@@ -10,8 +22,7 @@ const CACHE_NAME = 'drivenotes-v45';
 // O editor não entra nesta lista: ele é o vendor/codemirror.js, versionado no repositório e
 // guardado logo abaixo, junto com os arquivos estáticos.
 const CDN_ASSETS = [
-  'https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js',
-  'https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js',
+  ...Object.keys(CDN_SCRIPTS),
   'https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap',
 ];
 const CDN_HOSTS = ['cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com'];
@@ -35,7 +46,7 @@ self.addEventListener('install', (event) => {
       // cache HTTP dele, e como o GitHub Pages manda max-age=600, um cache novo nasce com
       // os arquivos velhos dentro: o deploy sai, o numero do cache sobe, e o aparelho segue
       // mostrando a versao anterior por dez minutos.
-      const fresh = (url) => new Request(url, { cache: 'reload' });
+      const fresh = (url) => new Request(url, { cache: 'reload', integrity: CDN_SCRIPTS[url] || '' });
       // Best effort: a CDN hiccup must not block the install of the app itself
       return Promise.all([
         cache.addAll(STATIC_ASSETS.map(fresh)),
@@ -59,6 +70,11 @@ self.addEventListener('activate', (event) => {
   );
   self.clients.claim();
 });
+
+// The locked CDN scripts go out with their hash, everything else as the page asked
+const network = (request) => CDN_SCRIPTS[request.url]
+  ? fetch(request.url, { integrity: CDN_SCRIPTS[request.url] })
+  : fetch(request);
 
 // Fetch: cache-first for static assets, network-first for API calls
 self.addEventListener('fetch', (event) => {
@@ -86,7 +102,7 @@ self.addEventListener('fetch', (event) => {
     caches.match(event.request).then((cached) => {
       if (cached) {
         // Return cached, but also update cache in background
-        fetch(event.request).then((response) => {
+        network(event.request).then((response) => {
           if (response.ok) {
             caches.open(CACHE_NAME).then((cache) => {
               cache.put(event.request, response);
@@ -96,7 +112,7 @@ self.addEventListener('fetch', (event) => {
         return cached;
       }
 
-      return fetch(event.request).then((response) => {
+      return network(event.request).then((response) => {
         // Cache successful responses for our own assets and the pinned CDN libraries
         if (response.ok && (url.origin === self.location.origin || CDN_HOSTS.includes(url.hostname))) {
           const clone = response.clone();

@@ -4,6 +4,7 @@
 // The editor here is the fallback textarea, except where a scenario asks for boot({ editor: true }),
 // which loads the real CodeMirror bundle into the same window (scenario 39b onwards). What needs
 // layout, a real caret or a keyboard: browser.test.js.
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { JSDOM } = require('jsdom');
@@ -300,6 +301,22 @@ function enterEm(App, w, conteudo, em) {
     check('todo arquivo nosso que o index.html carrega esta no STATIC_ASSETS do sw.js',
       nossos.length > 0 && nossos.every(src => estaticos.includes(`'./${src}'`)),
       { nossos, faltando: nossos.filter(src => !estaticos.includes(`'./${src}'`)) });
+
+    // The CDN scripts carry an integrity hash: the browser refuses a file that does not match it,
+    // and a wrong hash shows up on the phone as a reading view with no formatting. jsDelivr serves
+    // the same bytes npm installs (compared on 22 Sep 2026), so the hash of the file in
+    // node_modules is the one the phone checks against. Bumping a library: the failure prints the
+    // new value to paste into index.html.
+    for (const [name, file] of [['marked', LIBS.marked], ['dompurify', LIBS.purify]]) {
+      const attrs = new RegExp(`<script src="https://cdn\\.jsdelivr\\.net/npm/${name}@[^"]+"([^>]*)>`).exec(html)?.[1] || '';
+      const expected = 'sha384-' + crypto.createHash('sha384').update(fs.readFileSync(file)).digest('base64');
+      check(`${name}: integrity do index.html = hash do arquivo instalado`, attrs.includes(`integrity="${expected}"`), { expected });
+      // The service worker fetches the same file on its own and has to check the same hash
+      const swHash = new RegExp(`npm/${name}@[^']+': '([^']+)'`).exec(sw)?.[1];
+      check(`${name}: sw.js confere a copia do cache com o mesmo hash`, swHash === expected, { swHash, expected });
+      // Without it the request goes out without CORS, and the browser blocks the script because it cannot check the hash
+      check(`${name}: tag com crossorigin="anonymous"`, attrs.includes('crossorigin="anonymous"'));
+    }
   }
 
   console.log('1. Trocar de arquivo com edicao pendente salva o arquivo anterior');

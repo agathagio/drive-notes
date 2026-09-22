@@ -27,11 +27,16 @@
   <!-- CodeMirror 6 (editor markdown; pacote único gerado, ver vendor/README.md) -->
   <script src="vendor/codemirror.js"></script>
 
+  <!-- The two CDN scripts are locked by integrity: if the CDN ever serves a different file, the
+       browser refuses to run it (the app has access to the whole Drive). A new version needs a new
+       hash; scenario 0 of tests/app.test.js prints it. src stays the first attribute: the test
+       page swaps these tags for local copies by matching '<script src="https://cdn...'. -->
+
   <!-- marked.js (markdown preview renderer) -->
-  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js" integrity="sha384-H+hy9ULve6xfxRkWIh/YOtvDdpXgV2fmAGQkIDTxIgZwNoaoBal14Di2YTMR6MzR" crossorigin="anonymous"></script>
 
   <!-- DOMPurify (sanitizes the rendered preview) -->
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js" integrity="sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3" crossorigin="anonymous"></script>
 
   <!-- Google Identity Services (login). Drive itself is called with plain fetch. -->
   <script async defer src="https://accounts.google.com/gsi/client" onload="onGisLoaded()"></script>

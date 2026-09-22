@@ -36,6 +36,8 @@ O Google de verdade (login, API do Drive) e o Android de verdade (teclado, botã
 
 ## Bibliotecas
 
-`marked` e `dompurify` estão fixados no `package.json` nas mesmas versões que o `index.html` carrega dos CDNs. O primeiro cenário do `npm test` falha se as duas listas divergirem: ao atualizar uma lib, mude nos dois lugares (e em `CDN_ASSETS` no `sw.js`).
+`marked` e `dompurify` estão fixados no `package.json` nas mesmas versões que o `index.html` carrega dos CDNs. O primeiro cenário do `npm test` falha se as duas listas divergirem: ao atualizar uma lib, mude nos dois lugares (e em `CDN_SCRIPTS` no `sw.js`).
+
+As duas tags levam `integrity` (o hash do arquivo) e `crossorigin`: se a CDN entregar outro arquivo, o navegador recusa rodar, e no celular isso aparece como leitura sem formatação. O `sw.js` guarda o mesmo hash e confere as cópias que busca sozinho, porque o hash da página não chega até ele. Ao atualizar uma lib, os dois hashes mudam: o primeiro cenário calcula o certo a partir do `node_modules` e mostra o valor na falha. Dá pra usar o do `node_modules` porque o jsDelivr serve os mesmos bytes que o npm instala (comparado em 22 set 2026).
 
 O editor ficou fora dessa conta: o CodeMirror 6 não vem de CDN, e sim do `vendor/codemirror.js` versionado no repositório (como regerar está em `vendor/README.md`). Já o `tiny-markdown-editor` continua nas devDependencies de propósito, mesmo sem o app usar: é a lib que o controle histórico do ditado precisa pra rodar o app antigo.
