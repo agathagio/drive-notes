@@ -202,7 +202,7 @@ const FAKE_DRIVE = `
     check('foto de 4000x3000 sai com 2000 no lado maior, em JPEG', photo.width === 2000 && photo.height === 1500 && photo.type === 'image/jpeg', photo);
     check('o que sobe e bem menor que o original', photo.sent > 0 && photo.sent < photo.original / 2, photo);
     check('imagem pequena sobe como esta', photo.untouched === true);
-    check('embed entra onde o cursor estava antes do seletor abrir', /^linha um\n!\[\[foto-[\d-]+\.jpg\]\]\n\nlinha dois$/.test(photo.content), photo.content);
+    check('embed entra onde o cursor estava antes do seletor abrir, com o nome da nota (t.md)', /^linha um\n!\[\[t-foto-\d{6}\.jpg\]\]\n\nlinha dois$/.test(photo.content), photo.content);
     check('nota marcada como nao salva, aviso na tela', photo.dirty === true && photo.status === 'Foto inserida', photo);
 
     // ── 5. Pictures while editing: a background of the line, never part of the text ──

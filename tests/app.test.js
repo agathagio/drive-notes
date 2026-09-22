@@ -39,7 +39,7 @@ function makeDrive() {
       const parent = /^'([^']+)' in parents/.exec(q);
       if (parent) {
         if (drive.failReads) return json({}, 500);
-        const files = [...drive.files.values()].filter(f => f.parents.includes(parent[1]))
+        const files = [...drive.files.values()].filter(f => !f.trashed && f.parents.includes(parent[1]))
           .map(f => ({ id: f.id, name: f.name, mimeType: f.mimeType || 'text/markdown', modifiedTime: f.modifiedTime }));
         return json({ files });
       }
@@ -50,12 +50,12 @@ function makeDrive() {
         const words = [...q.matchAll(/name contains '((?:[^'\\]|\\.)*)'/g)].map(x => x[1].replace(/\\(.)/g, '$1').toLowerCase());
         const tokens = (s) => String(s).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
         const hit = (f, word) => tokens(f.name).some(t => t.startsWith(word)) || f.name.toLowerCase().startsWith(word) || tokens(f.content).includes(word);
-        const files = [...drive.files.values()].filter(f => f.mimeType !== FOLDER && words.every(word => hit(f, word)))
+        const files = [...drive.files.values()].filter(f => !f.trashed && f.mimeType !== FOLDER && words.every(word => hit(f, word)))
           .map(f => ({ id: f.id, name: f.name, parents: f.parents, mimeType: f.mimeType || 'text/markdown', modifiedTime: f.modifiedTime }));
         return json({ files });
       }
       const names = [...q.matchAll(/name = '((?:[^'\\]|\\.)*)'/g)].map(x => x[1].replace(/\\(.)/g, '$1'));
-      const files = [...drive.files.values()].filter(f => names.includes(f.name))
+      const files = [...drive.files.values()].filter(f => !f.trashed && names.includes(f.name))
         .sort((a, b) => b.modifiedTime.localeCompare(a.modifiedTime))
         .map(f => ({ id: f.id, name: f.name, parents: f.parents, mimeType: f.mimeType || 'text/markdown' }));
       return json({ files });
@@ -74,7 +74,15 @@ function makeDrive() {
     if (method === 'PATCH' && m && !u.pathname.startsWith('/upload/')) {
       if (drive.failWrites) return json({}, 500);
       const f = drive.files.get(m[1]);
-      f.name = JSON.parse(opts.body).name; f.modifiedTime = drive.tick();
+      const patch = JSON.parse(opts.body);
+      // A lixeira do Drive: o arquivo continua existindo, so para de aparecer nas buscas
+      if (patch.trashed) {
+        if (drive.failTrash) return json({}, 500);
+        f.trashed = true; f.modifiedTime = drive.tick();
+        drive.log.push(`TRASH ${f.id} ${f.name}`);
+        return json({ id: f.id });
+      }
+      f.name = patch.name; f.modifiedTime = drive.tick();
       drive.log.push(`RENAME ${f.id} ${f.name}`);
       return json({ id: f.id, name: f.name, modifiedTime: f.modifiedTime });
     }
@@ -604,7 +612,7 @@ function enterEm(App, w, conteudo, em) {
     App.setMode('edit');
     const ta = App.els.editorElement;
     const photo = () => new w.File(['bytes-da-foto'], 'IMG_1234.JPG', { type: 'image/jpeg' });
-    const uploaded = () => [...drive.files.values()].filter(f => /^foto-/.test(f.name));
+    const uploaded = () => [...drive.files.values()].filter(f => /(^|-)foto-\d/.test(f.name));
 
     const opened = [];
     App.els.photoInput.click = () => { opened.push(App.els.photoInput.getAttribute('capture')); };
@@ -619,11 +627,11 @@ function enterEm(App, w, conteudo, em) {
     ta.selectionStart = ta.selectionEnd = 'linha um'.length;
     await App.insertPhoto(photo());
     const up = uploaded()[0];
-    check('foto no _media, com nome foto-data-hora.jpg', uploaded().length === 1 && up.parents[0] === 'media' && /^foto-\d{4}-\d{2}-\d{2}-\d{6}\.jpg$/.test(up.name), up);
+    check('foto no _media, com o nome da nota e a hora', uploaded().length === 1 && up.parents[0] === 'media' && /^a-foto-\d{6}\.jpg$/.test(up.name), up);
     check('conteudo e tipo chegaram inteiros', up.content === 'bytes-da-foto' && up.mimeType === 'image/jpeg', up);
     const pngBlob = new w.Blob(['x'], { type: 'image/png' });
     const drawn = App.mediaName(pngBlob, null, 'desenho');
-    check('mediaName carimba o prefixo e tira a extensao do tipo', /^desenho-\d{4}-\d{2}-\d{2}-\d{6}\.png$/.test(drawn), drawn);
+    check('mediaName carimba a nota, o prefixo e a extensao do tipo', /^a-desenho-\d{6}\.png$/.test(drawn), drawn);
     check('embed em linha propria, no cursor', ta.value === `linha um\n![[${up.name}]]\n\nlinha dois`, ta.value);
     check('nota ficou suja pra salvar', App.isDirty && App.els.saveStatus.textContent === 'Foto inserida');
     const gets = drive.count('GET content');
@@ -660,7 +668,7 @@ function enterEm(App, w, conteudo, em) {
     App.setMode('edit');
     const ta = App.els.editorElement;
     const photo = (n) => new w.File([`bytes-${n}`], `IMG_${n}.JPG`, { type: 'image/jpeg' });
-    const uploaded = () => [...drive.files.values()].filter(f => /^foto-/.test(f.name));
+    const uploaded = () => [...drive.files.values()].filter(f => /(^|-)foto-\d/.test(f.name));
     // O seletor devolve uma FileList; aqui basta a lista que o app percorre
     const pick = (...files) => {
       Object.defineProperty(App.els.photoInput, 'files', { configurable: true, value: files });
@@ -692,7 +700,7 @@ function enterEm(App, w, conteudo, em) {
     const jpeg = new w.Blob(['x'], { type: 'image/jpeg' });
     const taken = new Set();
     const leva = [App.mediaName(jpeg, null, 'foto', taken), App.mediaName(jpeg, null, 'foto', taken), App.mediaName(jpeg, null, 'foto', taken)];
-    check('no mesmo segundo, a segunda e a terceira ganham -2 e -3', /^foto-\d{4}-\d{2}-\d{2}-\d{6}\.jpg$/.test(leva[0])
+    check('no mesmo segundo, a segunda e a terceira ganham -2 e -3', /^a-foto-\d{6}\.jpg$/.test(leva[0])
       && leva[1] === leva[0].replace('.jpg', '-2.jpg') && leva[2] === leva[0].replace('.jpg', '-3.jpg'), leva);
 
     // Uma leva de fotos tem que cair uma embaixo da outra, e nao todas na mesma posicao guardada
@@ -1365,7 +1373,7 @@ function enterEm(App, w, conteudo, em) {
     await App.openFile('A', 'a.md');
     App.setMode('edit');
     const ta = App.els.editorElement;
-    const uploaded = () => [...drive.files.values()].filter(f => /^desenho-/.test(f.name));
+    const uploaded = () => [...drive.files.values()].filter(f => /(^|-)desenho-\d/.test(f.name));
     const openSketch = () => w.document.querySelector('.toolbar-btn[data-sketch]').click();
     const scribble = (from, to) => {
       const c = App.sketch.canvas;
@@ -1383,7 +1391,7 @@ function enterEm(App, w, conteudo, em) {
     scribble({ x: 100, y: 50 }, { x: 140, y: 90 });
     await App.sketchFinish();
     const up = uploaded()[0];
-    check('desenho no _media, com nome desenho-data-hora.png', uploaded().length === 1 && up.parents[0] === 'media' && /^desenho-\d{4}-\d{2}-\d{2}-\d{6}\.png$/.test(up.name), up);
+    check('desenho no _media, com o nome da nota e a hora', uploaded().length === 1 && up.parents[0] === 'media' && /^a-desenho-\d{6}\.png$/.test(up.name), up);
     check('o PNG sai do tamanho do recorte, em pixels do aparelho', up.content === `png ${(40 + 6 + 32) * 2}x${(40 + 6 + 32) * 2}`, up.content);
     check('embed em linha propria, onde o cursor estava', ta.value === `linha um\n![[${up.name}]]\n\nlinha dois`, ta.value);
     check('tela fechada e nota suja pra salvar', !App.sketch && App.isDirty && App.els.saveStatus.textContent === 'Desenho inserido');
@@ -1405,7 +1413,7 @@ function enterEm(App, w, conteudo, em) {
 
     drive.failWrites = false;
     await App.sketchFinish();
-    check('tentar de novo com a rede de volta sobe o mesmo desenho', uploaded().length === 2 && !App.sketch && /!\[\[desenho-/.test(ta.value));
+    check('tentar de novo com a rede de volta sobe o mesmo desenho', uploaded().length === 2 && !App.sketch && /!\[\[a-desenho-/.test(ta.value));
   }
 
   console.log('34. Desenho: toque repetido no pronto nao sobe o desenho varias vezes');
@@ -1420,8 +1428,8 @@ function enterEm(App, w, conteudo, em) {
     const btnDone = w.document.getElementById('sketch-done');
     const btnCancel = w.document.getElementById('sketch-cancel');
     const title = w.document.querySelector('.sketch-title');
-    const uploaded = () => [...drive.files.values()].filter(f => /^desenho-/.test(f.name));
-    const embeds = () => (ta.value.match(/!\[\[desenho-/g) || []).length;
+    const uploaded = () => [...drive.files.values()].filter(f => /(^|-)desenho-\d/.test(f.name));
+    const embeds = () => (ta.value.match(/!\[\[a-desenho-/g) || []).length;
     const openSketch = () => w.document.querySelector('.toolbar-btn[data-sketch]').click();
     const scribble = () => {
       const c = App.sketch.canvas;
@@ -2557,6 +2565,198 @@ function enterEm(App, w, conteudo, em) {
     check('==== sozinho nao abre marca nenhuma', !ler('====').includes('<mark'), ler('===='));
     check('== x == com espaco encostado fica texto', !ler('== x ==').includes('<mark'), ler('== x =='));
     check('~~x~~ continua saindo riscado pelo GFM', ler('~~x~~').includes('<del>x</del>'), ler('~~x~~'));
+  }
+
+  console.log('51. Foto e desenho nascem com o nome da nota, sem a data');
+  {
+    const { App, drive, w } = await boot();
+    const slug = (nome) => App.slugForMedia(nome);
+    check("'Voz Blue' vira voz-blue", slug('Voz Blue') === 'voz-blue', slug('Voz Blue'));
+    check('acento, dois pontos e exclamacao viram hifen ou somem',
+      slug('Reunião 17 set: decisões!') === 'reuniao-17-set-decisoes', slug('Reunião 17 set: decisões!'));
+    check('nome de 60 letras corta em 40', slug('a'.repeat(60)) === 'a'.repeat(40), slug('a'.repeat(60)));
+    // O corte cai bem em cima do hifen: ele nao pode ficar pendurado no fim do nome
+    check('corte que cairia num hifen nao deixa hifen no fim',
+      slug(`${'x'.repeat(39)} y`) === 'x'.repeat(39), slug(`${'x'.repeat(39)} y`));
+    check("'---' nao deixa nada", slug('---') === '', slug('---'));
+    check('nome vazio ou ausente tambem nao', slug('') === '' && slug(null) === '' && slug(undefined) === '');
+
+    // Relogio parado: o nome carrega a hora, e sem isso a checagem dependeria do segundo em que rodou
+    const Real = w.Date;
+    const FIXO = Real.parse('2026-09-19T15:30:12');
+    w.Date = function (...a) { return a.length ? new Real(...a) : new Real(FIXO); };
+    w.Date.now = () => Real.now();
+    w.Date.parse = Real.parse;
+    w.Date.UTC = Real.UTC;
+
+    const jpeg = new w.Blob(['x'], { type: 'image/jpeg' });
+    const png = new w.Blob(['x'], { type: 'image/png' });
+    drive.put('A', 'Voz Blue.md', 'texto');
+    await App.openFile('A', 'Voz Blue.md');
+    check('foto com a nota aberta: nome da nota, prefixo e hora',
+      App.mediaName(jpeg, null, 'foto') === 'voz-blue-foto-153012.jpg', App.mediaName(jpeg, null, 'foto'));
+    check('desenho igual, com o prefixo e a extensao dele',
+      App.mediaName(png, null, 'desenho') === 'voz-blue-desenho-153012.png', App.mediaName(png, null, 'desenho'));
+
+    App.currentFile = null;
+    check('sem nota aberta: o formato antigo, com a data',
+      App.mediaName(jpeg, null, 'foto') === 'foto-2026-09-19-153012.jpg', App.mediaName(jpeg, null, 'foto'));
+    App.currentFile = { name: '---.md' };
+    check('nota cujo nome nao deixa slug: tambem cai na data',
+      App.mediaName(jpeg, null, 'foto') === 'foto-2026-09-19-153012.jpg', App.mediaName(jpeg, null, 'foto'));
+    w.Date = Real;
+  }
+
+  console.log('52. Sem a data no nome, o Drive e quem diz se ele esta livre');
+  {
+    const { App, drive, w } = await boot();
+    w.URL.createObjectURL = () => 'blob:fake/local';
+    const Real = w.Date;
+    const FIXO = Real.parse('2026-09-19T15:30:12');
+    w.Date = function (...a) { return a.length ? new Real(...a) : new Real(FIXO); };
+    w.Date.now = () => Real.now();
+    w.Date.parse = Real.parse;
+    w.Date.UTC = Real.UTC;
+
+    drive.put('media', '_media', '', [VAULT]); drive.files.get('media').mimeType = FOLDER;
+    drive.put('A', 'a.md', 'linha um');
+    // A foto do mesmo minuto de OUTRO dia, que sem esta checagem seria a que o ![[...]] novo acharia
+    drive.put('velha', 'a-foto-153012.jpg', 'bin', ['media']); drive.files.get('velha').mimeType = 'image/jpeg';
+    await App.openFile('A', 'a.md');
+    App.setMode('edit');
+    const ta = App.els.editorElement;
+    ta.selectionStart = ta.selectionEnd = ta.value.length;
+    const photo = (n) => new w.File([`bytes-${n}`], `IMG_${n}.JPG`, { type: 'image/jpeg' });
+    const nomeDe = (n) => [...drive.files.values()].find(f => f.content === `bytes-${n}`)?.name;
+
+    await App.insertPhoto(photo(1));
+    check('nome ja ocupado no _media: a foto sobe como -2', nomeDe(1) === 'a-foto-153012-2.jpg', nomeDe(1));
+    check('e o ![[...]] da nota aponta pro nome que subiu', ta.value.includes('![[a-foto-153012-2.jpg]]'), ta.value);
+
+    w.Date = Real;
+  }
+
+  console.log('52b. Leva de fotos no mesmo segundo: -2 e -3, sem consultar o que a leva ja deu');
+  {
+    const { App, drive, w } = await boot();
+    w.URL.createObjectURL = () => 'blob:fake/local';
+    const Real = w.Date;
+    const FIXO = Real.parse('2026-09-19T15:30:12');
+    w.Date = function (...a) { return a.length ? new Real(...a) : new Real(FIXO); };
+    w.Date.now = () => Real.now();
+    w.Date.parse = Real.parse;
+    w.Date.UTC = Real.UTC;
+
+    drive.put('media', '_media', '', [VAULT]); drive.files.get('media').mimeType = FOLDER;
+    drive.put('A', 'a.md', 'linha um');
+    drive.put('velha', 'a-foto-153012.jpg', 'bin', ['media']); drive.files.get('velha').mimeType = 'image/jpeg';
+    await App.openFile('A', 'a.md');
+    App.setMode('edit');
+    const ta = App.els.editorElement;
+    ta.selectionStart = ta.selectionEnd = ta.value.length;
+    const photo = (n) => new w.File([`bytes-${n}`], `IMG_${n}.JPG`, { type: 'image/jpeg' });
+    const nomeDe = (n) => [...drive.files.values()].find(f => f.content === `bytes-${n}`)?.name;
+    const buscas = (nome) => drive.log.filter(l => l.startsWith('LIST ') && l.includes(`name = '${nome}'`)).length;
+
+    // Com o nome base ja ocupado, -2 fica com a primeira foto e a segunda tem que ir pra -3 SEM
+    // gastar uma consulta no que a leva ja distribuiu
+    drive.log.length = 0;
+    await App.insertPhotos([photo(1), photo(2)]);
+    check('duas fotos no mesmo segundo viram -2 e -3',
+      nomeDe(1) === 'a-foto-153012-2.jpg' && nomeDe(2) === 'a-foto-153012-3.jpg', [nomeDe(1), nomeDe(2)]);
+    check('a segunda foto nao consulta de novo o que a leva ja deu',
+      buscas('a-foto-153012.jpg') === 1 && buscas('a-foto-153012-2.jpg') === 1 && buscas('a-foto-153012-3.jpg') === 1,
+      drive.log.filter(l => l.startsWith('LIST ')));
+    check('as duas entraram na nota, uma por linha',
+      ta.value === 'linha um\n![[a-foto-153012-2.jpg]]\n![[a-foto-153012-3.jpg]]\n', ta.value);
+
+    // Sem rede pra conferir, a foto sobe assim mesmo: nome repetido incomoda, foto perdida e perda
+    const real = App.driveFindByName;
+    App.driveFindByName = async () => { throw new Error('sem rede'); };
+    await App.insertPhoto(photo(3));
+    check('busca falhando nao trava a foto: sobe com o nome sem conferir',
+      nomeDe(3) === 'a-foto-153012.jpg', nomeDe(3));
+    App.driveFindByName = real;
+    w.Date = Real;
+  }
+
+  console.log('53. Tocar na foto: sai da nota e vai pra lixeira do Drive');
+  {
+    const { App, drive, w } = await boot({ editor: true });
+    w.URL.createObjectURL = () => 'blob:fake/local';
+    drive.put('media', '_media', '', [VAULT]); drive.files.get('media').mimeType = FOLDER;
+    const image = (id, name) => { drive.put(id, name, 'bin', ['media']); drive.files.get(id).mimeType = 'image/jpeg'; };
+    image('X', 'x.jpg'); image('Y', 'y.jpg'); image('Z', 'z.jpg');
+    drive.put('A', 'a.md', 'a\n![[x.jpg]]\nb');
+    drive.put('B', 'b.md', 'a\n![[y.jpg]]');
+    drive.put('C', 'c.md', 'a\n![[z.jpg]]\nb');
+
+    await App.openFile('A', 'a.md');
+    App.setMode('edit');
+    check('o editor deste cenario e o CM6', App.Editor.kind() === 'cm6');
+    App._embedUrls.set('x.jpg', Promise.resolve('blob:fake/local'));
+    App._embedInfo.set('x.jpg', { url: 'blob:fake/local', width: 800, height: 400 });
+
+    App.confirmDialog = async () => false;
+    const naoQuis = await App.removeEmbedLine(2);
+    check('o dialogo respondendo nao deixa tudo como estava',
+      naoQuis === false && App.getContent() === 'a\n![[x.jpg]]\nb'
+      && !drive.files.get('X').trashed && App._embedInfo.has('x.jpg'), App.getContent());
+
+    App.confirmDialog = async () => true;
+    const foi = await App.removeEmbedLine(2);
+    await App._saveChain;
+    check('confirmando, a linha inteira sai e nao sobra quebra',
+      foi === true && App.getContent() === 'a\nb', JSON.stringify(App.getContent()));
+    check('o texto sem a linha chegou no Drive', bodyOf(drive.files.get('A').content) === 'a\nb', drive.files.get('A').content);
+    check('o arquivo da foto foi pra lixeira', drive.files.get('X').trashed === true);
+    const ordem = drive.log.filter(l => /^(PATCH A|TRASH X)/.test(l));
+    check('salvou no Drive ANTES de mandar pra lixeira', ordem.join('|') === 'PATCH A|TRASH X x.jpg', ordem);
+    check('a foto sai dos dois caches de decoracao',
+      !App._embedUrls.has('x.jpg') && !App._embedInfo.has('x.jpg'));
+
+    // Ultima linha da nota: o que tem que sair com ela e a quebra de CIMA
+    await App.openFile('B', 'b.md');
+    App.setMode('edit');
+    await App.removeEmbedLine(2);
+    await App._saveChain;
+    check('foto na ultima linha: a nota termina em "a", sem linha em branco',
+      App.getContent() === 'a', JSON.stringify(App.getContent()));
+    check('e a foto dela tambem foi pra lixeira', drive.files.get('Y').trashed === true);
+
+    // A lixeira falhando e a metade inofensiva: a nota ja esta certa e a tela diz o que faltou
+    await App.openFile('C', 'c.md');
+    App.setMode('edit');
+    drive.failTrash = true;
+    const meio = await App.removeEmbedLine(2);
+    await App._saveChain;
+    check('lixeira falhou: a nota continua sem a linha, e o aviso aparece',
+      meio === false && App.getContent() === 'a\nb' && bodyOf(drive.files.get('C').content) === 'a\nb'
+      && !drive.files.get('Z').trashed
+      && App.els.saveStatus.textContent === 'A foto saiu da nota, mas não foi pra lixeira',
+      App.els.saveStatus.textContent);
+    drive.failTrash = false;
+
+    check('linha que nao e foto nenhuma nao abre dialogo nem mexe no texto',
+      await App.removeEmbedLine(1) === false && App.getContent() === 'a\nb', App.getContent());
+    check('linha que nao existe tambem nao',
+      await App.removeEmbedLine(99) === false && App.getContent() === 'a\nb');
+
+    // O salvamento que virou rascunho em vez de chegar no Drive (aqui, um conflito): o Drive ainda
+    // tem a nota COM a linha, entao mandar a foto pra lixeira agora deixaria o texto de la apontando
+    // pro vazio. O aviso do proprio save ja basta, e a lixeira nao e tocada.
+    image('W', 'w.jpg');
+    drive.put('D', 'd.md', 'a\n![[w.jpg]]\nb');
+    await App.openFile('D', 'd.md');
+    App.setMode('edit');
+    drive.remoteEdit('D', 'mexeram no PC');
+    const semSave = await App.removeEmbedLine(2);
+    await App._saveChain;
+    check('save que nao chegou no Drive: a foto NAO vai pra lixeira',
+      semSave === false && !drive.files.get('W').trashed
+      && drive.files.get('D').content === 'mexeram no PC'
+      && App.els.saveStatus.textContent === 'Conflito com o Drive',
+      [semSave, drive.files.get('W').trashed, App.els.saveStatus.textContent]);
   }
 
   done();

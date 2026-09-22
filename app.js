@@ -201,6 +201,10 @@ const App = {
     redo() { return this._impl ? this._impl.redo() : false; },
     decorateEmbeds(lineInfo) { return this._impl ? this._impl.decorateEmbeds(lineInfo) : false; },
     scrollToCaret() { this._impl?.scrollToCaret(); },
+    // Lines are counted from 1, the way every editor counts them. Both answer null/false for a line
+    // number the text does not have, so the caller never has to know how long the text is.
+    lineText(number) { return this._impl ? this._impl.lineText(number) : null; },
+    removeLine(number) { return this._impl ? this._impl.removeLine(number) : false; },
   },
 
   initEditor() {
@@ -494,6 +498,25 @@ const App = {
           if (u.docChanged) onChange();
           if (u.focusChanged && u.view.hasFocus) caretPlaced = true;
         }),
+        // A tap on the picture of an embed line offers to delete it. The picture is not an element:
+        // it is the line's background, drawn over the bottom padding the decoration asked for, so the
+        // tap counts when it lands in the last --embed-h + 8 pixels of the line's box (the 8 is the
+        // gap the style.css leaves between the text and the picture). Only geometry lives here; what
+        // to do about it is App.removeEmbedLine's business. Answering true keeps the editor from
+        // putting the caret in the line and opening the keyboard behind the dialog.
+        EditorView.domEventHandlers({
+          click: (event) => {
+            if (App.mode !== 'edit') return false;
+            const el = event.target?.closest?.('.cm-line.embed-line');
+            if (!el) return false;
+            const height = parseFloat(el.style.getPropertyValue('--embed-h'));
+            if (!height) return false;
+            const rect = el.getBoundingClientRect();
+            if (event.clientY < rect.bottom - height - 8) return false;
+            App.removeEmbedLine(view.state.doc.lineAt(view.posAtDOM(el)).number);
+            return true;
+          },
+        }),
       ],
     });
 
@@ -632,6 +655,27 @@ const App = {
         lastSignature = now;
         return changed;
       },
+      lineText: (number) => {
+        if (!Number.isInteger(number) || number < 1 || number > view.state.doc.lines) return null;
+        return view.state.doc.line(number).text;
+      },
+      removeLine: (number) => {
+        if (!Number.isInteger(number) || number < 1 || number > view.state.doc.lines) return false;
+        const line = view.state.doc.line(number);
+        // The line's own newline goes with it. On the last line there is none, so the one above goes
+        // instead, or the note would be left ending in a blank line. Only this stretch is replaced,
+        // never the whole text: swapping the whole document loses the caret and, with the keyboard
+        // open, breaks the dictation halfway through.
+        const last = line.to >= view.state.doc.length;
+        const from = last ? Math.max(0, line.from - 1) : line.from;
+        const to = last ? line.to : line.to + 1;
+        view.dispatch({
+          changes: { from, to },
+          selection: { anchor: from },
+          userEvent: 'delete',
+        });
+        return true;
+      },
       scrollToCaret: () => {
         // Only while the editor has the focus, which is what the old editor did by asking whether
         // the DOM selection was inside it. Whoever calls this does not check: the embed decoration
@@ -726,6 +770,23 @@ const App = {
       // The textarea's stack is the browser's own
       undo() { return typeof document.execCommand === 'function' && document.execCommand('undo'); },
       redo() { return typeof document.execCommand === 'function' && document.execCommand('redo'); },
+
+      lineText(number) {
+        const lines = (App.els.editorElement.value || '').split('\n');
+        return number >= 1 && number <= lines.length ? lines[number - 1] : null;
+      },
+
+      removeLine(number) {
+        const ta = App.els.editorElement;
+        const lines = (ta.value || '').split('\n');
+        if (number < 1 || number > lines.length) return false;
+        lines.splice(number - 1, 1);
+        ta.value = lines.join('\n');
+        // Where the removed line started: the start of the line that took its place
+        const at = lines.slice(0, number - 1).reduce((sum, line) => sum + line.length + 1, 0);
+        ta.selectionStart = ta.selectionEnd = Math.min(at, ta.value.length);
+        return true;
+      },
 
       // With no lines of its own in the DOM there is nowhere to hang the picture, and no caret to chase
       decorateEmbeds() { return false; },
@@ -1348,6 +1409,19 @@ const App = {
     return response.json();
   },
 
+  /** Send a file to the Drive's bin, where it can be fetched back for 30 days. Resolves to { id }. */
+  async driveTrashFile(fileId) {
+    const response = await this.driveFetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trashed: true }),
+      }
+    );
+    return response.json();
+  },
+
   /** Update existing file content. Resolves to { id, modifiedTime }. */
   async driveUpdateFile(fileId, content) {
     const response = await this.driveFetch(
@@ -1703,18 +1777,22 @@ const App = {
     });
   },
 
+  /** The Drive file an `![[picture]]` names, or null. Same name in more than one place: the one in the
+      attachment folder wins, then the newest. Showing the picture and binning it have to land on the
+      same file, so both ask here. */
+  async findEmbedFile(name) {
+    const images = (await this.driveFindByName([name])).filter(f => (f.mimeType || '').startsWith('image/'));
+    if (!images.length) return null;
+    if (images.length === 1) return images[0];
+    const media = await this.getMediaFolderId().catch(() => null);
+    return images.find(f => media && f.parents?.includes(media)) || images[0];
+  },
+
   /** Blob URL for an image found by file name, or null. Never opens a login popup just for a picture. */
   async fetchEmbed(name) {
     if (!this.hasValidToken()) return null;
-    const images = (await this.driveFindByName([name])).filter(f => (f.mimeType || '').startsWith('image/'));
-    if (!images.length) return null;
-
-    // Same name in more than one place: the one in the attachment folder wins, then the newest
-    let pick = images[0];
-    if (images.length > 1) {
-      const media = await this.getMediaFolderId().catch(() => null);
-      pick = images.find(f => media && f.parents?.includes(media)) || pick;
-    }
+    const pick = await this.findEmbedFile(name);
+    if (!pick) return null;
     const response = await this.driveFetch(`https://www.googleapis.com/drive/v3/files/${pick.id}?alt=media`);
     return URL.createObjectURL(await response.blob());
   },
@@ -1772,6 +1850,53 @@ const App = {
     if (!img.naturalWidth || !img.naturalHeight) return;
     this._embedInfo.set(name, { url, width: img.naturalWidth, height: img.naturalHeight });
     this.decorateEditorEmbeds();
+  },
+
+  /** A tap on the picture of line `lineNumber`, which is a line that is nothing but `![[picture]]`: ask,
+      and on a yes take the line out of the note and send the file to the Drive's bin. Answers whether the
+      whole thing went through.
+
+      The order is what keeps the text safe. The line leaves the note first and the file is binned last,
+      and only once the note is known to be ON DRIVE: binning first would leave the note pointing at a
+      picture that is no longer there, and binning after a save that only became a local draft would do
+      the same to whatever device reads the note next. A bin that fails is the harmless half: the note is
+      already right, and the status line says the rest out loud.
+
+      It does not look for the same picture in other notes: a picture in the bin comes back with a tap
+      for thirty days, and a search of the whole vault on every deletion is not worth that. */
+  async removeEmbedLine(lineNumber) {
+    const text = this.Editor.lineText(lineNumber);
+    const name = text && this.EMBED_LINE.exec(text)?.[1].split('/').pop().trim();
+    if (!name) return false;
+
+    const remove = await this.confirmDialog(
+      'Apagar esta foto?',
+      'Sai da nota e vai pra lixeira do Drive, de onde dá pra recuperar por 30 dias.',
+      'Apagar'
+    );
+    if (!remove) return false;
+    // The note may have moved on while the dialog was open
+    if (this.Editor.lineText(lineNumber) !== text) return false;
+    if (!this.Editor.removeLine(lineNumber)) return false;
+
+    // Both caches remember a picture by its name. Left behind, the next picture to go up under the
+    // same name would be drawn with this one's image and measurements.
+    this._embedUrls.delete(name);
+    this._embedInfo.delete(name);
+
+    if (!await this.save({ manual: true })) return false; // the save's own status already says why
+
+    try {
+      const file = await this.findEmbedFile(name);
+      if (!file) throw new Error(`no Drive file named ${name}`);
+      await this.driveTrashFile(file.id);
+    } catch (e) {
+      console.error('Photo not moved to the bin:', e);
+      this.setSaveStatus('error', 'A foto saiu da nota, mas não foi pra lixeira');
+      return false;
+    }
+    this.setSaveStatus('saved', 'Foto apagada');
+    return true;
   },
 
   /** Taps inside the reading view: wikilinks and relative .md links open notes, the rest leaves the app */
@@ -2293,19 +2418,22 @@ const App = {
   },
 
   /** Write one snapshot of one file to Drive. The file may no longer be the open one,
-      so the UI is only touched while it still is. Never throws: on failure the snapshot becomes a draft. */
+      so the UI is only touched while it still is. Never throws: on failure the snapshot becomes a draft.
+      Answers whether the text is ON DRIVE, which is not the same as the promise resolving: every failure
+      here resolves too, having written a local draft instead. Whoever acts on the Drive afterwards
+      (removeEmbedLine binning a picture) has to tell the two apart. */
   async saveSnapshot(file, content) {
     const isCurrent = () => this.currentFile === file;
 
     if (file.conflict) {
       // Queued behind a save of the same file that hit a conflict
       this.saveDraft(file, content);
-      return;
+      return false;
     }
 
     if (content === file.lastSavedContent) {
       this.settleSaved(file, content);
-      return;
+      return true;
     }
 
     if (!this.hasValidToken()) {
@@ -2321,7 +2449,7 @@ const App = {
           }, 3000);
         }
       }
-      return;
+      return false;
     }
 
     if (isCurrent()) {
@@ -2345,7 +2473,7 @@ const App = {
           } else {
             this.setSaveStatus('error', `Conflito em ${file.name}: rascunho guardado`);
           }
-          return;
+          return false;
         }
 
         const result = await this.driveUpdateFile(file.id, dated);
@@ -2364,7 +2492,7 @@ const App = {
       } else {
         this.setSaveStatus('error', `Erro ao salvar ${file.name}: rascunho guardado`);
       }
-      return;
+      return false;
     }
 
     this.settleSaved(file, content);
@@ -2374,6 +2502,7 @@ const App = {
         if (isCurrent()) this.setSaveStatus('', '');
       }, 3000);
     }
+    return true;
   },
 
   /** Bookkeeping after `content` is known to be on Drive */
@@ -2938,7 +3067,7 @@ const App = {
         return false;
       }
       const photo = await this.shrinkPhoto(picked);
-      name = this.mediaName(photo, picked.name, 'foto', taken);
+      name = await this.freeMediaName(this.mediaName(photo, picked.name, 'foto', taken), folderId, taken);
       await this.driveUploadBlob(name, photo, folderId);
       // The reading view shows it straight from here, without asking Drive for it back
       this._embedUrls.set(name, Promise.resolve(URL.createObjectURL(photo)));
@@ -2988,20 +3117,72 @@ const App = {
     }
   },
 
-  /** foto-2026-09-19-153012.jpg, desenho-2026-09-19-153012.png: the vault's kebab-case, unique to the second.
-      Several photos picked at once go up inside the same second, so `taken` collects the names already given
-      and the repeats become -2, -3. Alone, the name keeps its plain shape. */
+  /** The vault's kebab-case for a note name: lowercase, no accents, anything that is not a letter or a
+      digit becomes a single hyphen, no hyphen at either end, 40 characters at most. Answers '' when
+      nothing is left of the name, and whoever asked falls back to the dated shape. */
+  slugForMedia(name) {
+    return String(name || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40)
+      .replace(/-+$/, '');
+  },
+
+  /** voz-blue-foto-153012.jpg, voz-blue-desenho-153012.png: the open note's name, what kind of picture it
+      is, and the time of day. Naming it after the note is what tells one photo from another inside the
+      attachment folder, and it is also why the date is no longer in there: the two together make a name
+      too long to read on a phone. With no note open (or with a name that leaves no slug behind) it falls
+      back to the old dated shape, foto-2026-09-19-153012.jpg, which stands on its own.
+
+      Several photos picked at once go up inside the same second, so `taken` collects the names already
+      given and the repeats become -2, -3. Alone, the name keeps its plain shape. Without the date, the
+      same second comes back every day: what goes up is not this name, but what freeMediaName makes of it. */
   mediaName(blob, originalName, prefix, taken) {
     const two = (n) => String(n).padStart(2, '0');
     const d = new Date();
-    const stamp = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
+    const time = `${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
+    const date = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
     const fromType = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg' }[blob.type];
     const ext = fromType || (/\.([a-z0-9]+)$/i.exec(originalName || '')?.[1] || 'jpg').toLowerCase();
-    let name = `${prefix}-${stamp}.${ext}`;
+    const slug = this.slugForMedia(this.currentFile?.name?.replace(/\.md$/i, ''));
+    const base = slug ? `${slug}-${prefix}-${time}` : `${prefix}-${date}-${time}`;
+    let name = `${base}.${ext}`;
     if (!taken) return name;
-    for (let n = 2; taken.has(name); n++) name = `${prefix}-${stamp}-${n}.${ext}`;
+    for (let n = 2; taken.has(name); n++) name = `${base}-${n}.${ext}`;
     taken.add(name);
     return name;
+  },
+
+  /** The same name, or the first -2, -3 after it that no file of the attachment folder is already using.
+      Named after the note and the time of day, a picture carries no date, so the same note photographed at
+      the same second on another day would hand the new `![[...]]` the older picture. One lookup settles
+      that, and in practice it is the only one.
+
+      A lookup that fails (no network, Drive down) gives the name back as it came: a repeated name is a
+      nuisance, a photo that does not go up is a loss. `taken` is the batch's own list of names, read here
+      as well so that the second photo of a batch spends no lookup on what the first one already took. */
+  async freeMediaName(name, folderId, taken) {
+    const dot = name.lastIndexOf('.');
+    const base = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : '';
+    let candidate = name;
+    let n = 2;
+    for (let tries = 0; tries < 20; tries++) {
+      let busy;
+      try {
+        busy = (await this.driveFindByName([candidate])).some(f => f.parents?.includes(folderId));
+      } catch (e) {
+        console.warn('Media name not checked against Drive:', e);
+        return candidate;
+      }
+      if (!busy) return candidate;
+      do { candidate = `${base}-${n}${ext}`; n++; } while (taken?.has(candidate));
+      taken?.add(candidate);
+    }
+    return candidate;
   },
 
   /** Insert `text` as a line of its own: at the mark (`at`) taken before the editor lost the focus,
@@ -3256,7 +3437,7 @@ const App = {
       }
       const blob = await new Promise(resolve => out.toBlob(resolve, 'image/png'));
       if (!blob) throw new Error('canvas produced no blob');
-      name = this.mediaName(blob, null, 'desenho');
+      name = await this.freeMediaName(this.mediaName(blob, null, 'desenho'), folderId);
       await this.driveUploadBlob(name, blob, folderId);
       // The reading view shows it straight from here, without asking Drive for it back
       this._embedUrls.set(name, Promise.resolve(URL.createObjectURL(blob)));
