@@ -5,7 +5,8 @@
   "scripts": {
     "test": "node tests/app.test.js",
     "test:browser": "node tests/browser.test.js",
-    "test:all": "node tests/app.test.js && node tests/browser.test.js",
+    "test:sw": "node tests/sw.test.js",
+    "test:all": "node tests/app.test.js && node tests/browser.test.js && node tests/sw.test.js",
     "screenshots": "node tests/screenshots.js"
   },
   "devDependencies": {

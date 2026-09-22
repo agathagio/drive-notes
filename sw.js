@@ -1,5 +1,5 @@
 // Drive Notes: Service Worker
-const CACHE_NAME = 'drivenotes-v46';
+const CACHE_NAME = 'drivenotes-v47';
 
 // Renderer and sanitizer come from CDNs; without them offline the reading view falls back to
 // plain text. Must match the script tags in index.html, hash included (scenario 0 of
@@ -57,18 +57,20 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// Activate: clean old caches
+// Activate: clean old caches, and only then take over the open pages. Taking over is what tells a
+// page there is a new version, and the home screen reloads on the spot (App.watchVersions). The
+// fetch below looks in every cache there is, oldest first: claimed before the old cache is gone,
+// that reload could get the old index.html back and open on the old version once more.
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
+    caches.keys()
+      .then((keys) => Promise.all(
         keys
           .filter((key) => key !== CACHE_NAME)
           .map((key) => caches.delete(key))
-      );
-    })
+      ))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 // The locked CDN scripts go out with their hash, everything else as the page asked

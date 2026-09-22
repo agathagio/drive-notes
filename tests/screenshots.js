@@ -92,6 +92,11 @@ const SETUP = `
     await js(`__App.els.browserSearch.value = ''; __App.onSearchInput(); 'ok'`);
     await js(`__App.navigateTo('N', 'Relatório semanal.md').then(() => 'ok')`);
     await shot('3-leitura');
+    // O aviso de versao nova, que so aparece fora da home (na home a pagina recarrega sozinha).
+    // Some de novo em seguida, pra nao sobrar nas telas seguintes
+    await js(`__App.els.updateBar.classList.remove('hidden'); 'ok'`);
+    await shot('3b-versao-nova');
+    await js(`__App.els.updateBar.classList.add('hidden'); 'ok'`);
     await js(`document.querySelector('details.frontmatter').open = true; __App.els.previewContainer.scrollTop = 0; 'ok'`);
     await shot('4-leitura-propriedades');
     await js(`__App.els.previewContainer.scrollTop = 1e6; 'ok'`);

@@ -162,7 +162,7 @@ function fakeCtx(canvas) {
   return ctx;
 }
 
-async function boot({ auth = true, seedStorage = {}, watcher = false, editor = false, idb = null } = {}) {
+async function boot({ auth = true, seedStorage = {}, seedSession = {}, watcher = false, editor = false, idb = null, drive: givenDrive = null } = {}) {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const dom = new JSDOM(html, { url: 'http://localhost:8000/', runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
@@ -175,7 +175,9 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     };
     w.__back = () => { const top = w.__watchers.pop(); if (!top) return 'EXIT'; top.onclose(); return 'handled'; };
   }
-  const drive = makeDrive();
+  // A drive handed in already has its files: what the app's own init opens (the reopening after a new
+  // version) needs them before boot returns
+  const drive = givenDrive || makeDrive();
   drive.FileReader = w.FileReader;
   w.fetch = drive.fetch;
   w.confirm = () => true;
@@ -187,6 +189,7 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
   w.Element.prototype.releasePointerCapture = function () {};
   w.console = { log() {}, warn() {}, error() {} };
   for (const [k, v] of Object.entries(seedStorage)) w.localStorage.setItem(k, v);
+  for (const [k, v] of Object.entries(seedSession)) w.sessionStorage.setItem(k, v);
   // jsdom has no IndexedDB, and by default the app runs without one: the road it took before the note
   // store, which is also its road on a phone whose IndexedDB fails. `idb: true` gives this boot a clean
   // database; the factory of a previous boot is the same phone's storage, seen by an app opened again.
@@ -3572,6 +3575,151 @@ function enterEm(App, w, conteudo, em) {
     check('e o salvar sobe o texto dela, sem conflito falso',
       !App.currentFile.conflict && drive.files.get('A').content === 'versao 1 com o que ela escreveu\n\n## Secao',
       drive.files.get('A').content);
+  }
+
+  console.log('68. Versao nova: a home recarrega sozinha, fora dela o aviso, e texto por salvar nunca recarrega');
+  {
+    // Stand-in for navigator.serviceWorker: takeOver() is a new version taking this page over. The real
+    // service worker, end to end, is `npm run test:sw`; here it is the decision the page makes.
+    const watch = async (App, w, { controller = true } = {}) => {
+      const container = new w.EventTarget();
+      container.controller = controller ? {} : null;
+      const registration = { updates: 0, update() { this.updates++; return Promise.resolve(); } };
+      container.register = async () => registration;
+      App.watchVersions(container);
+      await sleep(0);
+      const takeOver = async () => {
+        container.controller = {};
+        container.dispatchEvent(new w.Event('controllerchange'));
+        await sleep(20);
+      };
+      return { registration, takeOver };
+    };
+    // Counts reloads, and tap() waits for the tap on the bar to finish instead of sleeping a fixed time:
+    // under load the save behind the tap outlasted a 50ms sleep, and the check read it half done
+    const counting = (App) => {
+      const counter = { reloads: 0, tapped: null };
+      App.reloadPage = () => counter.reloads++;
+      const apply = App.applyUpdate.bind(App);
+      App.applyUpdate = () => (counter.tapped = apply());
+      counter.tap = async () => {
+        App.els.updateBar.click();
+        await counter.tapped;
+      };
+      return counter;
+    };
+    const until = async (cond, limit = 3000) => {
+      const end = Date.now() + limit;
+      while (!cond() && Date.now() < end) await sleep(10);
+    };
+    const barShown = (App) => !App.els.updateBar.classList.contains('hidden');
+    const TOKEN = { drivenotes_token: 'fake', drivenotes_token_expires: String(Date.now() + 3600e3) };
+
+    {
+      const { App, w } = await boot();
+      const counter = counting(App);
+      const sw = await watch(App, w, { controller: false });
+      await sw.takeOver();
+      check('primeira instalacao de todas: nao e versao nova, nada acontece', counter.reloads === 0 && !barShown(App), counter.reloads);
+      await sw.takeOver();
+      check('... mas um deploy depois dela, com a mesma pagina aberta, e', counter.reloads === 1, counter.reloads);
+    }
+
+    {
+      const { App, w } = await boot();
+      const counter = counting(App);
+      const sw = await watch(App, w);
+      w.document.dispatchEvent(new w.Event('visibilitychange'));
+      check('voltar do fundo pergunta se ha versao nova', sw.registration.updates === 1, sw.registration.updates);
+      await sw.takeOver();
+      check('na home: recarrega sozinha, sem aviso', counter.reloads === 1 && !barShown(App), counter.reloads);
+      await sw.takeOver();
+      check('... uma vez so, mesmo com outra troca em seguida', counter.reloads === 1, counter.reloads);
+    }
+
+    {
+      const { App, w } = await boot();
+      const counter = counting(App);
+      const sw = await watch(App, w);
+      App.showDiagnostics();
+      await sw.takeOver();
+      check('home com uma janela aberta: aviso, sem recarregar', counter.reloads === 0 && barShown(App), counter.reloads);
+    }
+
+    {
+      const { App, w, drive } = await boot({ watcher: true });
+      drive.put('A', 'a.md', 'versao 1');
+      const counter = counting(App);
+      const sw = await watch(App, w);
+      await App.navigateTo('A', 'a.md');
+      await sw.takeOver();
+      check('nota aberta, mesmo sem nada por salvar: aviso, sem recarregar', counter.reloads === 0 && barShown(App), counter.reloads);
+      w.__back();
+      await until(() => counter.reloads > 0);
+      check('aviso deixado pra depois: de volta na home, recarrega', counter.reloads === 1, counter.reloads);
+    }
+
+    // The heart of it: text not on the Drive yet. The reopening marker is kept for the next block.
+    let marker = null;
+    {
+      const { App, w, drive, type } = await boot({ watcher: true });
+      drive.put('A', 'a.md', 'versao 1');
+      const counter = counting(App);
+      const sw = await watch(App, w);
+      await App.navigateTo('A', 'a.md');
+      App.setMode('edit');
+      type('versao 1 com o que ela escreveu');
+      await sw.takeOver();
+      check('nota com texto por salvar: aviso, sem recarregar',
+        counter.reloads === 0 && barShown(App) && App.isDirty && App.getContent() === 'versao 1 com o que ela escreveu', counter.reloads);
+
+      drive.failWrites = true;
+      await counter.tap();
+      const draft = JSON.parse(w.localStorage.getItem('drivenotes_draft_A') || 'null');
+      check('tocar no aviso com o salvar falhando: nao recarrega, o aviso fica',
+        counter.reloads === 0 && barShown(App) && App.isDirty, [counter.reloads, App.els.saveStatus.textContent]);
+      check('... e o texto fica no aparelho, com o motivo na tela',
+        draft?.content === 'versao 1 com o que ela escreveu' && App.els.saveStatus.textContent === 'Erro: salvo local',
+        [draft, App.els.saveStatus.textContent]);
+
+      drive.failWrites = false;
+      await counter.tap();
+      check('tocar de novo, com o Drive de volta: salva e so entao recarrega',
+        counter.reloads === 1 && !App.isDirty && bodyOf(drive.files.get('A').content) === 'versao 1 com o que ela escreveu',
+        [counter.reloads, App._reloading, App.els.saveStatus.textContent, drive.files.get('A').content, App._log.slice(-4)]);
+      marker = w.sessionStorage.getItem('drivenotes_reopen');
+      const kept = JSON.parse(marker || 'null');
+      check('... guardando a nota, o modo e o caminho do voltar',
+        kept?.view?.id === 'A' && kept.mode === 'edit' && kept.navStack.length === 1 && kept.navStack[0].view === 'welcome', kept);
+    }
+
+    {
+      const drive = makeDrive();
+      drive.put('A', 'a.md', 'versao 1 com o que ela escreveu');
+      const { App, w } = await boot({ watcher: true, drive, seedStorage: TOKEN, seedSession: { drivenotes_reopen: marker } });
+      await until(() => App.currentFile?.id === 'A');
+      check('depois de recarregar: a mesma nota, no modo de edicao',
+        App.currentFile?.id === 'A' && App.mode === 'edit' && App.getContent() === 'versao 1 com o que ela escreveu',
+        [App.currentFile?.id, App.mode, App.getContent()]);
+      check('... uma vez so: a marca sai do sessionStorage', w.sessionStorage.getItem('drivenotes_reopen') === null);
+      const back = w.__back();
+      await until(() => w.document.body.dataset.view === 'welcome');
+      check('... e o voltar leva pra home, como antes de recarregar',
+        back === 'handled' && App.currentFile === null && w.document.body.dataset.view === 'welcome', [back, w.document.body.dataset.view]);
+    }
+
+    {
+      // History mode keeps its own entries across a reload; the folder comes back with its search
+      const drive = makeDrive();
+      drive.put('B', 'dentro.md', 'b', ['F']);
+      const folder = { view: 'browse', id: 'F', name: 'pasta', path: ['vault'], query: 'dentro' };
+      const { App, w } = await boot({ drive, seedStorage: TOKEN,
+        seedSession: { drivenotes_reopen: JSON.stringify({ view: folder, mode: 'edit', navStack: [], fwdStack: [] }) } });
+      await until(() => App.folder?.id === 'F');
+      check('pasta aberta: volta pra mesma pasta, com a busca',
+        App.folder?.id === 'F' && w.document.body.dataset.view === 'browse' && App.els.browserSearch.value === 'dentro',
+        [App.folder, w.document.body.dataset.view]);
+    }
   }
 
   done();

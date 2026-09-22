@@ -124,6 +124,33 @@ body {
   flex-shrink: 0;
 }
 
+/* Versão nova pronta: uma faixa embaixo do cabeçalho, a faixa inteira é o toque. Discreta de
+   propósito, no ritmo de vários deploys por dia ela aparece quase todo dia. Só o "atualizar"
+   leva o roxo que escreve, como um link. */
+.update-bar {
+  flex-shrink: 0;
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--button-bg);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.update-bar:active {
+  background: var(--button-hover);
+}
+
+.update-bar span {
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+
 /* ── Buttons ── */
 
 .btn {

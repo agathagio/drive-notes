@@ -26,13 +26,21 @@ O editor aqui é o textarea de fallback. A exceção são os cenários que pedem
 
 Pra escolher o navegador: variável de ambiente `BROWSER_PATH`.
 
+## `npm run test:sw`
+
+`sw.test.js`: o service worker de ponta a ponta, que as outras suítes não tocam (elas abrem páginas `file://`, sem service worker). Um servidor local em `http://127.0.0.1:8336` faz o papel do GitHub Pages, com o mesmo `max-age=600`, e um Edge headless com perfil limpo faz o papel do celular. Cada "deploy" é o servidor passar a responder outra versão: o `CACHE_NAME` servido muda, e o `app.js` servido diz qual versão é (`window.__servedVersion`). As CDNs e o Google saem da conta: as bibliotecas vêm do `node_modules` (mesmos bytes, então o hash confere), a folha de fontes e o login do Google são tirados, e o Drive é um falso guardado no `localStorage`, pra o que um salvar escreveu sobreviver à recarga.
+
+Cobre: a primeira abertura de todas não recarrega; deploy e abrir o app traz a versão nova na mesma abertura, com uma recarga só; voltar do fundo confere se há versão nova; nota com texto por salvar nunca recarrega, e o aviso salva, recarrega e reabre a mesma nota no mesmo modo. Leva uns 40 segundos.
+
+Controle: `SW_COMMIT=dba1d23 npm run test:sw` serve o app daquele commit (a `v46`, de antes do aviso) e os cenários 2 a 4 têm que falhar. Se não falharem, o teste deixou de provar alguma coisa.
+
 ## `npm run screenshots`
 
 `screenshots.js`: prints em tamanho de celular (390x844) de todas as telas, com dados de exemplo. Saem em `tests/.tmp/screens/`. Serve pra olhar a interface sem o celular e pra comparar antes e depois de uma mudança visual.
 
 ## O que nenhum deles cobre
 
-O Google de verdade (login, API do Drive) e o Android de verdade (teclado, botão voltar do sistema, toque na barra). Isso é teste no celular depois do deploy.
+O Google de verdade (login, API do Drive) e o Android de verdade (teclado, botão voltar do sistema, toque na barra, o app que volta do fundo sem recarregar). Isso é teste no celular depois do deploy.
 
 ## Bibliotecas
 

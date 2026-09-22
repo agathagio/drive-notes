@@ -89,6 +89,11 @@ const App = {
   // running on the phone. Without it there was no telling a deploy that had arrived from one still
   // waiting behind the old cache, which is the first thing to rule out when a fix does not show up.
   _version: '?',
+  // New version (see watchVersions): the service worker registration, whether a new version has taken
+  // over this page, and whether the reload into it is under way (it happens once, never in a loop)
+  _swRegistration: null,
+  _updateReady: false,
+  _reloading: false,
 
   // DOM refs
   els: {},
@@ -125,6 +130,7 @@ const App = {
       sketchDone: document.getElementById('sketch-done'),
       sketchErase: document.getElementById('sketch-erase'),
       sketchUndo: document.getElementById('sketch-undo'),
+      updateBar: document.getElementById('update-bar'),
     };
 
     // Pointer used by older versions; drafts are now found by scanning their keys
@@ -143,6 +149,7 @@ const App = {
     this.syncHistory();
     this.renderDrafts();
     this.renderRecents();
+    this.reopenAfterUpdate();
   },
 
   // ── Editor ──
@@ -2742,6 +2749,132 @@ const App = {
     this.armWatcher();
   },
 
+  // ── New version ──
+  //
+  // The service worker is cache-first, so the opening that finds a new version is already running the
+  // old one. The new one downloads behind it and takes over (skipWaiting, clients.claim), and the page
+  // hears `controllerchange`; before this, nothing listened, and a deploy took two or three openings to
+  // show. Now: on the home screen, with nothing that could be lost, the page reloads on its own; anywhere
+  // else a bar offers the update, and tapping it saves, reloads and comes back to the same view. Text not
+  // yet on the Drive never reloads.
+
+  /** Called by index.html with navigator.serviceWorker, as the page loads */
+  watchVersions(container) {
+    // The very first opening (or one after the site data was cleared) has no service worker behind it,
+    // and hears controllerchange too, when the first one takes over: that one is not a new version.
+    // Any change after it is.
+    let controlled = !!container.controller;
+    container.register('./sw.js')
+      .then((registration) => { this._swRegistration = registration; })
+      .catch((err) => console.warn('SW registration failed:', err));
+    container.addEventListener('controllerchange', () => {
+      if (!controlled) {
+        controlled = true;
+        this.log('service worker: first install');
+        return;
+      }
+      this.log('new version');
+      if (this._updateReady) return;
+      this._updateReady = true;
+      this.offerUpdate();
+    });
+    // Android often brings the app back from the background instead of loading it again, and only a
+    // load looks for a new version by itself
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') this._swRegistration?.update().catch(() => {});
+    });
+  },
+
+  /** With a new version in charge: reload where nothing can be lost, offer it anywhere else */
+  offerUpdate() {
+    if (!this._updateReady || this._reloading) return;
+    if (this.safeToReload()) {
+      this.reloadForUpdate();
+    } else {
+      this.els.updateBar?.classList.remove('hidden');
+    }
+  },
+
+  /** The home screen with nothing on it: no note, no folder, nothing on its way, no dialog, no drawing */
+  safeToReload() {
+    return document.body.dataset.view === 'welcome' && !this.currentFile && !this.folder && !this.isDirty
+      && !this._opening && !this._pending && !this.sketch && !document.querySelector('.modal-overlay.visible');
+  },
+
+  /** The reload on its own, from the home screen: after whatever is still on its way to the Drive */
+  async reloadForUpdate() {
+    this._reloading = true;
+    await this._saveChain;
+    // A tap during the wait may have left the home screen
+    if (!this.safeToReload()) {
+      this._reloading = false;
+      this.offerUpdate();
+      return;
+    }
+    this.log('reload: new version');
+    this.reloadPage();
+  },
+
+  /** The bar: the open note goes to the Drive first, then the reload, coming back to the same view */
+  async applyUpdate() {
+    if (this._reloading) return;
+    this._reloading = true;
+    if (this.isDirty) await this.save({ manual: true });
+    await this._saveChain;
+    // Not on the Drive (no network, a conflict, the login): the save status already says why, and the
+    // bar stays for another try. Reloading would leave the text behind as a draft, at best.
+    if (this.isDirty) {
+      this._reloading = false;
+      return;
+    }
+    try {
+      sessionStorage.setItem(this.REOPEN_KEY, JSON.stringify({
+        view: this.viewState(), mode: this.mode, navStack: this.navStack, fwdStack: this.fwdStack,
+      }));
+    } catch (e) {
+      console.warn('View not kept for the reload:', e);
+    }
+    this.log('reload: new version, from the bar');
+    this.reloadPage();
+  },
+
+  // Kept in sessionStorage: it survives a reload, and dies with the app, where a reopening has no business
+  REOPEN_KEY: 'drivenotes_reopen',
+
+  /** Right after the reload from the bar: back to the view it was tapped on, in the same mode, and with
+      "back" going where it went before. Where the view was in the note is the next step (see the card
+      "Retomar a nota onde parou"). */
+  async reopenAfterUpdate() {
+    let kept = null;
+    try {
+      kept = JSON.parse(sessionStorage.getItem(this.REOPEN_KEY));
+      sessionStorage.removeItem(this.REOPEN_KEY);
+    } catch { /* nothing to reopen */ }
+    if (!kept?.view || kept.view.view === 'welcome') return;
+    this.log(`reopen ${kept.view.view} ${kept.view.name || ''}`);
+    // History mode needs nothing: the reload keeps the session history, entries and all
+    if (this.useWatcher) {
+      this.navStack = kept.navStack || [];
+      this.fwdStack = kept.fwdStack || [];
+      this.armWatcher();
+    }
+    const landed = await this.show(kept.view);
+    if (landed === false) {
+      // Did not open (no network, no login): home, where "back" leaves the app
+      this.navStack = [];
+      this.fwdStack = [];
+      this.armWatcher();
+      return;
+    }
+    if (kept.mode === 'edit' && kept.view.view === 'file' && this.currentFile?.id === kept.view.id && this.mode === 'preview') {
+      this.setMode('edit');
+    }
+  },
+
+  reloadPage() {
+    location.reload();
+  },
+
   goHome() {
     this.flushCurrent();
     this._loadSeq++;
@@ -2759,6 +2892,8 @@ const App = {
     this._saveChain.then(() => {
       if (!this.currentFile) this.renderDrafts();
     });
+    // A new version offered by the bar and left for later: the home screen is where it can just reload
+    this.offerUpdate();
   },
 
   togglePreview() {
@@ -4460,6 +4595,8 @@ const App = {
     document.getElementById('debug-copy')?.addEventListener('click', () => {
       navigator.clipboard?.writeText(document.getElementById('debug-text').textContent).catch(() => {});
     });
+
+    this.els.updateBar?.addEventListener('click', () => this.applyUpdate());
 
     // Flush on hide/close: mobile users switch apps constantly.
     // saveDraft is sync (localStorage) so it always runs; save() is async best-effort.
