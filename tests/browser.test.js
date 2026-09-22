@@ -711,6 +711,60 @@ const FAKE_DRIVE = `
     check('o foco continua no editor: no celular, o teclado nao fecharia',
       await js(`document.activeElement === document.querySelector('.cm-content')`) === true,
       await js(`document.activeElement ? document.activeElement.className : null`));
+
+    console.log('14. O botao de extrair: gruda na ponta direita da barra e recebe o toque');
+    // So aqui da pra provar: o sticky, a cor e o alvo do dedo precisam de layout. "Esta visivel" e
+    // "da pra tocar" sao perguntas diferentes, e quem responde a segunda e o elementFromPoint
+    await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 740, deviceScaleFactor: 2, mobile: true });
+    await open(buildPage('extract-button', currentApp));
+    await js(FAKE_DRIVE);
+    await editNote('uma linha\noutra linha', 0, 0);
+    await selecionar({ row: 0, col: 9 }, { row: 0, col: 0 });
+    const acendeu = await esperar(`document.body.classList.contains('has-selection')`);
+    check('texto selecionado acende o botao', acendeu === true);
+    const medirExtrair = () => js(`(() => {
+      const b = document.querySelector('.toolbar-btn[data-extract]').getBoundingClientRect();
+      const t = document.querySelector('.toolbar-btn[data-format="checklist"]').getBoundingClientRect();
+      const x = Math.round(b.left + b.width / 2), y = Math.round(b.top + b.height / 2);
+      const noPonto = document.elementFromPoint(x, y);
+      return JSON.stringify({ x, y, left: Math.round(b.left), right: Math.round(b.right), largura: Math.round(b.width),
+        recebe: !!noPonto && !!noPonto.closest('[data-extract]'), tarefaLeft: Math.round(t.left), tarefaRight: Math.round(t.right) });
+    })()`).then(JSON.parse);
+
+    await js('document.querySelector(".toolbar").scrollLeft = 0; "ok"');
+    const noComeco = await medirExtrair();
+    check('barra no comeco: o botao esta na tela, com 44px, e o toque cai nele',
+      noComeco.largura >= 44 && noComeco.right <= 360 && noComeco.recebe, noComeco);
+    await js('document.querySelector(".toolbar").scrollLeft = 1e6; "ok"');
+    await sleep(100);
+    const noFim = await medirExtrair();
+    check('barra rolada ate o fim: continua na tela e recebendo o toque',
+      noFim.largura >= 44 && noFim.right <= 360 && noFim.recebe, noFim);
+    check('... e a tarefa, ultima da fila, aparece inteira antes dele',
+      noFim.tarefaLeft >= 0 && noFim.tarefaRight <= noFim.left, noFim);
+
+    // O unico botao cheio da barra: --accent #8b6cef preenche, --bg-primary #1c1b1f por cima
+    // (identidade-visual: sobre preenchimento colorido, o que esta em cima e escuro)
+    const cor = JSON.parse(await js(`(() => { const s = getComputedStyle(document.querySelector('.toolbar-btn[data-extract]'));
+      return JSON.stringify({ fundo: s.backgroundColor, tinta: s.color }); })()`));
+    check('o botao cheio: fundo --accent e icone --bg-primary',
+      cor.fundo === 'rgb(139, 108, 239)' && cor.tinta === 'rgb(28, 27, 31)', cor);
+    {
+      const { data } = (await send('Page.captureScreenshot', { format: 'png' })).result;
+      fs.mkdirSync(path.join(ROOT, 'tests', '.tmp'), { recursive: true });
+      fs.writeFileSync(path.join(ROOT, 'tests', '.tmp', 'extrair-botao.png'), Buffer.from(data, 'base64'));
+    }
+
+    await js('document.querySelector(".toolbar").scrollLeft = 0; "ok"');
+    const alvoExtrair = await medirExtrair();
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: alvoExtrair.x, y: alvoExtrair.y, button: 'left', clickCount: 1 });
+    }
+    const abriu = await esperar(`document.getElementById('modal-overlay').classList.contains('visible')
+      && document.getElementById('modal-input').value === 'uma-linha'`);
+    check('o toque abre a caixa com o nome sugerido', abriu === true, await js(`document.getElementById('modal-input').value`));
+    await js('__App.hideModal(); "ok"');
+    await send('Emulation.clearDeviceMetricsOverride');
   } finally {
     browser.close();
   }

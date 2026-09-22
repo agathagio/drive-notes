@@ -2509,12 +2509,14 @@ function enterEm(App, w, conteudo, em) {
   {
     const { w } = await boot();
     const botoes = [...w.document.querySelectorAll('.toolbar .toolbar-btn')];
-    const ordem = botoes.map(b => b.dataset.history || b.dataset.format || b.dataset.photo || b.dataset.sketch);
+    const ordem = botoes.map(b => b.dataset.history || b.dataset.format || b.dataset.photo || b.dataset.sketch
+      || (b.hasAttribute('data-extract') ? 'extract' : undefined));
     // A ordem e a barra que a Agatha usa com o polegar: desfazer e refazer, os links da nota, a
-    // foto e o desenho, a formatacao de texto, os blocos, e as listas no fim
+    // foto e o desenho, a formatacao de texto, os blocos, e as listas no fim. O de extrair (v43) so
+    // aparece com texto selecionado e gruda na ponta direita: e o ultimo da fila de proposito
     const esperada = ['undo', 'redo', 'wikilink', 'tag', 'camera', 'gallery', 'open', 'heading',
-      'bold', 'italic', 'strikethrough', 'highlight', 'code', 'quote', 'link', 'list', 'ordered', 'checklist'];
-    check('a barra tem os 18 botoes na ordem combinada', ordem.join(',') === esperada.join(','), ordem);
+      'bold', 'italic', 'strikethrough', 'highlight', 'code', 'quote', 'link', 'list', 'ordered', 'checklist', 'extract'];
+    check('a barra tem os 18 botoes na ordem combinada, e o de extrair no fim', ordem.join(',') === esperada.join(','), ordem);
     // Letra e emoji na barra saiam com a fonte de cada Android e nao herdavam a cor do botao:
     // todo botao e SVG de traco, e nenhum tem texto solto dentro
     const semDesenho = botoes.filter(b => !b.querySelector('svg') || b.textContent.trim());
@@ -3090,6 +3092,216 @@ function enterEm(App, w, conteudo, em) {
     await App.renameFile(App.currentFile, 'emilia');
     await App._saveChain; await sleep(50);
     check('sem links, status curto', App.els.saveStatus.textContent === 'Renomeado', App.els.saveStatus.textContent);
+  }
+
+  console.log('59. Extrair trecho: o editor entrega o trecho selecionado e so troca o que conferiu');
+  {
+    const { App, w } = await boot({ editor: true });
+    const view = App.Editor._impl.view;
+    const aceso = () => w.document.body.classList.contains('has-selection');
+
+    App.Editor.setText('uma linha\n\n   \noutra');
+    App.Editor.focus();
+    await sleep(30);
+    view.dispatch({ selection: { anchor: 2 } });
+    check('cursor sem selecao: botao apagado', !aceso());
+    view.dispatch({ selection: { anchor: 0, head: 3 } });
+    check('texto selecionado com o editor em foco: botao aceso', aceso());
+    view.dispatch({ selection: { anchor: 10, head: 14 } });
+    check('selecao so de espaco e quebra de linha: apagado', !aceso());
+    check('... e o editor nao entrega trecho nenhum', App.Editor.selectedStretch() === null);
+    view.dispatch({ selection: { anchor: 0, head: 3 } });
+    view.contentDOM.blur();
+    await sleep(50);
+    check('o editor perdeu o foco (a caixa do nome pega ele): apagado', !aceso());
+
+    // Linhas inteiras com a quebra do fim, que e como o dedo costuma selecionar
+    App.Editor.setText('antes\nTrecho um\nlinha dois\ndepois');
+    view.dispatch({ selection: { anchor: 6, head: 27 } });
+    const trecho = App.Editor.selectedStretch();
+    check('o trecho vem sem as pontas em branco', trecho && trecho.text === 'Trecho um\nlinha dois', trecho);
+    view.dispatch({ changes: { from: 0, insert: 'bem ' }, userEvent: 'input.type' });
+    check('texto digitado antes do trecho: a troca acompanha e acerta o lugar',
+      App.Editor.replaceStretch(trecho, '[[x]]') === true && App.Editor.getText() === 'bem antes\n[[x]]\ndepois', App.Editor.getText());
+    check('o cursor fica logo depois do link', view.state.selection.main.head === 'bem antes\n[[x]]'.length, view.state.selection.main.head);
+    App.Editor.undo();
+    check('desfazer devolve o trecho', App.Editor.getText() === 'bem antes\nTrecho um\nlinha dois\ndepois', App.Editor.getText());
+
+    view.dispatch({ selection: { anchor: 10, head: 30 } });
+    const mexido = App.Editor.selectedStretch();
+    view.dispatch({ changes: { from: 17, insert: 'mexido ' }, userEvent: 'input.type' });
+    check('texto mexido dentro do trecho: a troca recusa e nao mexe em nada',
+      App.Editor.replaceStretch(mexido, '[[x]]') === false
+      && App.Editor.getText() === 'bem antes\nTrecho mexido um\nlinha dois\ndepois', App.Editor.getText());
+
+    App.Editor.setText('um\nTrecho\ndois');
+    view.dispatch({ selection: { anchor: 3, head: 9 } });
+    const trocado = App.Editor.selectedStretch();
+    App.Editor.setText('outra nota inteira');
+    check('a nota trocou por baixo: a troca recusa',
+      App.Editor.replaceStretch(trocado, '[[x]]') === false && App.Editor.getText() === 'outra nota inteira');
+
+    const { App: semLib } = await boot();
+    check('no textarea de reserva nao ha trecho nem troca',
+      semLib.Editor.selectedStretch() === null && semLib.Editor.replaceStretch({ text: 'x' }, 'y') === false);
+  }
+
+  console.log('59b. A caixa do nome pode recusar e ficar aberta dizendo por que');
+  {
+    const { App, w } = await boot();
+    const aviso = w.document.getElementById('modal-message');
+    let recebido = null;
+    App.showModal('Teste', 'Nome', (v) => { recebido = v; },
+      { value: 'ocupado', validate: async (v) => (v === 'ocupado' ? 'Já existe' : '') });
+    await App._modalConfirm();
+    check('recusado: a caixa continua aberta, com o aviso, e nada foi confirmado',
+      App.els.modal.classList.contains('visible') && !aviso.hidden && aviso.textContent === 'Já existe' && recebido === null);
+    App.els.modalInput.value = 'livre';
+    await App._modalConfirm();
+    check('aceito: fecha e entrega o valor', !App.els.modal.classList.contains('visible') && recebido === 'livre');
+
+    // Fechada no meio da conferencia, nao confirma depois
+    let tarde = null;
+    let soltar;
+    App.showModal('Teste', 'Nome', (v) => { tarde = v; }, { value: 'x', validate: () => new Promise(r => { soltar = r; }) });
+    check('abrir de novo apaga o aviso anterior', aviso.hidden && aviso.textContent === '');
+    const pendente = App._modalConfirm();
+    App.hideModal();
+    soltar('');
+    await pendente;
+    check('cancelada durante a conferencia: nao confirma', tarde === null);
+
+    // O renomear, que nao passa validate, continua fechando na hora
+    let sincrono = null;
+    App.showModal('Renomear nota', 'Nome do arquivo', (v) => { sincrono = v; }, { value: 'a.md' });
+    App._modalConfirm();
+    check('sem validate: fecha e confirma no mesmo instante', sincrono === 'a.md' && !App.els.modal.classList.contains('visible'));
+  }
+
+  console.log('60. Extrair trecho: o nome sugerido vem da primeira linha, livre no vault');
+  {
+    const { App, drive } = await boot();
+    seedVault(drive);
+    drive.put('n-ideia', 'ideia-de-home-bonita.md', 'x', ['d-proj']);
+    check('titulo, maiuscula e acento', await App.suggestNoteName('\n\n## Ideia de Casa Açaí\ncorpo') === 'ideia-de-casa-acai');
+    check('tarefa: o marcador cai', await App.suggestNoteName('- [ ] comprar pão\n- [ ] leite') === 'comprar-pao');
+    check('nome que ja existe no vault ganha -2', await App.suggestNoteName('# Ideia de home bonita') === 'ideia-de-home-bonita-2');
+    drive.put('n-ideia2', 'ideia-de-home-bonita-2.md', 'x', [VAULT]);
+    await App.refreshNoteIndex();
+    check('... e -3 quando o -2 tambem existe', await App.suggestNoteName('# Ideia de home bonita') === 'ideia-de-home-bonita-3');
+    check('a comparacao ignora maiuscula, como o link do Obsidian', await App.suggestNoteName('Zebra') === 'zebra-2');
+    check('linha so de simbolos cai no nome de data', /^\d{4}-\d{2}-\d{2}-\d{4}$/.test(await App.suggestNoteName('***\ntexto')));
+  }
+
+  console.log('61. Extrair trecho: a nota nova nasce no Drive, e so entao o trecho vira link');
+  {
+    const { App, drive, w } = await boot({ editor: true });
+    seedVault(drive);
+    const d = w.document;
+    const view = App.Editor._impl.view;
+    const original = '---\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\nantes\n## Ideia de home\nlinha dois\ndepois';
+    drive.put('O', 'origem.md', original, ['d-proj']);
+    await App.openFile('O', 'origem.md');
+    App.setMode('edit');
+    App.Editor.focus();
+    await sleep(30);
+    // Linhas inteiras, com a quebra do fim, como o dedo costuma selecionar
+    view.dispatch({ selection: { anchor: original.indexOf('## Ideia'), head: original.indexOf('depois') } });
+    check('com o trecho selecionado o botao acende', d.body.classList.contains('has-selection'));
+    // O toque pelo caminho do mouse no bindToolbarButton: prova a ligacao do botao
+    d.querySelector('.toolbar-btn[data-extract]').click();
+    await sleep(150);
+    check('o toque abre a caixa com o nome sugerido', App.els.modal.classList.contains('visible')
+      && d.querySelector('#modal-overlay h3').textContent === 'Nota nova com o trecho'
+      && App.els.modalInput.value === 'ideia-de-home', App.els.modalInput.value);
+    await App._modalConfirm();
+    await sleep(150); await App._saveChain; await sleep(50); await App._saveChain;
+
+    const nova = [...drive.files.values()].find(f => f.name === 'ideia-de-home.md');
+    check('a nota nova foi criada na pasta da original', nova && nova.parents[0] === 'd-proj', nova);
+    check('com as datas de nota nova em cima e o trecho inteiro embaixo',
+      nova && /^---\ncreated: \d{4}-\d{2}-\d{2}\nupdated: \d{4}-\d{2}-\d{2}\n---\n\n## Ideia de home\nlinha dois$/.test(nova.content), nova && nova.content);
+    check('no editor o trecho virou link numa linha propria, e a linha seguinte ficou inteira',
+      bodyOf(App.getContent()) === 'antes\n[[ideia-de-home]]\ndepois', App.getContent());
+    check('o cursor ficou logo depois do link',
+      view.state.selection.main.head === App.getContent().indexOf('[[ideia-de-home]]') + '[[ideia-de-home]]'.length);
+    check('a original foi salva sem esperar os 30 segundos',
+      bodyOf(drive.files.get('O').content) === 'antes\n[[ideia-de-home]]\ndepois' && !App.isDirty, drive.files.get('O').content);
+    const criou = drive.log.findIndex(l => l.startsWith('POST') && l.includes('ideia-de-home.md'));
+    check('a criacao veio antes do salvar da original', criou >= 0 && criou < drive.log.lastIndexOf('PATCH O'), drive.log);
+    check('a nota nova esta nas recentes e no indice',
+      App.getRecents().some(r => r.id === nova.id) && App._noteIndex.some(n => n.id === nova.id));
+    check('o cabecalho diz Nota criada', App.els.saveStatus.textContent === 'Nota criada', App.els.saveStatus.textContent);
+    App.Editor.undo();
+    check('desfazer devolve o trecho pra original',
+      bodyOf(App.getContent()) === 'antes\n## Ideia de home\nlinha dois\ndepois', App.getContent());
+  }
+
+  console.log('62. Extrair trecho: quando algo da errado, o texto fica, nunca some');
+  {
+    const { App, drive, w } = await boot({ editor: true });
+    seedVault(drive);
+    const view = App.Editor._impl.view;
+    const texto = 'um\nTrecho que sai\ndois';
+    drive.put('O', 'origem.md', texto, [VAULT]);
+    await App.openFile('O', 'origem.md');
+    App.setMode('edit');
+    App.Editor.focus();
+    const selecionarTrecho = () => {
+      const de = App.getContent().indexOf('Trecho');
+      view.dispatch({ selection: { anchor: de, head: de + 'Trecho que sai'.length } });
+    };
+
+    // Nome repetido digitado: a caixa fica aberta, avisa, e nada e criado
+    selecionarTrecho();
+    await App.promptExtract();
+    check('a sugestao sai da primeira linha', App.els.modalInput.value === 'trecho-que-sai', App.els.modalInput.value);
+    App.els.modalInput.value = 'Zebra';
+    await App._modalConfirm();
+    const aviso = w.document.getElementById('modal-message');
+    check('nome repetido: a caixa continua aberta e diz por que',
+      App.els.modal.classList.contains('visible') && !aviso.hidden && aviso.textContent === 'Já existe uma nota com esse nome', aviso.textContent);
+    check('... e nada foi criado', drive.count('POST') === 0, drive.log);
+    App.hideModal();
+
+    // O Drive recusa a criacao: a original fica como estava, sem nenhuma escrita
+    drive.failWrites = true;
+    selecionarTrecho();
+    await App.promptExtract();
+    await App._modalConfirm();
+    await sleep(100); await App._saveChain;
+    check('criacao recusada: o trecho continua na original', App.getContent() === texto && !App.isDirty, App.getContent());
+    check('... nenhuma escrita na original', drive.count('PATCH') === 0, drive.log);
+    check('... e o status diz', App.els.saveStatus.textContent === 'Erro ao criar a nota, o trecho ficou', App.els.saveStatus.textContent);
+    drive.failWrites = false;
+
+    // O trecho muda enquanto a nota nova esta a caminho: ela fica, e a original nao e tocada
+    selecionarTrecho();
+    await App.promptExtract();
+    drive.delay = 60;
+    await App._modalConfirm();
+    await sleep(20);
+    view.dispatch({ changes: { from: App.getContent().indexOf('que'), insert: 'mexido ' }, userEvent: 'input.type' });
+    await sleep(400); await App._saveChain;
+    check('trecho mexido no meio: a nota nova foi criada', [...drive.files.values()].some(f => f.name === 'trecho-que-sai.md'), drive.log);
+    check('... e a original ficou com o trecho (agora mexido), sem link',
+      App.getContent() === 'um\nTrecho mexido que sai\ndois', App.getContent());
+    check('... e o aviso diz que o texto ficou nos dois',
+      App.els.saveStatus.textContent === 'Nota criada, o trecho ficou aqui também', App.els.saveStatus.textContent);
+    drive.delay = 5;
+
+    // Sem login: nada e criado e o trecho fica
+    const { App: semLogin, drive: driveSemLogin } = await boot({ editor: true, auth: false });
+    semLogin.newFile();
+    semLogin.setContent(texto);
+    const de = texto.indexOf('Trecho');
+    semLogin.Editor._impl.view.dispatch({ selection: { anchor: de, head: de + 'Trecho que sai'.length } });
+    await semLogin.promptExtract();
+    await semLogin._modalConfirm();
+    await sleep(50);
+    check('sem login: nada criado, o trecho fica, e o status pede login',
+      driveSemLogin.count('POST') === 0 && semLogin.getContent() === texto
+      && semLogin.els.saveStatus.textContent === 'Faça login pra extrair', [driveSemLogin.log, semLogin.els.saveStatus.textContent]);
   }
 
   done();

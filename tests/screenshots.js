@@ -111,6 +111,15 @@ const SETUP = `
     await shot('5c-link-list');
     // A nota volta ao que era, pra lista não sobrar nas telas seguintes
     await js(`__App.Editor.closeLinkList(); __App.setContent(${JSON.stringify(NOTE)}); 'ok'`);
+    // O botao de extrair, que so existe com texto selecionado, e a caixa que ele abre. A selecao vai
+    // de "## Resumo" ate o fim do primeiro callout, entao a sugestao de nome e "resumo"
+    await js(`__App.Editor.focus();
+      (() => { const view = __App.Editor._impl.view;
+        view.dispatch({ selection: { anchor: view.state.doc.line(10).from, head: view.state.doc.line(13).to }, scrollIntoView: true }); })(); 'ok'`);
+    await shot('5d-extrair');
+    await js(`__App.promptExtract().then(() => 'ok')`);
+    await shot('5e-extrair-caixa');
+    await js(`__App.hideModal(); 'ok'`);
     // O modal do nome numa nota que ja esta no Drive: e por ele que se apaga, e por isso o Apagar
     // aparece aqui, discreto e do outro lado dos dois botoes de sempre
     await js(`__App.promptRename(); 'ok'`);

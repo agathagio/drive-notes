@@ -588,6 +588,25 @@ mark {
   flex-shrink: 0;
 }
 
+/* Extract to a new note: only while there is text selected in the editor (body.has-selection, which
+   the editor sets). Sticky at the right edge, so it floats over the bar without pushing any button out
+   of place; being the last item, it adds its own width to the end of the scroll, and that is what keeps
+   the last button reachable underneath it. The only filled button of the bar, so it reads as on top.
+   After the :hover/:active rule on purpose: same specificity, and the later one wins. */
+.toolbar-btn.toolbar-extract {
+  display: none;
+  position: sticky;
+  right: 0;
+  margin-left: auto;
+  background: var(--accent);
+  color: var(--bg-primary);
+  box-shadow: -8px 0 8px var(--toolbar-bg);
+}
+
+body.has-selection .toolbar-btn.toolbar-extract {
+  display: block;
+}
+
 /* ── Edge swipe: the arrow pulled out of the side of the screen ── */
 
 /* Above the dialogs too (300): the swipe from the left also closes them. It never takes a tap. */
@@ -687,6 +706,13 @@ mark {
   line-height: 1.5;
   color: var(--text-secondary);
   margin-bottom: 16px;
+}
+
+/* Why the dialog did not close (a name that is already taken) */
+.modal-message {
+  font-size: 13px;
+  color: var(--error);
+  margin: -4px 0 12px;
 }
 
 .modal-actions-stacked {

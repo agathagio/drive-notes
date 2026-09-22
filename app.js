@@ -114,6 +114,7 @@ const App = {
       modalCancel: document.getElementById('modal-cancel'),
       modalConfirm: document.getElementById('modal-confirm'),
       modalDelete: document.getElementById('modal-delete'),
+      modalMessage: document.getElementById('modal-message'),
       conflict: document.getElementById('conflict-overlay'),
       conflictText: document.getElementById('conflict-text'),
       browser: document.getElementById('browser'),
@@ -209,6 +210,10 @@ const App = {
     // number the text does not have, so the caller never has to know how long the text is.
     lineText(number) { return this._impl ? this._impl.lineText(number) : null; },
     removeLine(number) { return this._impl ? this._impl.removeLine(number) : false; },
+    // Extract to a new note. The stretch is opaque, like a mark: `text` is the only field anyone
+    // outside may read. The fallback textarea has neither: no stretch, and nothing gets replaced.
+    selectedStretch() { return this._impl?.selectedStretch?.() ?? null; },
+    replaceStretch(stretch, insert) { return this._impl?.replaceStretch?.(stretch, insert) || false; },
   },
 
   initEditor() {
@@ -216,7 +221,7 @@ const App = {
   },
 
   /** The real editor: the CodeMirror 6. `window.CM6` is the single bundle from vendor/codemirror.js.
-      The eleven functions of the facade come from here; `mount` and `kind` belong to the facade,
+      The functions of the facade come from here; `mount` and `kind` belong to the facade,
       not to this one. */
   createCM6Editor(host, onChange) {
     const {
@@ -548,6 +553,12 @@ const App = {
         EditorView.updateListener.of((u) => {
           if (u.docChanged) onChange();
           if (u.focusChanged && u.view.hasFocus) caretPlaced = true;
+          // The extract button shows while there is text selected in here, with the focus. Losing the
+          // focus counts: the name dialog's field taking it hides the button, and so does leaving the editor
+          if (u.selectionSet || u.focusChanged || u.docChanged) {
+            const sel = u.state.selection.main;
+            App.onEditorSelection(u.view.hasFocus && !sel.empty && u.state.sliceDoc(sel.from, sel.to).trim() !== '');
+          }
         }),
         // A tap on the picture of an embed line offers to delete it. The picture is not an element:
         // it is the line's background, drawn over the bottom padding the decoration asked for, so the
@@ -730,6 +741,34 @@ const App = {
           changes: { from, to },
           selection: { anchor: from },
           userEvent: 'delete',
+        });
+        return true;
+      },
+      selectedStretch: () => {
+        const sel = view.state.selection.main;
+        const raw = view.state.sliceDoc(sel.from, sel.to);
+        const text = raw.trim();
+        if (!text) return null;
+        // The blank ends stay out of it. A selection of whole lines usually takes the newline at the
+        // end, and swapping that too would glue the next line onto the link
+        const from = sel.from + (raw.length - raw.trimStart().length);
+        const start = newMark(from);
+        const end = newMark(from + text.length);
+        view.dispatch({ effects: [start.effect, end.effect] });
+        return { text, start: start.id, end: end.id };
+      },
+      replaceStretch: (stretch, insert) => {
+        // Only what was checked is taken out. The marks followed every edit made since the stretch was
+        // picked; if what lies between them is no longer exactly its text (typed into, or the note
+        // swapped underneath), nothing is touched and the text stays where it is. Only this stretch is
+        // replaced, never the whole text: that would lose the caret, and the undo that brings it back.
+        const from = posOfMark(stretch?.start);
+        const to = posOfMark(stretch?.end);
+        if (from == null || to == null || view.state.sliceDoc(from, to) !== stretch.text) return false;
+        view.dispatch({
+          changes: { from, to, insert },
+          selection: { anchor: from + insert.length },
+          userEvent: 'input',
         });
         return true;
       },
@@ -3283,13 +3322,118 @@ const App = {
     return true;
   },
 
+  // ── Extract a stretch to a new note ──
+  // Select a stretch, tap the button that only exists while there is a selection, confirm the name:
+  // the stretch becomes a note of its own in the same folder, and a [[link]] takes its place. The
+  // text is never in neither place: the new note is created first, and the stretch only leaves once
+  // the Drive has it. See extrair-trecho-design in the vault.
+
+  /** The editor says whether there is text selected in it, with the focus: the button shows while there is */
+  onEditorSelection(hasText) {
+    document.body.classList.toggle('has-selection', hasText);
+  },
+
+  /** The name a stretch suggests for its own note: its first line with text in it, in the vault's
+      kebab-case (the same rule as the photos' names), made free against the vault with -2, -3. With
+      nothing left of that line (only symbols), the dated name of a new note. Without .md. */
+  async suggestNoteName(text) {
+    const first = text.split('\n').find(line => line.trim()) || '';
+    const base = this.slugForMedia(first) || this.generateFileName().replace(/\.md$/, '');
+    const taken = await this.takenNoteNames();
+    let name = base;
+    for (let n = 2; taken.has(name); n++) name = `${base}-${n}`;
+    return name;
+  },
+
+  /** The vault's note names, lowercased and without .md: what a new note must not repeat, because the
+      app finds a note by its name and a repeated one would make the link ambiguous. Case does not
+      count, as in the Obsidian's links. With no index to be had (no network, no login), an empty set:
+      the name goes unchecked rather than the extraction being refused. */
+  async takenNoteNames() {
+    const notes = await this.noteIndex().catch(() => null);
+    return new Set((notes || []).map(note => note.name.replace(/\.md$/i, '').toLowerCase()));
+  },
+
+  /** The toolbar's extract button. The stretch is taken right away, with its marks: the dialog is
+      about to take the focus, and the selection would go with it. */
+  async promptExtract() {
+    const file = this.currentFile;
+    const stretch = this.Editor.selectedStretch();
+    if (!file || !stretch) return;
+    const suggested = await this.suggestNoteName(stretch.text);
+    // The index may have come from the Drive, and meanwhile another note may have been opened
+    if (this.currentFile !== file) return;
+    this.showModal('Nota nova com o trecho', 'Nome da nota', (value) => this.extractToNote(file, stretch, value), {
+      value: suggested,
+      validate: (value) => this.extractNameRefusal(value),
+    });
+  },
+
+  /** Why `value` cannot name the new note, or '' when it can */
+  async extractNameRefusal(value) {
+    const name = this.cleanFileName(value, 'nota.md');
+    if (!name) return 'Dê um nome pra nota';
+    const taken = await this.takenNoteNames();
+    return taken.has(name.replace(/\.md$/i, '').toLowerCase()) ? 'Já existe uma nota com esse nome' : '';
+  },
+
+  /** Create the new note, and only then take the stretch out of the note it came from. Until the Drive
+      confirms, the text is still where it was. If anything moved meanwhile (the stretch was edited,
+      another note was opened), the new note stays and so does the stretch: the text is in both, never
+      in neither. */
+  async extractToNote(file, stretch, value) {
+    const name = this.cleanFileName(value, 'nota.md');
+    if (!name) return;
+    const isCurrent = () => this.currentFile === file;
+
+    // The tap on Criar is what allows a login popup, so an expired login is renewed here
+    try {
+      await this.ensureAuth();
+    } catch {
+      if (isCurrent()) this.setSaveStatus('error', 'Faça login pra extrair');
+      return;
+    }
+
+    // Born next to the note it came from. A note not yet on the Drive is being born in the default folder
+    const note = {
+      id: null,
+      name,
+      parents: [file.parents?.[0] || CONFIG.DEFAULT_FOLDER_ID],
+      draftKey: `drivenotes_draft_new_${Date.now()}`,
+    };
+    if (isCurrent()) this.setSaveStatus('saving', 'Criando nota...');
+    try {
+      // Through the write queue, behind whatever it holds (the original's own creation, if it is new).
+      // The dates come the way of any save: created and updated only in a folder that keeps them.
+      await this.enqueue(async () => this.createOnDrive(note, await this.withDates(note, stretch.text)));
+    } catch (e) {
+      console.error('Extract failed:', e);
+      if (isCurrent()) this.setSaveStatus('error', 'Erro ao criar a nota, o trecho ficou');
+      return;
+    }
+
+    // Only now does the stretch leave. The swap is an edit like any other: the editor reports it and
+    // the note becomes unsaved, and the save below takes it to the Drive without waiting for the autosave
+    const link = `[[${name.replace(/\.md$/i, '')}]]`;
+    if (!isCurrent() || !this.Editor.replaceStretch(stretch, link)) {
+      // On another note's screen this message would be about the wrong note
+      if (isCurrent()) this.setSaveStatus('saved', 'Nota criada, o trecho ficou aqui também');
+      return;
+    }
+    const onDrive = await this.save();
+    // A save that did not reach the Drive (a conflict, a login gone) keeps its own message
+    if (onDrive && isCurrent()) this.setSaveStatus('saved', 'Nota criada');
+  },
+
   // ── Modal ──
 
-  showModal(title, placeholder, onConfirm, { value = '', confirmLabel = 'Criar', onDelete = null } = {}) {
+  showModal(title, placeholder, onConfirm, { value = '', confirmLabel = 'Criar', onDelete = null, validate = null } = {}) {
     this.els.modal.querySelector('h3').textContent = title;
     this.els.modalInput.placeholder = placeholder;
     this.els.modalInput.value = value;
     this.els.modalConfirm.textContent = confirmLabel;
+    this.els.modalMessage.hidden = true;
+    this.els.modalMessage.textContent = '';
     // The delete button only exists for a note that is on the Drive; showModal is also the "new note" dialog
     this.els.modalDelete.hidden = !onDelete;
     this._modalDelete = onDelete;
@@ -3300,11 +3444,24 @@ const App = {
     if (dot > 0) this.els.modalInput.setSelectionRange(0, dot);
     this.armWatcher();
 
-    this._modalConfirm = () => {
+    // `validate` answers why the value cannot be used ('' when it can), and then the dialog stays open
+    // saying so. Without it the dialog closes on confirm in the same instant, as it always has: the
+    // await only happens when there is something to wait for.
+    const confirm = async () => {
       const value = this.els.modalInput.value;
+      const refusal = validate ? await validate(value) : '';
+      // Closed, or opened again for something else, while the check was running: not ours any more.
+      // It is also what makes a second tap on Criar do nothing.
+      if (this._modalConfirm !== confirm) return;
+      if (refusal) {
+        this.els.modalMessage.textContent = refusal;
+        this.els.modalMessage.hidden = false;
+        return;
+      }
       this.hideModal();
       onConfirm(value);
     };
+    this._modalConfirm = confirm;
   },
 
   hideModal() {
@@ -3983,6 +4140,11 @@ const App = {
     // Drawing: the pencil sits with the photo buttons and is tapped with the keyboard open too
     const pencil = document.querySelector('.toolbar-btn[data-sketch]');
     if (pencil) this.bindToolbarButton(pencil, () => this.sketchOpen());
+
+    // Extract to a new note: tapped with text selected, often with the keyboard open. The same touch
+    // handling as the rest of the toolbar, because taking the focus would take the selection with it
+    const extract = document.querySelector('.toolbar-btn[data-extract]');
+    if (extract) this.bindToolbarButton(extract, () => this.promptExtract());
 
     this.els.sketchCancel.addEventListener('click', () => this.sketchCancel());
     this.els.sketchColors.addEventListener('click', (e) => {
