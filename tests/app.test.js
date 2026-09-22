@@ -161,7 +161,7 @@ function fakeCtx(canvas) {
   return ctx;
 }
 
-async function boot({ auth = true, seedStorage = {}, watcher = false, editor = false } = {}) {
+async function boot({ auth = true, seedStorage = {}, watcher = false, editor = false, idb = null } = {}) {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const dom = new JSDOM(html, { url: 'http://localhost:8000/', runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
@@ -186,6 +186,16 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
   w.Element.prototype.releasePointerCapture = function () {};
   w.console = { log() {}, warn() {}, error() {} };
   for (const [k, v] of Object.entries(seedStorage)) w.localStorage.setItem(k, v);
+  // jsdom has no IndexedDB, and by default the app runs without one: the road it took before the note
+  // store, which is also its road on a phone whose IndexedDB fails. `idb: true` gives this boot a clean
+  // database; the factory of a previous boot is the same phone's storage, seen by an app opened again.
+  let factory = null;
+  if (idb) {
+    const { IDBFactory, IDBKeyRange } = require('fake-indexeddb');
+    factory = idb === true ? new IDBFactory() : idb;
+    w.indexedDB = factory;
+    w.IDBKeyRange = IDBKeyRange;
+  }
   w.eval(fs.readFileSync(LIBS.marked, 'utf8'));
   w.eval(fs.readFileSync(LIBS.purify, 'utf8'));
   w.eval(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8') + ';window.__App = App; window.__CONFIG = CONFIG;');
@@ -214,7 +224,7 @@ async function boot({ auth = true, seedStorage = {}, watcher = false, editor = f
     App.els.editorElement = host;
     App.initEditor();
   }
-  return { w, App, drive, type, drafts };
+  return { w, App, drive, type, drafts, idb: factory };
 }
 
 /**
@@ -3302,6 +3312,237 @@ function enterEm(App, w, conteudo, em) {
     check('sem login: nada criado, o trecho fica, e o status pede login',
       driveSemLogin.count('POST') === 0 && semLogin.getContent() === texto
       && semLogin.els.saveStatus.textContent === 'Faça login pra extrair', [driveSemLogin.log, semLogin.els.saveStatus.textContent]);
+  }
+
+  console.log('63. Notas guardadas no aparelho: guarda, devolve, apaga, e nunca estoura');
+  {
+    const { App, idb } = await boot({ idb: true });
+    const S = App.NoteStore;
+    check('nada guardado: null', await S.get('A') === null);
+    await S.put({ id: 'A', name: 'a.md', parents: ['p'], modifiedTime: 't1', content: 'texto de A' });
+    const a = await S.get('A');
+    check('guarda e devolve a entrada inteira', a && a.name === 'a.md' && a.parents[0] === 'p'
+      && a.modifiedTime === 't1' && a.content === 'texto de A' && typeof a.openedAt === 'number', a);
+    await S.put({ id: 'A', name: 'a2.md', parents: ['p'], modifiedTime: 't2', content: 'nova' });
+    check('guardar de novo substitui', (await S.get('A')).content === 'nova');
+    await S.remove('A');
+    check('apagar tira', await S.get('A') === null);
+
+    // O limite: passou dele, sai a aberta ha mais tempo. Pequeno aqui pra nao gravar 101 notas
+    S.LIMIT = 3;
+    for (const id of ['n1', 'n2', 'n3']) await S.put({ id, name: `${id}.md`, modifiedTime: 't', content: id });
+    await S.put({ id: 'n1', name: 'n1.md', modifiedTime: 't', content: 'n1 de novo' }); // reaberta: agora e a mais recente
+    await S.put({ id: 'n4', name: 'n4.md', modifiedTime: 't', content: 'n4' });
+    check('passou do limite: sai a aberta ha mais tempo (n2), e a reaberta fica',
+      await S.get('n2') === null && !!(await S.get('n1')) && !!(await S.get('n3')) && !!(await S.get('n4')));
+    S.LIMIT = 100;
+
+    // O app aberto de novo ve o que ficou no aparelho
+    const { App: App2 } = await boot({ idb });
+    check('outra sessao, mesmo aparelho: a entrada esta la', (await App2.NoteStore.get('n4'))?.content === 'n4');
+
+    // Sem IndexedDB (o boot padrao dos testes, e o celular quando o banco falha): responde vazio, nao estoura
+    const { App: semBanco } = await boot();
+    let estourou = false;
+    try {
+      await semBanco.NoteStore.put({ id: 'x', name: 'x.md', modifiedTime: 't', content: 'x' });
+      check('sem banco: get responde null', await semBanco.NoteStore.get('x') === null);
+      await semBanco.NoteStore.remove('x');
+    } catch { estourou = true; }
+    check('sem banco: nada estoura', !estourou);
+
+    // Banco que falha ao abrir (aba anonima, navegador que recusa): mesma coisa
+    const { App: quebrado, w: wq } = await boot();
+    wq.indexedDB = { open() { throw new Error('SecurityError'); } };
+    check('banco que falha ao abrir: null, sem estourar', await quebrado.NoteStore.get('x') === null);
+  }
+
+  console.log('64. Nota ja vista abre na hora, do aparelho, e so pergunta ao Drive se mudou');
+  {
+    const { App, drive, w, idb } = await boot({ idb: true });
+    drive.put('A', 'a.md', 'texto de A');
+    drive.put('B', 'b.md', 'texto de B');
+    await App.openFile('A', 'a.md');
+    await App.openFile('B', 'b.md');
+    await sleep(30);
+    check('abrir do Drive guarda a nota no aparelho', (await App.NoteStore.get('A'))?.content === 'texto de A');
+
+    drive.log.length = 0;
+    drive.delay = 200; // um Drive lento: o que aparecer antes de 200ms nao veio dele
+    const aberta = App.openFile('A', 'a.md');
+    await sleep(60);
+    check('A na tela, no modo leitura, antes de o Drive responder',
+      App.currentFile?.id === 'A' && App.getContent() === 'texto de A' && w.document.body.dataset.view === 'preview',
+      [App.currentFile?.id, App.getContent()]);
+    await aberta;
+    await sleep(300);
+    check('uma pergunta ao Drive e nenhum download', drive.count('GET meta') === 1 && drive.count('GET content') === 0, drive.log);
+    check('nada mudou: nenhum aviso', App.els.saveStatus.textContent === '', App.els.saveStatus.textContent);
+    check('o log conta que veio do guardado, e que conferiu',
+      App._log.some(l => /cached a\.md \d+ms/.test(l)) && App._log.some(l => /checked a\.md same \d+ms/.test(l)), App._log.slice(-4));
+    drive.delay = 5;
+
+    // O app aberto de novo (o Android matou): o aparelho ainda tem A
+    const { App: App2, drive: drive2 } = await boot({ idb });
+    drive2.put('A', 'a.md', 'texto de A');
+    drive2.files.get('A').modifiedTime = (await App2.NoteStore.get('A')).modifiedTime;
+    drive2.delay = 200;
+    const reaberta = App2.openFile('A', 'a.md');
+    await sleep(60);
+    check('app aberto de novo: A aparece na hora, do aparelho', App2.getContent() === 'texto de A', App2.getContent());
+    await reaberta;
+    await sleep(300);
+    check('... e a pergunta ao Drive disse que nao mudou', drive2.count('GET content') === 0, drive2.log);
+  }
+
+  console.log('65. Mudou no Drive: troca sozinha; mudou so a data: fica quieto; ela ja escreveu: nao troca');
+  {
+    const { App, drive, type } = await boot({ idb: true });
+    drive.put('A', 'a.md', 'versao 1');
+    drive.put('B', 'b.md', 'b');
+    await App.openFile('A', 'a.md');
+    await App.openFile('B', 'b.md');
+    await sleep(30);
+
+    // Mudou no Drive (o PC): a guardada aparece, depois troca
+    drive.remoteEdit('A', 'versao do PC');
+    drive.delay = 100;
+    const aberta = App.openFile('A', 'a.md');
+    await sleep(30);
+    check('primeiro aparece a guardada', App.getContent() === 'versao 1', App.getContent());
+    await aberta;
+    await sleep(400);
+    check('depois troca pela do Drive, na leitura tambem',
+      App.getContent() === 'versao do PC' && App.els.previewContainer.textContent.includes('versao do PC'), App.getContent());
+    check('sem ficar suja, com o aviso', !App.isDirty && App.els.saveStatus.textContent === 'Atualizada do Drive', App.els.saveStatus.textContent);
+    check('a nota na tela passou pra versao nova (o proximo salvar nao da conflito falso)',
+      App.currentFile.modifiedTime === drive.files.get('A').modifiedTime);
+    drive.delay = 5;
+    await sleep(30);
+    check('e a entrada guardada tambem virou a nova', (await App.NoteStore.get('A'))?.content === 'versao do PC');
+
+    // So a data mudou (um renomear, o Obsidian tocando no arquivo): baixa, ve que e igual, nao avisa
+    await App.openFile('B', 'b.md');
+    drive.files.get('A').modifiedTime = drive.tick();
+    await App.openFile('A', 'a.md');
+    await sleep(100);
+    check('mesma letra com data nova: nenhum aviso, e a nota acompanha a data',
+      App.els.saveStatus.textContent === '' && App.currentFile.modifiedTime === drive.files.get('A').modifiedTime,
+      [App.els.saveStatus.textContent, App.currentFile.modifiedTime]);
+
+    // Mudou no Drive e ela ja escreveu: nao troca, e o salvar acha o conflito
+    await App.openFile('B', 'b.md');
+    await sleep(30);
+    drive.remoteEdit('A', 'de novo no PC');
+    drive.delay = 100;
+    const outra = App.openFile('A', 'a.md');
+    await sleep(30);
+    App.setMode('edit');
+    type('versao do PC com o que ela escreveu');
+    await outra;
+    await sleep(400);
+    check('nao trocou por baixo do que ela escreveu', App.getContent() === 'versao do PC com o que ela escreveu' && App.isDirty, App.getContent());
+    drive.delay = 5;
+    await App.save({ manual: true });
+    check('o salvar acha o conflito, com o dialogo de sempre',
+      App.currentFile.conflict === true && drive.files.get('A').content === 'de novo no PC', drive.files.get('A').content);
+  }
+
+  console.log('66. Nota guardada: salvar atualiza, rascunho ganha, sem rede, sem login, recarregar e apagar');
+  {
+    const { App, drive, w, type, idb } = await boot({ idb: true });
+    drive.put('A', 'a.md', 'versao 1');
+    drive.put('B', 'b.md', 'b');
+    await App.openFile('A', 'a.md');
+    await App.openFile('B', 'b.md');
+    await sleep(30);
+
+    // Salvar atualiza a entrada: editar A, sair, voltar nao baixa nada
+    await App.openFile('A', 'a.md');
+    await sleep(50);
+    App.setMode('edit');
+    type('versao 1 editada');
+    await App.openFile('B', 'b.md');
+    await App._saveChain;
+    await sleep(30);
+    drive.log.length = 0;
+    await App.openFile('A', 'a.md');
+    await sleep(80);
+    check('o que ela salvou ja estava guardado: voltar nao baixa',
+      App.getContent() === 'versao 1 editada' && drive.count('GET content') === 0 && App.els.saveStatus.textContent === '',
+      [App.getContent(), drive.log]);
+
+    // Rascunho ganha do guardado
+    await App.openFile('B', 'b.md');
+    w.localStorage.setItem('drivenotes_draft_A', JSON.stringify({ fileId: 'A', name: 'a.md', content: 'rascunho de A',
+      baseModifiedTime: drive.files.get('A').modifiedTime, timestamp: Date.now() }));
+    await App.openFile('A', 'a.md');
+    check('com rascunho, abre o rascunho e nao o guardado', App.getContent() === 'rascunho de A' && App.isDirty, App.getContent());
+    // Sai sem salvar o rascunho, pra nao mudar A no Drive falso
+    App.isDirty = false;
+    w.localStorage.removeItem('drivenotes_draft_A');
+
+    // Sem rede: a guardada, com o aviso
+    await App.openFile('B', 'b.md');
+    await sleep(30);
+    drive.failReads = true;
+    await App.openFile('A', 'a.md');
+    await sleep(80);
+    check('sem rede: a guardada na tela, com o aviso',
+      App.currentFile?.id === 'A' && App.getContent() === 'versao 1 editada' && App.els.saveStatus.textContent === 'Sem conexão: versão guardada',
+      [App.getContent(), App.els.saveStatus.textContent]);
+    drive.failReads = false;
+
+    // Sem login: a guardada, com o outro aviso
+    const { App: semLogin } = await boot({ idb, auth: false });
+    await semLogin.openFile('A', 'a.md');
+    await sleep(80);
+    check('sem login: a guardada na tela, com o aviso',
+      semLogin.getContent() === 'versao 1 editada' && semLogin.els.saveStatus.textContent === 'Sem login: versão guardada',
+      [semLogin.getContent(), semLogin.els.saveStatus.textContent]);
+
+    // Recarregar do Drive, no conflito, vai ao Drive e nao ao guardado
+    await App.openFile('B', 'b.md');
+    await App.openFile('A', 'a.md');
+    await sleep(80);
+    App.setMode('edit');
+    type('mexi no celular');
+    drive.remoteEdit('A', 'mexi no PC');
+    await App.save({ manual: true });
+    check('(conflito armado)', App.currentFile.conflict === true);
+    drive.log.length = 0;
+    await App.resolveConflict('reload');
+    check('recarregar trouxe a do Drive na hora, baixando',
+      App.getContent() === 'mexi no PC' && drive.count('GET content') === 1, [App.getContent(), drive.log]);
+
+    // Apagar tira a entrada
+    await App.deleteFile(App.currentFile);
+    await sleep(50);
+    check('apagar a nota tira ela do aparelho', await App.NoteStore.get('A') === null);
+  }
+
+  console.log('67. A propria nota reaberta com texto por salvar (link pra ela mesma): fica o que esta na tela');
+  {
+    // Achado na revisao do Opus: com o caminho rapido, tocar em [[a#Secao]] dentro de `a` logo depois de
+    // escrever punha a versao guardada, mais velha, no lugar do texto dela, e a edicao seguinte abria um
+    // conflito falso. A nota na tela ja e a versao mais nova que existe: reabrir so rola ate o titulo.
+    const { App, drive, type } = await boot({ idb: true });
+    drive.put('A', 'a.md', 'versao 1\n\n## Secao');
+    await App.openFile('A', 'a.md');
+    await sleep(50);
+    App.setMode('edit');
+    type('versao 1 com o que ela escreveu\n\n## Secao');
+    App.setMode('preview');
+    const naTela = App.currentFile;
+    drive.log.length = 0;
+    await App.openFile('A', 'a.md', { heading: 'Secao' });
+    check('o texto dela continua na tela, por salvar',
+      App.getContent() === 'versao 1 com o que ela escreveu\n\n## Secao' && App.isDirty, App.getContent());
+    check('... na mesma nota, sem ir ao Drive', App.currentFile === naTela && drive.log.length === 0, drive.log);
+    await App.save({ manual: true });
+    check('e o salvar sobe o texto dela, sem conflito falso',
+      !App.currentFile.conflict && drive.files.get('A').content === 'versao 1 com o que ela escreveu\n\n## Secao',
+      drive.files.get('A').content);
   }
 
   done();

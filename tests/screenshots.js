@@ -19,6 +19,9 @@ const NOTE = [
 
 const SETUP = `
   localStorage.clear();
+  // The device's kept notes too: the profile outlives the run, and a fake Drive that always answers the
+  // same modifiedTime would never refresh a note kept in an earlier run
+  indexedDB.deleteDatabase('drivenotes');
   localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
   __App.accessToken = 'fake';
   const now = Date.now();

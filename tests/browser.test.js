@@ -13,6 +13,9 @@ const COMMIT_WITH_DICTATION_BUG = '2d8b20b';
 
 const FAKE_DRIVE = `
   localStorage.clear();
+  // The device's kept notes too: the profile outlives the run, and a fake Drive that always answers the
+  // same modifiedTime would never refresh a note kept in an earlier run
+  indexedDB.deleteDatabase('drivenotes');
   localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
   __App.accessToken = 'fake';
   const FOLDER = 'application/vnd.google-apps.folder';
@@ -765,6 +768,62 @@ const FAKE_DRIVE = `
     check('o toque abre a caixa com o nome sugerido', abriu === true, await js(`document.getElementById('modal-input').value`));
     await js('__App.hideModal(); "ok"');
     await send('Emulation.clearDeviceMetricsOverride');
+
+    console.log('15. Nota guardada no aparelho: reabre na hora com a pagina recarregada, e troca sem perder a rolagem');
+    // So aqui: o IndexedDB de verdade (o jsdom usa o fake-indexeddb), a pagina recarregada como o app
+    // que o Android matou, e a rolagem, que precisa de layout
+    const DRIVE_DA_NOTA = `
+      localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
+      __App.accessToken = 'fake';
+      window.__drive = { lento: 0, mt: 't1', texto: null,
+        longa: '# Destino\\n\\n' + Array.from({ length: 150 }, (_, i) => 'linha ' + i).join('\\n\\n') };
+      window.fetch = async (url) => {
+        const u = new URL(url);
+        const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o });
+        await new Promise(r => setTimeout(r, window.__drive.lento));
+        if (u.searchParams.get('alt') === 'media') return ok(window.__drive.texto || window.__drive.longa);
+        if (/files\\/N2$/.test(u.pathname)) return ok({ id: 'N2', name: 'destino.md', parents: ['F1'], modifiedTime: window.__drive.mt });
+        return ok({ files: [] });
+      };
+      'ok'`;
+    const APAGAR_BANCO = `new Promise(r => { const q = indexedDB.deleteDatabase('drivenotes'); q.onsuccess = q.onerror = q.onblocked = () => r('ok'); })`;
+
+    await open(buildPage('nota-guardada', currentApp));
+    await js(APAGAR_BANCO);
+    await js(DRIVE_DA_NOTA);
+    await js(`__App.openFile('N2', 'destino.md').then(() => 'ok')`);
+    await sleep(300);
+    const guardou = await js(`__App.NoteStore.get('N2').then(e => !!e && e.content.includes('linha 149'))`);
+    check('abrir do Drive guardou a nota no IndexedDB de verdade (em file://)', guardou === true);
+
+    // A pagina recarregada e o app que o Android matou: memoria zerada, o aparelho com o que guardou
+    await open(buildPage('nota-guardada', currentApp));
+    await js(DRIVE_DA_NOTA);
+    await js(`window.__drive.lento = 1500; 'ok'`);
+    await js(`__App.openFile('N2', 'destino.md'); 'ok'`);
+    // Nome proprio: `apareceu` ja e do cenario 13, no mesmo escopo
+    const apareceuGuardada = await esperar(`document.getElementById('preview-container').textContent.includes('linha 149')`, 1000);
+    check('recarregada a pagina, a nota aparece com o Drive ainda calado', apareceuGuardada === true);
+    const linhaDoLog = await js(`__App._log.find(l => l.includes('cached destino.md')) || ''`);
+    const ms = Number(/cached destino\.md (\d+)ms/.exec(linhaDoLog)?.[1]);
+    console.log('     medida do app:', linhaDoLog.split(' | ')[0]);
+    check('... em menos de 200ms, pela medida do proprio app', ms < 200, linhaDoLog);
+    await sleep(1800); // a conferencia desta abertura termina ("same")
+
+    // Mudou no Drive: a guardada aparece, rola, e a nova chega sem mexer na rolagem
+    await js(`window.__drive.lento = 400; window.__drive.mt = 't2';
+      window.__drive.texto = window.__drive.longa + '\\n\\nlinha nova do PC'; 'ok'`);
+    await js(`__App.openFile('N2', 'destino.md'); 'ok'`);
+    await sleep(100);
+    await js(`document.getElementById('preview-container').scrollTop = 1500; 'ok'`);
+    const antes = await js(`document.getElementById('preview-container').scrollTop`);
+    const trocou = await esperar(`document.getElementById('preview-container').textContent.includes('linha nova do PC')`, 3000);
+    const depois = await js(`document.getElementById('preview-container').scrollTop`);
+    console.log(`     rolagem antes da troca ${antes}, depois ${depois}`);
+    check('mudou no Drive: trocou sozinha, com o aviso',
+      trocou === true && await js(`document.getElementById('save-status').textContent`) === 'Atualizada do Drive');
+    check('... sem perder a rolagem', antes > 0 && Math.abs(depois - antes) <= 2, { antes, depois });
+    await js(APAGAR_BANCO);
   } finally {
     browser.close();
   }

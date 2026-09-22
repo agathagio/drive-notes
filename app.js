@@ -1291,19 +1291,38 @@ const App = {
   },
 
 
-  /** Open a Drive file, in the reading view. Shared by the Picker, the recents list, links and "back".
-      `heading` scrolls to a title once open. Callers reacting to a tap call beginNav() first. */
-  async openFile(fileId, fileName, { heading = '' } = {}) {
+  /** Open a Drive file, in the reading view. Shared by the recents list, links and "back".
+      `heading` scrolls to a title once open. `fresh` skips the version kept on the device and goes to
+      the Drive (the reload after a conflict). Callers reacting to a tap call beginNav() first. */
+  async openFile(fileId, fileName, { heading = '', fresh = false } = {}) {
     try {
-      return await this.loadFile(fileId, fileName, heading);
+      return await this.loadFile(fileId, fileName, heading, fresh);
     } finally {
       // Whatever ended up on screen: the note, its draft, or the previous view if loading failed
       this.syncHistory();
     }
   },
 
-  async loadFile(fileId, fileName, heading) {
+  async loadFile(fileId, fileName, heading, fresh = false) {
     const draftKey = `drivenotes_draft_${fileId}`;
+    const tapped = Date.now();
+
+    // The note on screen, opened again with text not saved yet (a [[link#heading]] to itself, right after
+    // writing): what is on screen is the newest version there is. Reloading would put an older one in its
+    // place, the kept one or the Drive's, with the save of that text still on its way, and the next save
+    // would then raise a false conflict. Only the heading is followed.
+    if (this.currentFile?.id === fileId && this.isDirty) {
+      this.scrollToHeading(heading);
+      return true;
+    }
+
+    // A note seen before shows at once, before any trip to the Drive, the login's included. Not with a
+    // draft (the draft wins, and telling whether it differs from the Drive takes the Drive's text), and
+    // not when the Drive's version is asked for on purpose.
+    if (!fresh && !this.readDraft(draftKey)) {
+      const kept = await this.NoteStore.get(fileId);
+      if (kept) return this.openKept(kept, heading, tapped);
+    }
 
     try {
       await this.ensureAuth();
@@ -1339,6 +1358,8 @@ const App = {
     }
     if (seq !== this._loadSeq) return true; // another file was opened meanwhile: not ours to undo
     this.log(`loaded ${meta.name || fileName} ${Date.now() - started}ms`);
+    // Kept the way the Drive has it, whatever ends up on screen (a draft included): the next opening shows it at once
+    this.NoteStore.put({ id: fileId, name: meta.name || fileName, parents: meta.parents, modifiedTime: meta.modifiedTime, content });
 
     const file = {
       id: fileId,
@@ -1373,6 +1394,97 @@ const App = {
     }
     this.saveToRecents(fileId, file.name);
     return true;
+  },
+
+  /** A note kept on the device (NoteStore): on screen at once, in the reading view, then a single
+      question to the Drive, behind it, whether it changed (checkKept). Answers true: the note landed. */
+  openKept(kept, heading, tapped) {
+    // Whatever is open gets saved before it is replaced
+    this.flushCurrent();
+    const seq = ++this._loadSeq;
+    const file = {
+      id: kept.id,
+      name: kept.name,
+      draftKey: `drivenotes_draft_${kept.id}`,
+      modifiedTime: kept.modifiedTime,
+      parents: kept.parents || undefined,
+    };
+    this.currentFile = file;
+    this.setContent(kept.content);
+    // What the editor gives back for an untouched file, so opening never counts as a change
+    file.lastSavedContent = this.getContent();
+    this.showEditor('preview');
+    this.scrollToHeading(heading);
+    this.setSaveStatus('', '');
+    this.saveToRecents(file.id, file.name);
+    this.log(`cached ${file.name} ${Date.now() - tapped}ms`);
+    this.checkKept(file, kept, seq, tapped);
+    return true;
+  },
+
+  /** The question behind a kept note: did it change on the Drive? The comparison is with the KEPT
+      modifiedTime, never with the one on screen, which a save may have moved in the meantime: a kept
+      entry must never pair old text with a new modifiedTime, or the next question would answer "same"
+      forever. Changed: the new text is fetched, kept, and swapped in only if this note is still the one
+      on screen, with nothing unsaved and no save in between. With something unsaved it is left alone,
+      and the note keeps the old modifiedTime, which is what makes the save find the conflict. Only the
+      modifiedTime moved (a rename, a sync touching the file): quietly up to date. Never throws: a failure
+      leaves the kept version on screen, saying so. */
+  async checkKept(file, kept, seq, tapped) {
+    const here = () => seq === this._loadSeq && this.currentFile === file;
+    try {
+      await this.ensureAuth();
+    } catch {
+      if (here()) this.setSaveStatus('error', 'Sem login: versão guardada');
+      return;
+    }
+
+    let meta;
+    let content = null;
+    try {
+      meta = await this.driveGetFileMeta(file.id);
+      if (meta.modifiedTime !== kept.modifiedTime) content = await this.driveGetFileContent(file.id);
+    } catch (e) {
+      console.warn('Kept note not checked:', e);
+      if (here()) this.setSaveStatus('error', 'Sem conexão: versão guardada');
+      return;
+    }
+
+    const name = meta.name || kept.name;
+    const changed = content !== null && content !== kept.content;
+    this.log(`checked ${name} ${changed ? 'changed' : 'same'} ${Date.now() - tapped}ms`);
+    // The pair of the same moment: the kept text with the kept date, or the new text with the new date
+    this.NoteStore.put(content === null
+      ? { ...kept, name, parents: meta.parents }
+      : { id: file.id, name, parents: meta.parents, modifiedTime: meta.modifiedTime, content });
+
+    if (!here()) return;
+    if (name !== file.name) {
+      file.name = name;
+      this.updateFileNameDisplay();
+      this.saveToRecents(file.id, name);
+      this.syncHistory();
+    }
+    // Nothing unsaved, and no save moved the note since it was shown
+    if (content === null || this.isDirty || file.modifiedTime !== kept.modifiedTime) return;
+
+    file.modifiedTime = meta.modifiedTime;
+    file.parents = meta.parents;
+    if (!changed) return;
+
+    // setMode would put the reading view back at the top: the swap redraws it and keeps the scroll
+    const scroll = this.els.previewContainer.scrollTop;
+    this.setContent(content);
+    file.lastSavedContent = this.getContent();
+    file.driveContent = null;
+    if (this.mode === 'preview') {
+      this.renderPreview();
+      this.els.previewContainer.scrollTop = scroll;
+    }
+    this.setSaveStatus('saved', 'Atualizada do Drive');
+    setTimeout(() => {
+      if (this.currentFile === file && this.els.saveStatus.textContent === 'Atualizada do Drive') this.setSaveStatus('', '');
+    }, 2000);
   },
 
   /** A tap that leads to a note: the history entry is created now, and dropped again if the note never opens */
@@ -1724,6 +1836,114 @@ const App = {
     }
     ranked.sort((a, b) => a.rank - b.rank || (b.note.modifiedTime || '').localeCompare(a.note.modifiedTime || ''));
     return ranked.slice(0, limit).map(r => r.note);
+  },
+
+  // ── Notes kept on the device (IndexedDB) ──
+  // The notes already opened, the way the Drive has them, so that opening one again shows it at once and
+  // only asks the Drive whether it changed (see openKept). A cache and nothing more: the browser may clear
+  // it whenever it is short of space, and nothing is lost, because the truth is on the Drive and text that
+  // is not there yet lives in the drafts, in localStorage. A separate store on purpose: filling this one
+  // can never make a draft fail to be written. Hence the one rule of this section: it never throws.
+  // Without IndexedDB (a private tab, a browser that refuses it) or with it failing, get answers null,
+  // put and remove do nothing, and the app takes the road it took before there was a store.
+
+  NoteStore: {
+    DB_NAME: 'drivenotes',
+    STORE: 'notes',
+    // The notes opened most recently; past this, the one opened longest ago goes
+    LIMIT: 100,
+    _db: null,
+    _warned: false,
+    _lastStamp: 0,
+
+    /** The open database, or null when there is none to be had. Opened once, on first use. */
+    open() {
+      if (!this._db) {
+        this._db = new Promise((resolve, reject) => {
+          if (typeof indexedDB === 'undefined') return resolve(null);
+          const request = indexedDB.open(this.DB_NAME, 1);
+          request.onupgradeneeded = () => {
+            const store = request.result.createObjectStore(this.STORE, { keyPath: 'id' });
+            store.createIndex('openedAt', 'openedAt');
+          };
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+          request.onblocked = () => reject(new Error('note store blocked'));
+        }).catch((e) => {
+          this.warn(e);
+          return null;
+        });
+      }
+      return this._db;
+    },
+
+    /** Once per session: the panel says the store is off, and the app goes on without it */
+    warn(e) {
+      if (this._warned) return;
+      this._warned = true;
+      console.warn('Note store unavailable, notes come from the Drive only:', e);
+      App.log(`note store off: ${e?.name || e}`);
+    },
+
+    /** Strictly increasing, so that two notes kept in the same millisecond still have an order */
+    stamp() {
+      this._lastStamp = Math.max(Date.now(), this._lastStamp + 1);
+      return this._lastStamp;
+    },
+
+    /** One transaction on the store. `work` makes its requests and may return a function that reads
+        the answer once the transaction has completed. Any failure answers `fallback` instead. */
+    async run(mode, fallback, work) {
+      try {
+        const db = await this.open();
+        if (!db) return fallback;
+        return await new Promise((resolve, reject) => {
+          const tx = db.transaction(this.STORE, mode);
+          const answer = work(tx.objectStore(this.STORE));
+          tx.oncomplete = () => resolve(typeof answer === 'function' ? answer() : fallback);
+          tx.onerror = () => reject(tx.error);
+          tx.onabort = () => reject(tx.error);
+        });
+      } catch (e) {
+        this.warn(e);
+        return fallback;
+      }
+    },
+
+    /** The kept entry, { id, name, parents, modifiedTime, content, openedAt }, or null */
+    get(id) {
+      if (!id) return Promise.resolve(null);
+      return this.run('readonly', null, (store) => {
+        const request = store.get(id);
+        return () => request.result || null;
+      });
+    },
+
+    /** Keep this as the note's latest, stamped as opened now, and let the oldest go past LIMIT.
+        `content` and `modifiedTime` must be of the same moment: see checkKept. */
+    put({ id, name, parents, modifiedTime, content }) {
+      if (!id || typeof content !== 'string') return Promise.resolve();
+      return this.run('readwrite', undefined, (store) => {
+        store.put({ id, name, parents: parents || null, modifiedTime, content, openedAt: this.stamp() });
+        const count = store.count();
+        count.onsuccess = () => {
+          let extra = count.result - this.LIMIT;
+          if (extra <= 0) return;
+          store.index('openedAt').openCursor().onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (!cursor || extra <= 0) return;
+            extra--;
+            cursor.delete();
+            cursor.continue();
+          };
+        };
+      });
+    },
+
+    remove(id) {
+      if (!id) return Promise.resolve();
+      return this.run('readwrite', undefined, (store) => { store.delete(id); });
+    },
   },
 
   // ── Recents (localStorage) ──
@@ -2715,6 +2935,8 @@ const App = {
 
         const result = await this.driveUpdateFile(file.id, dated);
         file.modifiedTime = result.modifiedTime;
+        // The device keeps what is now on the Drive: opening this note again needs no download
+        this.NoteStore.put({ id: file.id, name: file.name, parents: file.parents, modifiedTime: file.modifiedTime, content: dated });
       } else {
         await this.createOnDrive(file, dated);
       }
@@ -2769,6 +2991,7 @@ const App = {
     file.modifiedTime = result.modifiedTime;
     file.parents = result.parents;
     file.lastSavedContent = content;
+    this.NoteStore.put({ id: file.id, name: file.name, parents: file.parents, modifiedTime: file.modifiedTime, content });
 
     // A draft written while the create was in flight still says "not on Drive";
     // opening it later would create the file a second time
@@ -3066,7 +3289,8 @@ const App = {
       this.clearDraft(file);
       file.conflict = false;
       this.isDirty = false;
-      await this.openFile(file.id, file.name);
+      // Straight from the Drive: the kept version is exactly what the conflict is about
+      await this.openFile(file.id, file.name, { fresh: true });
       return;
     }
 
@@ -3315,6 +3539,7 @@ const App = {
     this.clearDraft(file);
     this.removeFromRecents(file.id);
     this.noteIndexRemove(file.id);
+    this.NoteStore.remove(file.id);
     if (this.currentFile === file) {
       this.setSaveStatus('saved', 'Apagada');
       this.goBack('delete');
