@@ -205,7 +205,7 @@ const App = {
       As onze funções da fachada saem daqui; `iniciar` e `ativo` são da fachada, não desta. */
   implCM6(elemento, aoMudar) {
     const {
-      EditorView, StateField, StateEffect, Transaction, Prec, Compartment,
+      EditorView, ViewPlugin, StateField, StateEffect, Transaction, Prec, Compartment,
       Decoration, keymap, drawSelection,
       history, undo, redo, defaultKeymap, historyKeymap,
       markdown, markdownLanguage, insertNewlineContinueMarkupCommand,
@@ -322,36 +322,67 @@ const App = {
     // A mesma cerca que o splitFrontmatter aceita
     const CERCA = /^---[ \t]*$/;
 
-    const construirTextoComum = (state) => {
-      const marcas = [];
+    // The two live apart because they depend on different things. The property block is read off
+    // the text alone, so a state field that recomputes on every document change says all there is
+    // to say about it.
+    const buildFrontmatter = (state) => {
+      const marks = [];
       const doc = state.doc;
       // Só é bloco de propriedades o que começa na primeira linha E fecha: `---` no meio da nota é
       // linha horizontal, e nota que abre com `---` sem fechar não tem bloco nenhum
       if (CERCA.test(doc.line(1).text)) {
         for (let n = 2; n <= doc.lines; n++) {
           if (!CERCA.test(doc.line(n).text)) continue;
-          for (let k = 1; k <= n; k++) marcas.push(LINHA_DE_PROPRIEDADE.range(doc.line(k).from));
+          for (let k = 1; k <= n; k++) marks.push(LINHA_DE_PROPRIEDADE.range(doc.line(k).from));
           break;
         }
       }
-      syntaxTree(state).iterate({
-        enter: (no) => {
-          if (no.name !== 'Link') return;
-          for (let filho = no.node.firstChild; filho; filho = filho.nextSibling) {
-            if (filho.name !== 'LinkMark') return;
-          }
-          marcas.push(COLCHETE_COMUM.range(no.from, no.to));
-        },
-      });
-      // Decoração de linha e de trecho no mesmo conjunto: o `true` ordena as duas famílias
-      return Decoration.set(marcas, true);
+      return Decoration.set(marks);
     };
 
-    const campoTextoComum = StateField.define({
-      create: (state) => construirTextoComum(state),
-      update: (marcas, tr) => (tr.docChanged ? construirTextoComum(tr.state) : marcas),
-      provide: (campo) => EditorView.decorations.from(campo),
+    const frontmatterField = StateField.define({
+      create: (state) => buildFrontmatter(state),
+      update: (marks, tr) => (tr.docChanged ? buildFrontmatter(tr.state) : marks),
+      provide: (field) => EditorView.decorations.from(field),
     });
+
+    // The brackets depend on the syntax tree, which is not finished when the document changes: the
+    // parser has a time budget and goes on afterwards, in transactions that do NOT change the
+    // document (see drive-notes-aprendizados). A state field that only recomputes on tr.docChanged
+    // never hears about that, so everything the first budget missed stayed a link, purple and
+    // underlined, until the next keystroke: in a long note, that is the whole bottom of it. And it
+    // walked the entire tree on every key, in a note of any size.
+    //
+    // A view plugin is what syntaxHighlighting itself does: it decorates only the visible window
+    // and redoes the work when the document changes, when the window moves, or when the tree grew.
+    const buildPlainLinks = (view) => {
+      const marks = [];
+      for (const { from, to } of view.visibleRanges) {
+        syntaxTree(view.state).iterate({
+          from,
+          to,
+          enter: (node) => {
+            if (node.name !== 'Link') return;
+            for (let child = node.node.firstChild; child; child = child.nextSibling) {
+              if (child.name !== 'LinkMark') return;
+            }
+            marks.push(COLCHETE_COMUM.range(node.from, node.to));
+          },
+        });
+      }
+      return Decoration.set(marks);
+    };
+
+    const plainLinks = ViewPlugin.fromClass(class {
+      constructor(view) { this.decorations = buildPlainLinks(view); }
+
+      update(update) {
+        if (update.docChanged || update.viewportChanged
+            || syntaxTree(update.state) !== syntaxTree(update.startState)) {
+          this.decorations = buildPlainLinks(update.view);
+        }
+      }
+    }, { decorations: (plugin) => plugin.decorations });
 
     // ── O Enter do app, um comando só ──
     //
@@ -372,6 +403,10 @@ const App = {
     // comando entra em `Prec.highest`, e por isso o cenário 40 aperta Enter de verdade.
     const LINHA_DE_CITACAO_VAZIA = /^\s*>\s*$/;
     const encerrarCitacao = (v) => {
+      // With something selected, Enter is a replacement, and only the library command knows how to
+      // make one. Looking at the line the caret happens to sit on would wipe the `> ` and leave the
+      // selected text where it was, which is the Enter going missing.
+      if (!v.state.selection.main.empty) return false;
       const linha = v.state.doc.lineAt(v.state.selection.main.head);
       if (!LINHA_DE_CITACAO_VAZIA.test(linha.text)) return false;
       v.dispatch({ changes: { from: linha.from, to: linha.to, insert: '' }, userEvent: 'input' });
@@ -424,7 +459,8 @@ const App = {
         Prec.highest(keymap.of([{ key: 'Enter', run: enterDoApp }])),
         markdown({ base: markdownLanguage, codeLanguages: [] }),
         syntaxHighlighting(pintura),
-        campoTextoComum,
+        frontmatterField,
+        plainLinks,
         campoMarcas,
         campoEmbeds,
         // O Enter nao mora aqui: ele esta la em cima, em Prec.highest, porque daqui nao alcanca
@@ -572,18 +608,19 @@ const App = {
         ultimaAssinatura = agora;
         return mudou;
       },
-      rolarAteOCursor: () => view.dispatch({
-        effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'nearest', yMargin: 32 }),
-      }),
+      rolarAteOCursor: () => {
+        // Only while the editor has the focus, which is what the old editor did by asking whether
+        // the DOM selection was inside it. Whoever calls this does not check: the embed decoration
+        // calls it when a picture's size arrives from the Drive, and the visualViewport resize
+        // fires on Android when the browser bar hides on a scroll. Without the guard, opening a
+        // long note, tapping Edit without touching the text (caret at 0) and scrolling to read
+        // ends with the screen jumping back to the top on its own.
+        if (!view.hasFocus) return;
+        view.dispatch({
+          effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'nearest', yMargin: 32 }),
+        });
+      },
     };
-  },
-
-  /** Só pros testes: digita no fim do documento como uma edição de usuário. O `userEvent` é o que
-      faz o histórico do desfazer registrar a digitação. */
-  cm6Digitar(texto) {
-    const view = this.Editor._impl?.view;
-    if (!view) return;
-    view.dispatch({ changes: { from: view.state.doc.length, insert: texto }, userEvent: 'input.type' });
   },
 
   /** O editor de reserva, para quando a biblioteca não carregou: um textarea puro. Ele toma o lugar
@@ -2780,7 +2817,9 @@ const App = {
   applyFormat(name) {
     if (!this.FORMATS[name]) return;
     this.Editor.formatar(name);
-    // Os comandos do editor mudam o texto sem disparar o evento de mudança dele
+    // For the fallback textarea, and only for it. It writes into ta.value, which fires no input
+    // event, so this line is what gets the note saved there. In the CodeMirror the updateListener
+    // already calls the change handler on every docChanged, and this is a second, harmless call.
     this.markDirty();
   },
 
@@ -2921,8 +2960,11 @@ const App = {
     return name;
   },
 
-  /** Insert `text` as a line of its own: at the cursor, or where it was (`at`) when the editor lost the focus,
-      or at the end. The cursor ends on a fresh line below; with the editor, answers where that is. */
+  /** Insert `text` as a line of its own: at the mark (`at`) taken before the editor lost the focus,
+      else at the cursor, else at the end. The mark wins over the live cursor on purpose (49e65a4):
+      the picture lands where the writing was when the camera was tapped, however much the note
+      changed while it was uploading. The cursor ends on a fresh line below; with the editor,
+      answers where that is. */
   insertOnOwnLine(text, at) {
     return this.Editor.inserirEmLinhaPropria(text, at);
   },
@@ -3330,12 +3372,14 @@ const App = {
 
     // Desfazer e refazer
     document.querySelectorAll('.toolbar-btn[data-history]').forEach(btn => {
-      // So marca a nota como suja se algo mudou de verdade. Sem a condicao, tocar em desfazer numa
-      // nota recem aberta (pilha vazia, nada a desfazer) sujava a nota, e trinta segundos depois o
-      // autosave gravava no Drive com o updated de hoje sem nenhuma edicao ter acontecido.
+      // Nothing marks the note as unsaved here, on purpose. Undoing for real changes the text, and
+      // both editors report that by themselves (the CodeMirror through its updateListener, the
+      // textarea through the input event execCommand fires). With an empty stack nothing changes,
+      // and the note stays clean: tapping undo on a just-opened note used to mark it as unsaved,
+      // and thirty seconds later the autosave wrote it to the Drive with today's `updated` without
+      // a single edit having happened.
       this.bindToolbarButton(btn, () => {
-        const mudou = btn.dataset.history === 'undo' ? this.Editor.desfazer() : this.Editor.refazer();
-        if (mudou) this.markDirty();
+        if (btn.dataset.history === 'undo') this.Editor.desfazer(); else this.Editor.refazer();
       });
     });
 

@@ -196,6 +196,35 @@ function apertarEnter(w, view) {
     { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
 }
 
+/**
+ * Digita no fim do documento como uma edicao de usuario: o `userEvent` e o que faz o historico do
+ * desfazer registrar a digitacao. Isto morava no app.js como App.cm6Digitar ate 21 set 2026, onde
+ * era o unico lugar fora da fachada a alcancar a implementacao do editor. E codigo de teste, e o
+ * lugar dele e aqui.
+ */
+function cm6Digitar(App, texto) {
+  const view = App.Editor._impl.view;
+  view.dispatch({ changes: { from: view.state.doc.length, insert: texto }, userEvent: 'input.type' });
+}
+
+/**
+ * Onde a decoracao `plain-brackets` esta AGORA, lida das fontes de decoracao do editor em vez do
+ * DOM: o DOM so desenha a janela visivel, e o que este cenario precisa saber e o que o editor
+ * calculou pro documento inteiro. Fonte de StateField vem como conjunto pronto; fonte de
+ * ViewPlugin vem como funcao da view.
+ */
+function colchetesComuns(App, w) {
+  const view = App.Editor._impl.view;
+  const marcas = [];
+  for (const fonte of view.state.facet(w.CM6.EditorView.decorations)) {
+    const conjunto = typeof fonte === 'function' ? fonte(view) : fonte;
+    conjunto.between(0, view.state.doc.length, (de, ate, deco) => {
+      if (deco.spec?.class === 'plain-brackets') marcas.push([de, ate]);
+    });
+  }
+  return marcas;
+}
+
 /** Poe o texto, poe o cursor, aperta Enter. Devolve o texto e onde o cursor parou (linha:coluna) */
 function enterEm(App, w, conteudo, em) {
   const view = App.Editor._impl.view;
@@ -1761,6 +1790,12 @@ function enterEm(App, w, conteudo, em) {
     // ... e a checagem acima so vale se ela souber achar a lib quando ela aparece de verdade
     check('a checagem acima enxerga a lib: dentro da fachada o vocabulario esta la',
       VOCABULARIO_DA_LIB.test(fonteDoApp.split('// ── Editor ──')[1].split('// ── Google Auth ──')[0]));
+
+    // O app nao carrega ajudante que so o teste usa. O cm6Digitar vivia aqui dentro por ser codigo
+    // de teste morando no app: ele alcancava Editor._impl.view de dentro da secao do editor, que e
+    // justo o pedaco onde a checagem acima nao olha. Agora e uma funcao do proprio arquivo de teste
+    check('o app nao expoe ajudante que so o teste usa', App.cm6Digitar === undefined, typeof App.cm6Digitar);
+    check('... e o fonte tambem nao o traz', !/cm6Digitar/.test(fonteDoApp));
   }
 
   console.log('39d. CM6: texto, desfazer e a marca de cursor');
@@ -1826,11 +1861,23 @@ function enterEm(App, w, conteudo, em) {
     App.Editor.focar();
     App.Editor.cursorNoFim();
     const marca = App.Editor.marcarCursor();
-    App.cm6Digitar('\nescrito enquanto a foto subia');
+    cm6Digitar(App, '\nescrito enquanto a foto subia');
     App.Editor.inserirEmLinhaPropria('![[tarde.png]]', marca);
     check('a foto entra na marca, e o que foi escrito depois continua embaixo',
       App.Editor.texto() === 'uma nota\ncom tres linhas\nde texto\n![[tarde.png]]\n\nescrito enquanto a foto subia',
       App.Editor.texto());
+
+    // A marca vence o cursor vivo, e e isso que a docstring do insertOnOwnLine descreve: entre
+    // tocar na camera e a foto chegar do Drive a pessoa continua na nota e o cursor anda. A foto
+    // cai onde ela estava quando pediu a foto, e nao onde o cursor esta agora.
+    App.Editor.definirTexto('primeira\nsegunda\nterceira');
+    App.Editor.focar();
+    view.dispatch({ selection: { anchor: 'primeira'.length } });
+    const marcaDaPrimeira = App.Editor.marcarCursor();
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    App.insertOnOwnLine('![[pedida-antes.png]]', marcaDaPrimeira);
+    check('a marca vence o cursor vivo: a foto cai onde foi pedida',
+      App.Editor.texto() === 'primeira\n![[pedida-antes.png]]\n\nsegunda\nterceira', App.Editor.texto());
 
     // Recarga depois de conflito com a pessoa dentro do editor: o texto troca debaixo dela, mas ela
     // continua ali escrevendo, entao o cursor dela continua valendo (nao vira nota aberta da lista)
@@ -1846,7 +1893,7 @@ function enterEm(App, w, conteudo, em) {
       App.Editor.texto() === '![[depois.png]]\ncurta', App.Editor.texto());
 
     App.Editor.definirTexto('base');
-    App.cm6Digitar(' mais');
+    cm6Digitar(App, ' mais');
     check('digitou', App.Editor.texto() === 'base mais', App.Editor.texto());
     check('desfez', App.Editor.desfazer() && App.Editor.texto() === 'base', App.Editor.texto());
     check('refez', App.Editor.refazer() && App.Editor.texto() === 'base mais', App.Editor.texto());
@@ -1857,6 +1904,47 @@ function enterEm(App, w, conteudo, em) {
     check('abrir outra nota depois de escrever: nao sobra o que desfazer', App.Editor.desfazer() === false);
     check('... e o texto da nota aberta fica intacto',
       App.Editor.texto() === 'outra nota, aberta da lista', App.Editor.texto());
+  }
+
+  console.log('39e. Nota longa: os colchetes comuns acompanham o que esta na tela');
+  {
+    // A decoracao que devolve [[wikilink]] e [!note] ao texto comum percorria a arvore de sintaxe
+    // INTEIRA, e so quando o documento mudava. Numa nota grande isso custava uma varredura da nota
+    // toda a cada tecla e, pior, o que o parser ainda nao tinha alcancado (ele tem orcamento de
+    // tempo e continua depois, por transacoes que NAO mudam o documento) ficava sem decoracao ate
+    // a proxima tecla: colchete roxo e sublinhado no fim da nota. Agora quem decora e um plugin de
+    // view, que olha so a janela visivel e refaz a conta quando a tela rola ou a arvore cresce.
+    const { App, w } = await boot({ editor: true });
+    const view = App.Editor._impl.view;
+
+    const linhas = ['[[comeco]] e o resto da primeira linha'];
+    for (let i = 0; i < 3000; i++) linhas.push(`linha ${i} com texto suficiente pra nota ficar grande de verdade`);
+    linhas.push('[[fim]]');
+    App.Editor.definirTexto(linhas.join('\n'));
+
+    check('o editor tem so uma parte da nota na tela', view.viewport.to < view.state.doc.length,
+      `viewport ate ${view.viewport.to} de ${view.state.doc.length}`);
+    const noComeco = colchetesComuns(App, w);
+    check('decora so o que esta na tela: o [[comeco]] sim, o [[fim]] la embaixo ainda nao',
+      noComeco.length === 1 && noComeco[0][1] < view.viewport.to, noComeco);
+
+    // Rolar ate o fim. O jsdom nao tem layout, entao a janela visivel se move fingindo o retangulo
+    // do editor bem acima da tela, que e como o CM6 le "esta rolado la pra baixo" sem layout nenhum
+    const fundo = new w.DOMRect(0, -2e6, 800, 4e6);
+    view.scrollDOM.getBoundingClientRect = () => fundo;
+    view.contentDOM.getBoundingClientRect = () => fundo;
+    view.dom.getBoundingClientRect = () => fundo;
+    view.requestMeasure();
+    for (let i = 0; i < 60 && view.viewport.to < view.state.doc.length; i++) await sleep(25);
+    check('a tela chegou ao fim da nota', view.viewport.to === view.state.doc.length, JSON.stringify(view.viewport));
+
+    const ultima = view.state.doc.line(view.state.doc.lines);
+    const noFim = colchetesComuns(App, w);
+    check('o [[fim]] ganha a decoracao so de a tela chegar nele, sem ninguem digitar nada',
+      noFim.some(([de, ate]) => de >= ultima.from && ate <= ultima.to), noFim.slice(-3));
+    check('... e no DOM a linha sai como texto comum, nao como link',
+      [...w.document.querySelectorAll('.plain-brackets')].some((el) => el.textContent === '[fim]'),
+      [...w.document.querySelectorAll('.cm-line')].map((el) => el.className));
   }
 
   console.log('40. Edicao: Enter numa tarefa continua a lista de tarefas');
@@ -2136,11 +2224,48 @@ function enterEm(App, w, conteudo, em) {
       w.document.querySelectorAll('.cm-line.embed-line').length === 0);
   }
 
+  console.log('42b. A tela so volta pro cursor com o editor em foco');
+  {
+    // O scrollCaretIntoView antigo so rolava quando a selecao do DOM estava dentro do editor, ou
+    // seja, com o editor em foco. Sem essa guarda: abrir uma nota longa, tocar em Editar sem tocar
+    // no texto (o cursor fica em 0), rolar pra ler, e a tela pula de volta pro topo assim que uma
+    // foto termina de carregar. O mesmo vale pro resize do visualViewport, que no Android dispara
+    // tambem quando a barra do navegador se esconde ao rolar.
+    const { App, w } = await boot({ editor: true });
+    const view = App.Editor._impl.view;
+    const ROLAGEM = w.CM6.EditorView.scrollIntoView(0).type;
+    const dispatchDeVerdade = view.dispatch.bind(view);
+    let rolagens = 0;
+    view.dispatch = (...specs) => {
+      for (const spec of specs) {
+        for (const efeito of [].concat(spec?.effects || [])) if (efeito.is(ROLAGEM)) rolagens++;
+      }
+      return dispatchDeVerdade(...specs);
+    };
+
+    App.setMode('edit');
+    App._embedInfo.set('foto.png', { url: 'blob:x', width: 800, height: 400 });
+    App.Editor.definirTexto('antes\n![[foto.png]]\ndepois');
+    view.contentDOM.blur();
+    check('o editor esta sem foco, como quem abriu a nota e so rolou pra ler', !view.hasFocus);
+    App.decorateEditorEmbeds();
+    check('a foto chegou do Drive e mudou a altura da linha',
+      w.document.querySelectorAll('.cm-line.embed-line').length === 1);
+    check('sem foco, a foto que chegou nao joga a tela de volta pro cursor', rolagens === 0, rolagens);
+
+    App.Editor.focar();
+    check('o editor esta em foco', view.hasFocus);
+    App._embedInfo.set('foto.png', { url: 'blob:outra', width: 800, height: 400 });
+    App.decorateEditorEmbeds();
+    check('com foco, a linha que mudou de altura continua perseguindo o cursor', rolagens === 1, rolagens);
+    view.dispatch = dispatchDeVerdade;
+  }
+
   console.log('43. Botoes de desfazer e refazer na barra');
   {
     const { App, w } = await boot({ editor: true });
     App.Editor.definirTexto('base');
-    App.cm6Digitar(' mais');
+    cm6Digitar(App, ' mais');
     const desfazer = w.document.querySelector('.toolbar-btn[data-history="undo"]');
     const refazer = w.document.querySelector('.toolbar-btn[data-history="redo"]');
     check('os dois botoes existem na barra', !!desfazer && !!refazer);
@@ -2169,7 +2294,7 @@ function enterEm(App, w, conteudo, em) {
     check('e o texto continua o que foi aberto', App.Editor.texto() === NOTA, App.Editor.texto());
 
     // E o botao continua marcando quando desfaz de verdade
-    App.cm6Digitar(' novo');
+    cm6Digitar(App, ' novo');
     App.isDirty = false;
     desfazer.dispatchEvent(new w.Event('click', { bubbles: true }));
     check('desfazer de verdade marca a nota como nao salva', App.isDirty === true);
@@ -2227,6 +2352,15 @@ function enterEm(App, w, conteudo, em) {
     // texto comum, e um Enter ali e um Enter comum
     r = enter('a > b', 5);
     check('sinal de maior no meio da frase nao e citacao', r.text === 'a > b\n' && r.at === '1:0', r);
+
+    // Com um trecho selecionado, o Enter e o da biblioteca: ele troca a selecao pela linha nova.
+    // O comando de encerrar citacao olhava so a linha do cursor e ignorava a selecao, entao apagava
+    // o `> ` e deixava o trecho selecionado na nota: o Enter da pessoa sumia no caminho.
+    App.Editor.definirTexto('> um\n> dois\n> ');
+    view.dispatch({ selection: { anchor: 2, head: 14 } });
+    apertarEnter(w, view);
+    check('Enter com trecho selecionado substitui a selecao, em vez de so encerrar a citacao',
+      !view.state.doc.toString().includes('dois'), view.state.doc.toString());
 
     // Regressao: o que ja funcionava continua com a biblioteca, e igual ao cenario 40
     r = enter('- item', 6);
