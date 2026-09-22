@@ -56,7 +56,7 @@ const FAKE_DRIVE = `
     const selecionar = (foco, ancora) => js(`${SELECIONAR(foco, ancora)} 'ok'`);
 
     const editNote = (content, row, col) => js(`__App.currentFile = { id: null, name: 't.md', draftKey: 'drivenotes_draft_t' };
-      __App.setContent(${JSON.stringify(content)}); __App.showEditor(); __App.isDirty = false; __App.Editor.focar();
+      __App.setContent(${JSON.stringify(content)}); __App.showEditor(); __App.isDirty = false; __App.Editor.focus();
       ${SELECIONAR({ row, col })} 'ok'`);
 
     // O mesmo helper falando TinyMDE. So o controle historico do cenario 1 usa isto: ele roda o
@@ -122,7 +122,7 @@ const FAKE_DRIVE = `
       return js('__App.getContent()');
     };
     const end = (row) => js(`__App.Editor._impl.view.state.doc.line(${row} + 1).text.length`);
-    check('codemirror carregado', await js('__App.Editor.ativo()') === 'cm6', await js('__App.Editor.ativo()'));
+    check('codemirror carregado', await js('__App.Editor.kind()') === 'cm6', await js('__App.Editor.kind()'));
     check('titulo: cursor no meio, marcador no comeco da linha', await format('heading', { row: 1, col: 5 }) === 'primeira linha\n## segunda linha\nterceira');
     check('... e marca a nota como nao salva', await js('__App.isDirty') === true);
     check('titulo de novo remove', await format('heading', { row: 1, col: 4 }) === 'primeira linha\nsegunda linha\nterceira');
@@ -189,7 +189,7 @@ const FAKE_DRIVE = `
       const tiny = new File([await new Promise(r => { const c = document.createElement('canvas'); c.width = 800; c.height = 600; c.toBlob(r, 'image/png'); })], 'print.png', { type: 'image/png' });
 
       // What the button does, then the picker taking the focus away
-      __App._photoAt = __App.Editor.marcarCursor();
+      __App._photoAt = __App.Editor.markCaret();
       ${CONTEUDO}.blur(); getSelection().removeAllRanges();
       await __App.insertPhoto(file);
       return JSON.stringify({
@@ -300,7 +300,7 @@ const FAKE_DRIVE = `
     check('nota nova: o que se digita cai embaixo das propriedades', await js('__App.getContent()') === `---\ncreated: ${today}\nupdated: ${today}\n---\n\nideia`, await js('__App.getContent()'));
 
     await js(`__App.isDirty = false; __App.openFile('OLD', 'velha.md').then(() => 'ok')`);
-    await js(`__App.setMode('edit'); __App.Editor.focar(); ${SELECIONAR({ row: 5, col: 5 })} 'ok'`);
+    await js(`__App.setMode('edit'); __App.Editor.focus(); ${SELECIONAR({ row: 5, col: 5 })} 'ok'`);
     await send('Input.insertText', { text: ' novo' });
     await sleep(200);
     await js(`__App.save().then(() => 'ok')`);
@@ -319,7 +319,7 @@ const FAKE_DRIVE = `
     await js(`__App.save().then(() => 'ok')`);
     check('sem escrita extra', Number(await js('window.__written.length')) === 1);
 
-    await js(`__App.setMode('edit'); __App.Editor.focar(); ${SELECIONAR({ row: 5, col: 10 })} 'ok'`);
+    await js(`__App.setMode('edit'); __App.Editor.focus(); ${SELECIONAR({ row: 5, col: 10 })} 'ok'`);
     await send('Input.insertText', { text: '!' });
     await sleep(200);
     await js(`__App.setMode('preview'); 'ok'`);
@@ -543,7 +543,7 @@ const FAKE_DRIVE = `
       const b = document.querySelector('.toolbar-btn[data-format="quote"]').getBoundingClientRect();
       return { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) };
     })()`);
-    const textoAntes = await js('__App.Editor.texto()');
+    const textoAntes = await js('__App.Editor.getText()');
     let rolou = false;
     // Toque injetado entra numa fila diferente da leitura, e o navegador as vezes desiste do
     // gesto no meio (o touchcancel do cenario 10): o arrasto e refeito ate tres vezes
@@ -561,7 +561,7 @@ const FAKE_DRIVE = `
     check('o dedo arrastado em cima de um botao rola a barra', rolou,
       await js('document.querySelector(".toolbar").scrollLeft'));
     check('e o arrasto nao formatou nada: rolar nao e tocar',
-      await js('__App.Editor.texto()') === textoAntes, await js('__App.Editor.texto()'));
+      await js('__App.Editor.getText()') === textoAntes, await js('__App.Editor.getText()'));
     await send('Emulation.setTouchEmulationEnabled', { enabled: false });
     await send('Emulation.clearDeviceMetricsOverride');
 

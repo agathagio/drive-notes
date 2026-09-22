@@ -90,7 +90,7 @@ const SETUP = `
     // da fachada (cursor no fim + rolar ate ele) evita depender de qual elemento do CM6 e esse.
     // O foco e parte do caminho: desde 21 set 2026 a fachada so persegue o cursor com o editor em
     // foco, pra tela nao pular sozinha pra quem abriu a nota so pra ler
-    await js(`__App.Editor.focar(); __App.Editor.cursorNoFim(); __App.Editor.rolarAteOCursor(); 'ok'`);
+    await js(`__App.Editor.focus(); __App.Editor.moveCaretToEnd(); __App.Editor.scrollToCaret(); 'ok'`);
     await shot('5b-edicao-imagem');
     await js(`__App.promptRename(); 'ok'`);
     await shot('6-renomear');

@@ -1,4 +1,4 @@
-// Drive Notes — Main application logic
+// Drive Notes: Main application logic
 // =====================================================
 // CONFIG: Replace these with your Google Cloud project values
 // =====================================================
@@ -138,72 +138,73 @@ const App = {
   },
 
   // ── Editor ──
-  // O app fala só com App.Editor. Atrás dele há duas implementações (o CodeMirror 6 e um textarea
-  // de reserva); nenhuma delas vaza pra fora daqui. Em especial, posição dentro do texto é
-  // vocabulário de cada implementação: quem precisa de posição recebe uma marca opaca e devolve
-  // ela.
+  // The app talks to App.Editor and to nothing else. Behind it there are two implementations (the
+  // CodeMirror 6 and a fallback textarea); neither of them leaks out of here. A position inside the
+  // text, in particular, is each implementation's own vocabulary: whoever needs one is handed an
+  // opaque mark and hands it back.
   //
-  // Duas regras que valem pra toda implementação, presente ou futura:
+  // Two rules that hold for every implementation, present or future:
   //
-  // 1. `marcarCursor()` devolve uma marca opaca ou null, e nada fora daqui pode abrir a marca.
-  //    Ela nunca pode ser um valor falsy que não seja null (nem 0, nem ''): todo chamador testa a
-  //    marca com `||`, e uma marca falsy seria jogada fora sem ninguém perceber.
-  // 2. `inserirEmLinhaPropria(texto, marca)` devolve a marca da linha seguinte, a que ficou livre
-  //    embaixo do que foi inserido. Não é opcional: uma leva de fotos usa esse retorno pra cada uma
-  //    cair embaixo da anterior (ver savePhoto). Devolver undefined reintroduz o bug que o commit
-  //    439b920 consertou, em que a leva saía de trás pra frente. Quem não souber dizer onde ficou
-  //    (o textarea, cujo cursor anda sozinho) devolve undefined de propósito.
+  // 1. `markCaret()` answers an opaque mark or null, and nothing outside here may open the mark.
+  //    It can never be a falsy value other than null (not 0, not ''): every caller tests the mark
+  //    with `||`, and a falsy mark would be thrown away without anyone noticing.
+  // 2. `insertOnOwnLine(text, mark)` answers the mark of the next line, the one left free below
+  //    what was inserted. It is not optional: a batch of pictures uses that answer to make each one
+  //    land below the previous (see savePhoto). Answering undefined brings back the bug commit
+  //    439b920 fixed, in which the batch came out back to front. Whoever cannot say where it ended
+  //    up (the textarea, whose caret moves on its own) answers undefined on purpose.
 
   Editor: {
     _impl: null,
-    _tipo: 'textarea',
+    _kind: 'textarea',
 
-    iniciar(elemento, aoMudar) {
-      const tentativas = [
+    mount(host, onChange) {
+      const attempts = [
         ['cm6', () => {
-          if (!window.CM6) throw new Error('sem CM6');
-          return App.implCM6(elemento, aoMudar);
+          if (!window.CM6) throw new Error('no CM6 bundle');
+          return App.createCM6Editor(host, onChange);
         }],
-        ['textarea', () => App.implTextarea(elemento, aoMudar)],
+        ['textarea', () => App.createTextareaEditor(host, onChange)],
       ];
-      for (const [tipo, montar] of tentativas) {
+      for (const [kind, create] of attempts) {
         try {
-          this._impl = montar();
-          this._tipo = tipo;
-          return tipo;
+          this._impl = create();
+          this._kind = kind;
+          return kind;
         } catch (e) {
-          // O erro inteiro, não só a mensagem: um bug dentro da implementação vira um aviso com
-          // arquivo e linha, em vez de o app cair calado no textarea
-          console.warn(`editor ${tipo} indisponivel:`, e);
-          // A tentativa pode ter estourado já com meio editor pendurado no elemento: a próxima
-          // precisa de um host limpo, senão a reserva aparece em cima do lixo da anterior
-          elemento.replaceChildren();
+          // The whole error, not just its message: a bug inside the implementation becomes a
+          // warning with a file and a line, instead of the app falling silently to the textarea
+          console.warn(`editor ${kind} unavailable:`, e);
+          // The attempt may have blown up with half an editor already hanging off the host: the
+          // next one needs a clean host, or the fallback shows up on top of the previous one's mess
+          host.replaceChildren();
         }
       }
-      return this._tipo;
+      return this._kind;
     },
 
-    ativo() { return this._tipo; },
-    texto() { return this._impl ? this._impl.texto() : ''; },
-    definirTexto(t) { this._impl?.definirTexto(t); },
-    focar() { this._impl?.focar(); },
-    cursorNoFim() { this._impl?.cursorNoFim(); },
-    marcarCursor() { return this._impl ? this._impl.marcarCursor() : null; },
-    inserirEmLinhaPropria(texto, marca) { return this._impl?.inserirEmLinhaPropria(texto, marca); },
-    formatar(nome) { this._impl?.formatar(nome); },
-    desfazer() { return this._impl ? this._impl.desfazer() : false; },
-    refazer() { return this._impl ? this._impl.refazer() : false; },
-    decorarEmbeds(infoDaLinha) { return this._impl ? this._impl.decorarEmbeds(infoDaLinha) : false; },
-    rolarAteOCursor() { this._impl?.rolarAteOCursor(); },
+    kind() { return this._kind; },
+    getText() { return this._impl ? this._impl.getText() : ''; },
+    setText(t) { this._impl?.setText(t); },
+    focus() { this._impl?.focus(); },
+    moveCaretToEnd() { this._impl?.moveCaretToEnd(); },
+    markCaret() { return this._impl ? this._impl.markCaret() : null; },
+    insertOnOwnLine(text, mark) { return this._impl?.insertOnOwnLine(text, mark); },
+    format(name) { this._impl?.format(name); },
+    undo() { return this._impl ? this._impl.undo() : false; },
+    redo() { return this._impl ? this._impl.redo() : false; },
+    decorateEmbeds(lineInfo) { return this._impl ? this._impl.decorateEmbeds(lineInfo) : false; },
+    scrollToCaret() { this._impl?.scrollToCaret(); },
   },
 
   initEditor() {
-    this.Editor.iniciar(this.els.editorElement, () => this.markDirty());
+    this.Editor.mount(this.els.editorElement, () => this.markDirty());
   },
 
-  /** O editor de verdade: o CodeMirror 6. `window.CM6` é o pacote único de vendor/codemirror.js.
-      As onze funções da fachada saem daqui; `iniciar` e `ativo` são da fachada, não desta. */
-  implCM6(elemento, aoMudar) {
+  /** The real editor: the CodeMirror 6. `window.CM6` is the single bundle from vendor/codemirror.js.
+      The eleven functions of the facade come from here; `mount` and `kind` belong to the facade,
+      not to this one. */
+  createCM6Editor(host, onChange) {
     const {
       EditorView, ViewPlugin, StateField, StateEffect, Transaction, Prec, Compartment,
       Decoration, keymap, drawSelection,
@@ -212,84 +213,87 @@ const App = {
       syntaxHighlighting, HighlightStyle, syntaxTree, tags: t, lineWrapping,
     } = window.CM6;
 
-    // Marcas de cursor. O CM6 sabe carregar uma posição através das edições que
-    // aconteceram depois dela (mapPos), e é isso que faz a foto cair no lugar certo.
-    const porMarca = StateEffect.define();
-    const campoMarcas = StateField.define({
+    // Caret marks. The CM6 knows how to carry a position through the edits that happened after it
+    // (mapPos), and that is what makes the picture land in the right place.
+    const setMark = StateEffect.define();
+    const markField = StateField.define({
       create: () => new Map(),
-      update(marcas, tr) {
-        let novo = marcas;
+      update(marks, tr) {
+        let next = marks;
         if (tr.docChanged) {
-          novo = new Map();
-          for (const [id, pos] of marcas) novo.set(id, tr.changes.mapPos(pos));
+          next = new Map();
+          for (const [id, pos] of marks) next.set(id, tr.changes.mapPos(pos));
         }
-        for (const efeito of tr.effects) {
-          if (!efeito.is(porMarca)) continue;
-          novo = new Map(novo);
-          novo.set(efeito.value.id, efeito.value.pos);
+        for (const effect of tr.effects) {
+          if (!effect.is(setMark)) continue;
+          next = new Map(next);
+          next.set(effect.value.id, effect.value.pos);
         }
-        return novo;
+        return next;
       },
     });
 
-    // Decoração de embed. Ela é parte do estado do editor, então sobrevive sozinha a cada
-    // redesenho da linha: ninguém precisa reaplicar class e style depois de uma mudança.
-    let infoDaLinha = () => null;    // trocada por decorarEmbeds
-    let ultimaAssinatura = '';       // pra saber se alguma linha mudou de verdade
-    const refazerEmbeds = StateEffect.define();
+    // Embed decoration. It is part of the editor's state, so it survives every redraw of the line
+    // on its own: nobody has to reapply class and style after a change.
+    let lineInfo = () => null;      // swapped in by decorateEmbeds
+    let lastSignature = '';         // to know whether any line really changed
+    const redoEmbeds = StateEffect.define();
 
-    // Quanto de largura a foto tem de verdade: o `clientWidth` do contentDOM inclui o recuo de
-    // 16px de cada lado que o style.css põe nele, e a linha não tem essa sobra. Contando o recuo,
-    // a foto sai 32px mais larga que a linha e o lado direito fica cortado (num celular de 390px
-    // são uns 34px). O desconto vem do estilo computado, e não de um número fixo, pra acompanhar
-    // o style.css se o recuo mudar. Sem layout (jsdom) devolve 0, e quem chama cai no tamanho
-    // da própria imagem, como já caía quando o clientWidth era 0.
-    const larguraDisponivel = () => {
+    // How much width the picture really has: the contentDOM's `clientWidth` includes the 16px of
+    // padding on each side that the style.css puts on it, and the line does not have that slack.
+    // Counting the padding, the picture comes out 32px wider than the line and its right side is
+    // cut off (on a 390px phone, some 34px). The discount comes from the computed style, and not
+    // from a fixed number, so that it follows the style.css if the padding changes. With no layout
+    // (jsdom) it answers 0, and the caller falls back to the picture's own size, as it already did
+    // when clientWidth was 0.
+    const availableWidth = () => {
       if (!view) return 0;
-      const estilo = getComputedStyle(view.contentDOM);
-      const recuo = (parseFloat(estilo.paddingLeft) || 0) + (parseFloat(estilo.paddingRight) || 0);
-      return Math.max(view.contentDOM.clientWidth - recuo, 0);
+      const style = getComputedStyle(view.contentDOM);
+      const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+      return Math.max(view.contentDOM.clientWidth - padding, 0);
     };
 
-    const construirEmbeds = (state) => {
-      const marcas = [];
-      // Uma medida por redesenho, e nenhuma quando a nota não tem foto: isto roda em toda tecla
-      // digitada, e ler o DOM aqui dentro força o navegador a recalcular estilo e layout na hora
-      let disponivel = null;
+    const buildEmbeds = (state) => {
+      const marks = [];
+      // One measurement per redraw, and none when the note has no picture: this runs on every key
+      // pressed, and reading the DOM in here forces the browser to recompute style and layout then
+      // and there
+      let available = null;
       for (let n = 1; n <= state.doc.lines; n++) {
-        const linha = state.doc.line(n);
-        const info = infoDaLinha(linha.text);
+        const line = state.doc.line(n);
+        const info = lineInfo(line.text);
         if (!info) continue;
-        if (disponivel === null) disponivel = larguraDisponivel();
-        const largura = Math.min(disponivel || info.width, info.width);
-        const altura = Math.round(Math.min(largura * info.height / info.width, App.EMBED_MAX_HEIGHT));
-        marcas.push(Decoration.line({
-          attributes: { class: 'embed-line', style: `--embed: url("${info.url}"); --embed-h: ${altura}px` },
-        }).range(linha.from));
+        if (available === null) available = availableWidth();
+        const width = Math.min(available || info.width, info.width);
+        const height = Math.round(Math.min(width * info.height / info.width, App.EMBED_MAX_HEIGHT));
+        marks.push(Decoration.line({
+          attributes: { class: 'embed-line', style: `--embed: url("${info.url}"); --embed-h: ${height}px` },
+        }).range(line.from));
       }
-      return Decoration.set(marcas);
+      return Decoration.set(marks);
     };
 
-    const campoEmbeds = StateField.define({
-      create: (state) => construirEmbeds(state),
-      update(marcas, tr) {
-        if (!tr.docChanged && !tr.effects.some((e) => e.is(refazerEmbeds))) return marcas;
-        return construirEmbeds(tr.state);
+    const embedField = StateField.define({
+      create: (state) => buildEmbeds(state),
+      update(marks, tr) {
+        if (!tr.docChanged && !tr.effects.some((e) => e.is(redoEmbeds))) return marks;
+        return buildEmbeds(tr.state);
       },
-      provide: (campo) => EditorView.decorations.from(campo),
+      provide: (field) => EditorView.decorations.from(field),
     });
 
-    // Contar decorações não basta pra saber se algo mudou: trocar uma foto por outra do mesmo
-    // tamanho mantém a contagem e muda a tela. Por isso a assinatura leva o estilo, não só a posição.
-    const assinaturaDos = (conjunto) => {
-      const partes = [];
-      conjunto.between(0, Number.MAX_SAFE_INTEGER, (de, ate, deco) => {
-        partes.push(`${de}:${deco.spec.attributes.style}`);
+    // Counting decorations is not enough to know whether something changed: swapping a picture for
+    // another of the same size keeps the count and changes the screen. That is why the signature
+    // carries the style, and not just the position.
+    const signatureOf = (set) => {
+      const parts = [];
+      set.between(0, Number.MAX_SAFE_INTEGER, (from, to, deco) => {
+        parts.push(`${from}:${deco.spec.attributes.style}`);
       });
-      return partes.join('|');
+      return parts.join('|');
     };
 
-    const pintura = HighlightStyle.define([
+    const highlight = HighlightStyle.define([
       { tag: t.heading1, fontSize: '1.5em', fontWeight: '700', color: 'var(--accent-hover)' },
       { tag: t.heading2, fontSize: '1.3em', fontWeight: '600', color: 'var(--accent-hover)' },
       { tag: t.heading3, fontSize: '1.1em', fontWeight: '600', color: 'var(--accent-hover)' },
@@ -303,24 +307,25 @@ const App = {
       { tag: [t.processingInstruction, t.contentSeparator], color: 'var(--text-secondary)' },
     ]);
 
-    // ── Duas coisas que o parser lê como marcação e a nota nunca quis pintadas ──
+    // ── Two things the parser reads as markup and the note never wanted painted ──
     //
-    // 1. O bloco de propriedades. `---\ncreated: ...\nupdated: ...\n---` no começo da nota é, pro
-    //    markdown, uma linha horizontal seguida de um título setext de nível 2: as linhas de
-    //    propriedade saíam grandes, roxas e em negrito na primeira tela de TODA nota. O editor
-    //    antigo lia igual, mas o style.css nunca estilizava esse caso, e por isso saía como texto
-    //    comum. É pra lá que o bloco volta.
-    // 2. `[[wikilink]]`, `[!note]` e `tags: [a, b]`. Os três são, pro parser, um link de referência
-    //    sem destino: um `Link` que só tem LinkMark dentro. `[texto](url)` tem URL dentro e
-    //    `[texto][rotulo]` tem LinkLabel, então os dois continuam sendo link de verdade, roxos e
-    //    sublinhados. O style.css antigo tinha a mesma regra, nomeando os mesmos casos.
+    // 1. The property block. `---\ncreated: ...\nupdated: ...\n---` at the start of the note is,
+    //    to the markdown, a horizontal rule followed by a level 2 setext heading: the property
+    //    lines came out big, purple and bold on the first screen of EVERY note. The old editor read
+    //    it the same way, but the style.css never styled that case, and so it came out as plain
+    //    text. That is where the block goes back to.
+    // 2. `[[wikilink]]`, `[!note]` and `tags: [a, b]`. To the parser, all three are a reference
+    //    link with no destination: a `Link` that only has LinkMark inside. `[text](url)` has a URL
+    //    inside and `[text][label]` has a LinkLabel, so those two stay real links, purple and
+    //    underlined. The old style.css had the same rule, naming the same cases.
     //
-    // Os dois viram decoração aqui e texto comum no style.css: é lá que dá pra alcançar também os
-    // <span> que o realce cria dentro da linha, que é onde moram o tamanho, o peso e a cor.
-    const LINHA_DE_PROPRIEDADE = Decoration.line({ class: 'frontmatter-line' });
-    const COLCHETE_COMUM = Decoration.mark({ class: 'plain-brackets' });
-    // A mesma cerca que o splitFrontmatter aceita
-    const CERCA = /^---[ \t]*$/;
+    // Both become a decoration here and plain text in the style.css: it is there that the <span>s
+    // the highlighting creates inside the line can also be reached, and that is where the size, the
+    // weight and the color live.
+    const FRONTMATTER_LINE = Decoration.line({ class: 'frontmatter-line' });
+    const PLAIN_BRACKETS = Decoration.mark({ class: 'plain-brackets' });
+    // The same fence the splitFrontmatter accepts
+    const FENCE = /^---[ \t]*$/;
 
     // The two live apart because they depend on different things. The property block is read off
     // the text alone, so a state field that recomputes on every document change says all there is
@@ -328,12 +333,13 @@ const App = {
     const buildFrontmatter = (state) => {
       const marks = [];
       const doc = state.doc;
-      // Só é bloco de propriedades o que começa na primeira linha E fecha: `---` no meio da nota é
-      // linha horizontal, e nota que abre com `---` sem fechar não tem bloco nenhum
-      if (CERCA.test(doc.line(1).text)) {
+      // It is only a property block if it starts on the first line AND closes: `---` in the middle
+      // of the note is a horizontal rule, and a note that opens with `---` without closing has no
+      // block at all
+      if (FENCE.test(doc.line(1).text)) {
         for (let n = 2; n <= doc.lines; n++) {
-          if (!CERCA.test(doc.line(n).text)) continue;
-          for (let k = 1; k <= n; k++) marks.push(LINHA_DE_PROPRIEDADE.range(doc.line(k).from));
+          if (!FENCE.test(doc.line(n).text)) continue;
+          for (let k = 1; k <= n; k++) marks.push(FRONTMATTER_LINE.range(doc.line(k).from));
           break;
         }
       }
@@ -366,7 +372,7 @@ const App = {
             for (let child = node.node.firstChild; child; child = child.nextSibling) {
               if (child.name !== 'LinkMark') return;
             }
-            marks.push(COLCHETE_COMUM.range(node.from, node.to));
+            marks.push(PLAIN_BRACKETS.range(node.from, node.to));
           },
         });
       }
@@ -384,231 +390,233 @@ const App = {
       }
     }, { decorations: (plugin) => plugin.decorations });
 
-    // ── O Enter do app, um comando só ──
+    // ── The app's Enter, a single command ──
     //
-    // Ele faz duas coisas, nesta ordem:
+    // It does two things, in this order:
     //
-    // 1. Linha de citação vazia encerra a citação na hora, como no Obsidian. O comando da
-    //    biblioteca só encerra depois de DUAS linhas de citação vazias, e sair de um bloco
-    //    `> [!note]` custa três Enters.
-    // 2. No resto, devolve o controle pro comando da biblioteca configurado com
-    //    nonTightLists:false, sem o qual sair de uma lista de um item só custa três Enters em vez
-    //    de um (o segundo Enter insere uma linha em branco e mantém o marcador).
+    // 1. An empty quote line ends the quote right away, as in the Obsidian. The library's command
+    //    only ends it after TWO empty quote lines, and getting out of a `> [!note]` block costs
+    //    three Enters.
+    // 2. For everything else, it hands control back to the library's command configured with
+    //    nonTightLists:false, without which getting out of a one-item list costs three Enters
+    //    instead of one (the second Enter inserts a blank line and keeps the marker).
     //
-    // A precedência é o ponto, e não é enfeite: o `markdown()` instala o Enter dele em Prec.high
-    // (o `addKeymap` do pacote), e precedência vence posição na lista de extensões. Um binding no
-    // `keymap.of([...])` comum roda SEMPRE depois do da biblioteca, que a essa altura já continuou
-    // a lista e devolveu true. Foi o que aconteceu com o binding do commit 5f96e08: ele nunca
-    // rodou, e o app continuou gastando três Enters pra sair de uma lista. Por isso o keymap deste
-    // comando entra em `Prec.highest`, e por isso o cenário 40 aperta Enter de verdade.
-    const LINHA_DE_CITACAO_VAZIA = /^\s*>\s*$/;
-    const encerrarCitacao = (v) => {
+    // The precedence is the point, and it is not decoration: the `markdown()` installs its Enter in
+    // Prec.high (the package's `addKeymap`), and precedence beats position in the extension list. A
+    // binding in a plain `keymap.of([...])` ALWAYS runs after the library's, which by then has
+    // already continued the list and answered true. That is what happened to the binding of commit
+    // 5f96e08: it never ran, and the app went on spending three Enters to get out of a list. That
+    // is why this command's keymap goes in `Prec.highest`, and why scenario 40 presses a real Enter.
+    const EMPTY_QUOTE_LINE = /^\s*>\s*$/;
+    const endQuote = (v) => {
       // With something selected, Enter is a replacement, and only the library command knows how to
       // make one. Looking at the line the caret happens to sit on would wipe the `> ` and leave the
       // selected text where it was, which is the Enter going missing.
       if (!v.state.selection.main.empty) return false;
-      const linha = v.state.doc.lineAt(v.state.selection.main.head);
-      if (!LINHA_DE_CITACAO_VAZIA.test(linha.text)) return false;
-      v.dispatch({ changes: { from: linha.from, to: linha.to, insert: '' }, userEvent: 'input' });
+      const line = v.state.doc.lineAt(v.state.selection.main.head);
+      if (!EMPTY_QUOTE_LINE.test(line.text)) return false;
+      v.dispatch({ changes: { from: line.from, to: line.to, insert: '' }, userEvent: 'input' });
       return true;
     };
-    const continuarMarcacao = insertNewlineContinueMarkupCommand({ nonTightLists: false });
-    const enterDoApp = (v) => encerrarCitacao(v) || continuarMarcacao(v);
+    const continueMarkup = insertNewlineContinueMarkupCommand({ nonTightLists: false });
+    const appEnter = (v) => endQuote(v) || continueMarkup(v);
 
-    // Trocar o texto inteiro é abrir outro documento, e a pilha do desfazer do anterior não vale
-    // mais nele. A anotação addToHistory:false impede que a troca ENTRE na pilha, mas não limpa o
-    // que já estava lá: os eventos da nota anterior são remapeados pelo documento novo, e uma
-    // deleção remapeada vira uma inserção no fim. Medido: sair de uma lista de um item na nota A,
-    // abrir a nota B e tocar em desfazer colava `- ` no fim da nota B, que ficava suja e subia
-    // assim pro Drive trinta segundos depois.
+    // Swapping the whole text is opening another document, and the previous one's undo stack does
+    // not describe it any more. The addToHistory:false annotation keeps the swap from ENTERING the
+    // stack, but it does not clear what was already there: the previous note's events are remapped
+    // by the new document, and a remapped deletion becomes an insertion at the end. Measured:
+    // getting out of a one-item list in note A, opening note B and tapping undo pasted `- ` at the
+    // end of note B, which became unsaved and went up to the Drive like that thirty seconds later.
     //
-    // Zerar é tirar o history() da configuração e pôr de volta. Reconfigurar com um `history()`
-    // novo NÃO basta (medido): o campo de estado dele é o mesmo objeto em toda chamada, e o CM6
-    // preserva o valor de campo que continua na configuração.
-    const compartimentoDoHistorico = new Compartment();
-    const zerarHistorico = () => {
-      view.dispatch({ effects: compartimentoDoHistorico.reconfigure([]) });
-      view.dispatch({ effects: compartimentoDoHistorico.reconfigure(history()) });
+    // Clearing it is taking the history() out of the configuration and putting it back. Reconfiguring
+    // with a fresh `history()` is NOT enough (measured): its state field is the same object on every
+    // call, and the CM6 preserves the value of a field that stays in the configuration.
+    const historyCompartment = new Compartment();
+    const clearHistory = () => {
+      view.dispatch({ effects: historyCompartment.reconfigure([]) });
+      view.dispatch({ effects: historyCompartment.reconfigure(history()) });
     };
 
-    // O cursor que está no texto é escolha de quem escreve, ou artefato de ter carregado a nota? A
-    // diferença é esta marca. A seleção do CM6 é estado permanente: depois de carregar uma nota ela
-    // fica em 0 sem ninguém ter escolhido isso, e uma foto tirada aí entraria na primeira linha, em
-    // cima do frontmatter, deixando a nota sem `created` nem `updated`. Já um cursor posto pela
-    // usuária vale mesmo depois que o foco vai embora, porque o seletor de foto rouba o foco e a
-    // foto tem que cair onde ela deixou o cursor.
-    let cursorPosto = false;
+    // Is the caret sitting in the text a choice by whoever is writing, or an artifact of having
+    // loaded the note? This flag is the difference. The CM6's selection is permanent state: after a
+    // note is loaded it sits at 0 without anyone having chosen that, and a picture taken there would
+    // go into the first line, on top of the frontmatter, leaving the note without `created` or
+    // `updated`. A caret placed by the user, on the other hand, holds even after the focus is gone,
+    // because the picture chooser steals the focus and the picture has to land where she left it.
+    let caretPlaced = false;
 
-    // `let` e não `const`: o campo de decoração da tarefa 7 roda durante a construção do
-    // EditorView e precisa consultar `view`. Com `const`, essa leitura cairia na zona morta
-    // temporal e estouraria ReferenceError em vez de devolver null.
+    // `let` and not `const`: the decoration field of task 7 runs while the EditorView is being
+    // built and needs to read `view`. With `const`, that read would fall in the temporal dead zone
+    // and throw a ReferenceError instead of answering null.
     let view = null;
     view = new EditorView({
-      parent: elemento,
+      parent: host,
       extensions: [
-        // Num compartimento pra dar pra zerar a pilha ao abrir outra nota (ver zerarHistorico)
-        compartimentoDoHistorico.of(history()),
+        // In a compartment so that the stack can be cleared when another note is opened (see clearHistory)
+        historyCompartment.of(history()),
         drawSelection(),
         lineWrapping,
-        // O CM6 põe autocapitalize="off" na área de escrita dele, e com isso o teclado do Android
-        // parou de subir a primeira letra de cada frase, que é o que o editor antigo (um
-        // contenteditable comum) deixava acontecer. A correção ortográfica segue desligada, como
-        // vem da biblioteca: o texto é markdown, cheio de marcador que ela sublinharia.
+        // The CM6 puts autocapitalize="off" on its writing area, and with that the Android keyboard
+        // stopped raising the first letter of every sentence, which is what the old editor (a plain
+        // contenteditable) let happen. The spell checking stays off, as it comes from the library:
+        // the text is markdown, full of markers it would underline.
         EditorView.contentAttributes.of({ autocapitalize: 'sentences' }),
-        // Acima do Enter que o markdown() instala em Prec.high: ver o comentário do enterDoApp
-        Prec.highest(keymap.of([{ key: 'Enter', run: enterDoApp }])),
+        // Above the Enter the markdown() installs in Prec.high: see the appEnter comment
+        Prec.highest(keymap.of([{ key: 'Enter', run: appEnter }])),
         markdown({ base: markdownLanguage, codeLanguages: [] }),
-        syntaxHighlighting(pintura),
+        syntaxHighlighting(highlight),
         frontmatterField,
         plainLinks,
-        campoMarcas,
-        campoEmbeds,
-        // O Enter nao mora aqui: ele esta la em cima, em Prec.highest, porque daqui nao alcanca
+        markField,
+        embedField,
+        // The Enter does not live here: it is up there, in Prec.highest, because from here it does not reach
         keymap.of([
           ...defaultKeymap,
           ...historyKeymap,
         ]),
         EditorView.updateListener.of((u) => {
-          if (u.docChanged) aoMudar();
-          if (u.focusChanged && u.view.hasFocus) cursorPosto = true;
+          if (u.docChanged) onChange();
+          if (u.focusChanged && u.view.hasFocus) caretPlaced = true;
         }),
       ],
     });
 
-    // Abrir uma nota troca o texto inteiro, e isso não é uma edição do usuário: sem esta marcação,
-    // um desfazer logo depois de escrever apaga a nota e traz de volta o texto da nota anterior.
-    const semHistorico = Transaction.addToHistory.of(false);
+    // Opening a note swaps the whole text, and that is not an edit by the user: without this
+    // annotation, an undo right after writing wipes the note and brings back the previous one's text.
+    const noHistory = Transaction.addToHistory.of(false);
 
-    let proximaMarca = 0;
-    const novaMarca = (pos) => {
-      const id = `m${proximaMarca++}`;
-      return { id, efeito: porMarca.of({ id, pos }) };
+    let nextMarkId = 0;
+    const newMark = (pos) => {
+      const id = `m${nextMarkId++}`;
+      return { id, effect: setMark.of({ id, pos }) };
     };
-    const posDaMarca = (marca) => {
-      if (marca == null) return null;
-      const pos = view.state.field(campoMarcas).get(marca);
+    const posOfMark = (mark) => {
+      if (mark == null) return null;
+      const pos = view.state.field(markField).get(mark);
       return pos == null ? null : Math.min(pos, view.state.doc.length);
     };
 
     return {
       view,
-      texto: () => view.state.doc.toString(),
-      definirTexto: (t2) => {
+      getText: () => view.state.doc.toString(),
+      setText: (text) => {
         view.dispatch({
-          changes: { from: 0, to: view.state.doc.length, insert: t2 },
-          annotations: semHistorico,
+          changes: { from: 0, to: view.state.doc.length, insert: text },
+          annotations: noHistory,
         });
-        // Documento novo, pilha nova. Vale pra todo chamador de setContent, e todos são troca de
-        // documento inteiro: abrir nota, nota nova, rascunho, marcar tarefa na leitura, alcançar
-        // as datas que subiram e a recarga depois de um conflito. Em nenhum deles a pilha antiga
-        // descreve o texto que está na tela.
-        zerarHistorico();
-        // Texto novo. Se a troca pegou a pessoa dentro do editor (a recarga depois de um conflito),
-        // ela está ali escrevendo e o cursor dela continua sendo a melhor aposta; com o editor fora
-        // de foco é nota aberta da lista, e aí ninguém pôs cursor nenhum neste texto
-        cursorPosto = view.hasFocus;
+        // New document, new stack. This holds for every caller of setContent, and all of them swap
+        // the whole document: opening a note, a new note, a draft, ticking a task in the reading
+        // view, catching up with the dates that went up, and the reload after a conflict. In none
+        // of them does the old stack describe the text on the screen.
+        clearHistory();
+        // New text. If the swap caught the person inside the editor (the reload after a conflict),
+        // she is in there writing and her caret is still the best bet; with the editor out of focus
+        // it is a note opened from the list, and then nobody placed any caret in this text
+        caretPlaced = view.hasFocus;
       },
-      focar: () => view.focus(),
-      cursorNoFim: () => view.dispatch({ selection: { anchor: view.state.doc.length } }),
-      marcarCursor: () => {
-        if (!cursorPosto) return null;
-        const nova = novaMarca(view.state.selection.main.head);
-        view.dispatch({ effects: nova.efeito });
-        return nova.id;
+      focus: () => view.focus(),
+      moveCaretToEnd: () => view.dispatch({ selection: { anchor: view.state.doc.length } }),
+      markCaret: () => {
+        if (!caretPlaced) return null;
+        const mark = newMark(view.state.selection.main.head);
+        view.dispatch({ effects: mark.effect });
+        return mark.id;
       },
-      inserirEmLinhaPropria: (texto, marca) => {
-        // Sem marca e sem cursor posto (nota aberta da lista e câmera tocada antes do texto), o
-        // lugar seguro é o fim da nota: o começo é onde mora o frontmatter
-        const pos = posDaMarca(marca)
-          ?? (cursorPosto ? view.state.selection.main.head : view.state.doc.length);
-        const linha = view.state.doc.lineAt(pos);
-        // Se há texto antes do cursor na linha, a inserção começa numa linha nova
-        const antes = view.state.doc.sliceString(linha.from, pos).trim() ? '\n' : '';
-        // Começo da linha seguinte, já no documento novo. Não dá pra devolver a marca recebida:
-        // uma posição mapeada por uma inserção no próprio ponto fica ANTES do que foi inserido,
-        // e a foto seguinte da leva entraria em cima desta (a ordem invertida do commit 439b920).
-        const seguinte = pos + antes.length + texto.length + 1;
-        const nova = novaMarca(seguinte);
+      insertOnOwnLine: (text, mark) => {
+        // With no mark and no caret placed (a note opened from the list and the camera tapped
+        // before the text), the safe place is the end of the note: the start is where the
+        // frontmatter lives
+        const pos = posOfMark(mark)
+          ?? (caretPlaced ? view.state.selection.main.head : view.state.doc.length);
+        const line = view.state.doc.lineAt(pos);
+        // If there is text before the caret on the line, the insertion starts on a new line
+        const before = view.state.doc.sliceString(line.from, pos).trim() ? '\n' : '';
+        // The start of the next line, already in the new document. The received mark cannot be
+        // handed back: a position mapped through an insertion at that very point ends up BEFORE
+        // what was inserted, and the next picture of the batch would land on top of this one (the
+        // inverted order of commit 439b920).
+        const next = pos + before.length + text.length + 1;
+        const nextMark = newMark(next);
         view.dispatch({
-          changes: { from: pos, insert: `${antes}${texto}\n` },
-          selection: { anchor: seguinte },
-          effects: nova.efeito,
+          changes: { from: pos, insert: `${before}${text}\n` },
+          selection: { anchor: next },
+          effects: nextMark.effect,
         });
-        return nova.id;
+        return nextMark.id;
       },
-      desfazer: () => undo(view),
-      refazer: () => redo(view),
-      formatar: (nome) => {
-        const formato = App.FORMATS[nome];
-        if (!formato) { view.focus(); return; }
+      undo: () => undo(view),
+      redo: () => redo(view),
+      format: (name) => {
+        const format = App.FORMATS[name];
+        if (!format) { view.focus(); return; }
         const sel = view.state.selection.main;
 
-        if (formato.wrap) {
-          const [antes, depois] = formato.wrap;
-          const escolhido = view.state.doc.sliceString(sel.from, sel.to) || 'texto';
+        if (format.wrap) {
+          const [before, after] = format.wrap;
+          const chosen = view.state.doc.sliceString(sel.from, sel.to) || 'texto';
           view.dispatch({
-            changes: { from: sel.from, to: sel.to, insert: `${antes}${escolhido}${depois}` },
-            // a seleção fica no miolo, pra sobrescrever "texto" digitando
-            selection: { anchor: sel.from + antes.length, head: sel.from + antes.length + escolhido.length },
+            changes: { from: sel.from, to: sel.to, insert: `${before}${chosen}${after}` },
+            // the selection stays in the middle, so that typing overwrites "texto"
+            selection: { anchor: sel.from + before.length, head: sel.from + before.length + chosen.length },
             userEvent: 'input',
           });
           view.focus();
           return;
         }
 
-        // Marcador de linha: vale pra toda linha tocada pela seleção. Se a seleção termina
-        // exatamente no começo de uma linha, essa linha não foi tocada de verdade (é só onde a
-        // seleção parou), e não entra, a não ser que seja a única linha da seleção. É a mesma
-        // guarda do changeBySelectedLine do próprio CM6 (@codemirror/commands, usada por
-        // indentMore e por toggleLineComment), adaptada pra uma seleção só em vez de várias.
-        const primeira = view.state.doc.lineAt(sel.from).number;
-        let ultima = view.state.doc.lineAt(sel.to).number;
-        if (!sel.empty && ultima > primeira && sel.to <= view.state.doc.line(ultima).from) ultima--;
-        // Só o marcador é trocado, nunca a linha inteira: uma posição que estava DENTRO de um
-        // trecho substituído volta pro começo dele, e por isso tocar em lista, tarefa, título ou
-        // citação mandava o cursor pro início da linha, longe de onde se estava escrevendo.
-        const mudancas = [];
-        const trocas = new Map();
-        for (let n = primeira; n <= ultima; n++) {
-          const linha = view.state.doc.line(n);
-          const troca = App.linePrefixChange(linha.text, formato.line);
-          trocas.set(n, troca);
-          mudancas.push({ from: linha.from + troca.from, to: linha.from + troca.to, insert: troca.insert });
+        // Line marker: it holds for every line the selection touches. If the selection ends exactly
+        // at the start of a line, that line was not really touched (it is just where the selection
+        // stopped), and it does not count, unless it is the selection's only line. It is the same
+        // guard as the CM6's own changeBySelectedLine (@codemirror/commands, used by indentMore and
+        // by toggleLineComment), adapted to a single selection instead of several.
+        const first = view.state.doc.lineAt(sel.from).number;
+        let last = view.state.doc.lineAt(sel.to).number;
+        if (!sel.empty && last > first && sel.to <= view.state.doc.line(last).from) last--;
+        // Only the marker is replaced, never the whole line: a position that was INSIDE a replaced
+        // stretch goes back to the start of it, and that is why tapping list, task, heading or
+        // quote sent the caret to the start of the line, far from where the writing was.
+        const changes = [];
+        const swaps = new Map();
+        for (let n = first; n <= last; n++) {
+          const line = view.state.doc.line(n);
+          const swap = App.linePrefixChange(line.text, format.line);
+          swaps.set(n, swap);
+          changes.push({ from: line.from + swap.from, to: line.from + swap.to, insert: swap.insert });
         }
-        // Onde uma posição do texto de antes vai parar. Quem estava no texto anda junto com ele;
-        // quem estava no marcador antigo, ou antes dele, para logo depois do marcador novo, que é
-        // de onde se continua digitando numa linha que acabou de virar item de lista.
-        const mover = (pos) => {
-          const linha = view.state.doc.lineAt(pos);
-          let acumulado = 0;
-          for (let n = primeira; n < Math.min(linha.number, ultima + 1); n++) {
-            const t2 = trocas.get(n);
-            acumulado += t2.insert.length - (t2.to - t2.from);
+        // Where a position of the text from before ends up. Whoever was in the text moves along
+        // with it; whoever was in the old marker, or before it, stops right after the new marker,
+        // which is where the typing goes on in a line that has just become a list item.
+        const move = (pos) => {
+          const line = view.state.doc.lineAt(pos);
+          let running = 0;
+          for (let n = first; n < Math.min(line.number, last + 1); n++) {
+            const earlier = swaps.get(n);
+            running += earlier.insert.length - (earlier.to - earlier.from);
           }
-          const troca = trocas.get(linha.number);
-          if (!troca) return pos + acumulado;
-          const coluna = pos - linha.from;
-          const nova = coluna < troca.to
-            ? troca.from + troca.insert.length
-            : coluna + troca.insert.length - (troca.to - troca.from);
-          return linha.from + acumulado + nova;
+          const swap = swaps.get(line.number);
+          if (!swap) return pos + running;
+          const column = pos - line.from;
+          const moved = column < swap.to
+            ? swap.from + swap.insert.length
+            : column + swap.insert.length - (swap.to - swap.from);
+          return line.from + running + moved;
         };
         view.dispatch({
-          changes: mudancas,
-          selection: { anchor: mover(sel.anchor), head: mover(sel.head) },
+          changes,
+          selection: { anchor: move(sel.anchor), head: move(sel.head) },
           userEvent: 'input',
         });
         view.focus();
       },
-      decorarEmbeds: (fn) => {
-        infoDaLinha = fn;
-        view.dispatch({ effects: refazerEmbeds.of(null) });
-        const agora = assinaturaDos(view.state.field(campoEmbeds));
-        const mudou = agora !== ultimaAssinatura;
-        ultimaAssinatura = agora;
-        return mudou;
+      decorateEmbeds: (fn) => {
+        lineInfo = fn;
+        view.dispatch({ effects: redoEmbeds.of(null) });
+        const now = signatureOf(view.state.field(embedField));
+        const changed = now !== lastSignature;
+        lastSignature = now;
+        return changed;
       },
-      rolarAteOCursor: () => {
+      scrollToCaret: () => {
         // Only while the editor has the focus, which is what the old editor did by asking whether
         // the DOM selection was inside it. Whoever calls this does not check: the embed decoration
         // calls it when a picture's size arrives from the Drive, and the visualViewport resize
@@ -623,55 +631,55 @@ const App = {
     };
   },
 
-  /** O editor de reserva, para quando a biblioteca não carregou: um textarea puro. Ele toma o lugar
-      do elemento no DOM e vira o els.editorElement, que é por onde o resto do app o alcança. */
-  implTextarea(elemento, aoMudar) {
+  /** The fallback editor, for when the library did not load: a plain textarea. It takes the host's
+      place in the DOM and becomes the els.editorElement, which is how the rest of the app reaches it. */
+  createTextareaEditor(host, onChange) {
     const textarea = document.createElement('textarea');
     textarea.className = 'editor-fallback';
     textarea.placeholder = 'Comece a escrever...';
-    elemento.replaceWith(textarea);
+    host.replaceWith(textarea);
     this.els.editorElement = textarea;
 
     textarea.addEventListener('input', () => {
-      aoMudar();
+      onChange();
     });
 
     return {
-      texto() {
+      getText() {
         return App.els.editorElement.value || '';
       },
 
-      definirTexto(t) {
+      setText(t) {
         App.els.editorElement.value = t;
       },
 
-      focar() {
+      focus() {
         App.els.editorElement.focus();
       },
 
-      cursorNoFim() {
+      moveCaretToEnd() {
         const el = App.els.editorElement;
         el.selectionStart = el.selectionEnd = el.value.length;
       },
 
-      marcarCursor() {
-        // Num objeto, nunca no número cru: a posição 0 é falsy e sumiria no `||` de quem recebe
+      markCaret() {
+        // In an object, never the raw number: position 0 is falsy and would vanish in the receiver's `||`
         return { pos: App.els.editorElement.selectionStart };
       },
 
-      inserirEmLinhaPropria(texto) {
-        // O cursor do textarea sobrevive ao seletor de arquivo, então a marca não é usada aqui.
-        // Ninguém sabe dizer onde a linha seguinte ficou: devolve undefined, como manda o contrato.
+      insertOnOwnLine(text) {
+        // The textarea's caret survives the file chooser, so the mark is not used here. Nobody can
+        // say where the next line ended up: it answers undefined, as the contract demands.
         const ta = App.els.editorElement;
         const value = ta.value;
         const index = ta.selectionStart;
         const before = index > 0 && value[index - 1] !== '\n' ? '\n' : '';
-        ta.value = value.slice(0, index) + before + texto + '\n' + value.slice(index);
-        ta.selectionStart = ta.selectionEnd = index + before.length + texto.length + 1;
+        ta.value = value.slice(0, index) + before + text + '\n' + value.slice(index);
+        ta.selectionStart = ta.selectionEnd = index + before.length + text.length + 1;
       },
 
-      formatar(nome) {
-        const format = App.FORMATS[nome];
+      format(name) {
+        const format = App.FORMATS[name];
         if (!format) return;
         const ta = App.els.editorElement;
 
@@ -699,22 +707,22 @@ const App = {
         ta.focus();
       },
 
-      // A pilha do textarea é a do próprio navegador
-      desfazer() { return typeof document.execCommand === 'function' && document.execCommand('undo'); },
-      refazer() { return typeof document.execCommand === 'function' && document.execCommand('redo'); },
+      // The textarea's stack is the browser's own
+      undo() { return typeof document.execCommand === 'function' && document.execCommand('undo'); },
+      redo() { return typeof document.execCommand === 'function' && document.execCommand('redo'); },
 
-      // Sem linhas próprias no DOM não há onde pendurar a imagem, e não há cursor a perseguir
-      decorarEmbeds() { return false; },
-      rolarAteOCursor() {},
+      // With no lines of its own in the DOM there is nowhere to hang the picture, and no caret to chase
+      decorateEmbeds() { return false; },
+      scrollToCaret() {},
     };
   },
 
   getContent() {
-    return this.Editor.texto();
+    return this.Editor.getText();
   },
 
   setContent(text) {
-    this.Editor.definirTexto(text);
+    this.Editor.setText(text);
     this.isDirty = false;
     this.updateFileNameDisplay();
     // Another note: pictures that were not found get another chance
@@ -1708,14 +1716,14 @@ const App = {
     this._embedTimer = setTimeout(() => this.decorateEditorEmbeds(), 120);
   },
 
-  /** A foto de uma linha que é só ![[imagem]], se as medidas dela já chegaram do Drive.
-      Devolve null e dispara a busca quando ainda não chegaram. */
-  embedDaLinha(linha) {
-    const nome = this.EMBED_LINE.exec(linha)?.[1].split('/').pop().trim();
-    if (!nome) return null;
-    const info = this._embedInfo.get(nome);
+  /** The picture of a line that is nothing but ![[image]], if its size has already arrived from the
+      Drive. Answers null and fires the lookup when it has not arrived yet. */
+  embedForLine(line) {
+    const name = this.EMBED_LINE.exec(line)?.[1].split('/').pop().trim();
+    if (!name) return null;
+    const info = this._embedInfo.get(name);
     if (!info) {
-      if (!this._embedInfo.has(nome)) this.loadEmbedInfo(nome);
+      if (!this._embedInfo.has(name)) this.loadEmbedInfo(name);
       return null;
     }
     return info;
@@ -1723,9 +1731,9 @@ const App = {
 
   decorateEditorEmbeds() {
     if (this.mode !== 'edit') return;
-    const mudou = this.Editor.decorarEmbeds((linha) => this.embedDaLinha(linha));
+    const changed = this.Editor.decorateEmbeds((line) => this.embedForLine(line));
     // Lines got taller or shorter: the one being typed must stay above the keyboard
-    if (mudou) this.scrollCaretIntoView();
+    if (changed) this.scrollCaretIntoView();
   },
 
   async loadEmbedInfo(name) {
@@ -2199,11 +2207,11 @@ const App = {
 
   /** Focus the editor for immediate typing */
   focusEditor() {
-    this.Editor.focar();
+    this.Editor.focus();
   },
 
   caretToEnd() {
-    this.Editor.cursorNoFim();
+    this.Editor.moveCaretToEnd();
   },
 
   /** Run a Drive write after every write queued before it */
@@ -2803,8 +2811,8 @@ const App = {
   // selected line, wherever the cursor is in it.
   FORMATS: {
     bold: { wrap: ['**', '**'] },
-    // Asterisco e não sublinhado: é o que o app escrevia antes da troca de editor, e é o que
-    // está escrito nas notas que já existem
+    // An asterisk and not an underscore: it is what the app wrote before the editor was swapped,
+    // and it is what is written in the notes that already exist
     italic: { wrap: ['*', '*'] },
     code: { wrap: ['`', '`'] },
     link: { wrap: ['[', '](url)'] },
@@ -2816,7 +2824,7 @@ const App = {
 
   applyFormat(name) {
     if (!this.FORMATS[name]) return;
-    this.Editor.formatar(name);
+    this.Editor.format(name);
     // For the fallback textarea, and only for it. It writes into ta.value, which fires no input
     // event, so this line is what gets the note saved there. In the CodeMirror the updateListener
     // already calls the change handler on every docChanged, and this is a second, harmless call.
@@ -2856,7 +2864,7 @@ const App = {
       so the cursor position is kept for later. */
   pickPhoto(source) {
     if (this.mode !== 'edit') return;
-    this._photoAt = this.Editor.marcarCursor();
+    this._photoAt = this.Editor.markCaret();
     const camera = source === 'camera';
     // With "capture" Android goes straight to the camera; without it, to the photo picker
     if (camera) this.els.photoInput.setAttribute('capture', 'environment');
@@ -2966,7 +2974,7 @@ const App = {
       changed while it was uploading. The cursor ends on a fresh line below; with the editor,
       answers where that is. */
   insertOnOwnLine(text, at) {
-    return this.Editor.inserirEmLinhaPropria(text, at);
+    return this.Editor.insertOnOwnLine(text, at);
   },
 
   // ── Sketch (the drawing screen) ──
@@ -3004,9 +3012,9 @@ const App = {
   /** Open the drawing screen over the editor. Only from the edit view, with a note open. */
   sketchOpen() {
     if (this.mode !== 'edit' || !this.currentFile || this.sketch) return;
-    // O cursor é lido antes do blur: é o lugar onde o desenho foi pedido, e é ele que a marca
-    // tem que guardar. A marca em si sobrevive ao blur e às edições que vierem depois
-    const at = this.Editor.marcarCursor();
+    // The caret is read before the blur: it is the place where the drawing was asked for, and that
+    // is what the mark has to keep. The mark itself survives the blur and the edits that come after
+    const at = this.Editor.markCaret();
     // Without the blur the keyboard sits over half the canvas
     document.activeElement?.blur?.();
 
@@ -3243,48 +3251,50 @@ const App = {
 
   scrollCaretIntoView() {
     if (this.mode !== 'edit') return;
-    this.Editor.rolarAteOCursor();
+    this.Editor.scrollToCaret();
   },
 
-  // O quanto o dedo pode andar e o toque ainda contar como toque, em pixels. Acima disso foi
-  // arrasto, e arrasto na barra é rolagem. O Android decide o próprio scroll por uma distância
-  // parecida (uns 8dp).
-  ARRASTO_MAX: 10,
+  // How far the finger may travel and the touch still count as a touch, in pixels. Above that it
+  // was a drag, and a drag on the toolbar is a scroll. The Android decides its own scroll by a
+  // similar distance (some 8dp).
+  DRAG_MAX: 10,
 
-  /** Botão da barra: tocado com o teclado aberto e com a barra rolando de lado, o que são duas
-      exigências que brigam. Ele não pode roubar o foco do editor (o teclado fecharia e o cursor
-      sumiria) e não pode engolir o arrasto que rola a barra, que não cabe na tela.
+  /** A toolbar button: tapped with the keyboard open and with the toolbar scrolling sideways, which
+      are two demands that fight each other. It must not steal the focus from the editor (the
+      keyboard would close and the caret would vanish) and it must not swallow the drag that scrolls
+      the toolbar, which does not fit on the screen.
 
-      A saída é cancelar o FIM do toque em vez do começo. Cancelar o `touchstart`, que era o que o
-      app fazia, impede o foco mas também impede a rolagem: sobrava rolar pela fresta de 6px entre
-      os botões e a borda da barra. Cancelar só o `touchend` impede do mesmo jeito o clique
-      sintético (e com ele o foco), e deixa o navegador rolar enquanto o dedo anda. Por isso a ação
-      mora no `touchend`; o `click` é o caminho do mouse e do teclado.
+      The way out is to cancel the END of the touch instead of its start. Cancelling the
+      `touchstart`, which is what the app used to do, prevents the focus but also prevents the
+      scroll: all that was left was scrolling through the 6px gap between the buttons and the edge
+      of the toolbar. Cancelling only the `touchend` prevents the synthetic click just as well (and
+      with it the focus), and lets the browser scroll while the finger moves. That is why the action
+      lives in the `touchend`; the `click` is the path of the mouse and of the keyboard.
 
-      Arrastou mais que ARRASTO_MAX: foi rolagem, o botão não age. (Rolagem longa nem chega aqui, o
-      navegador manda `touchcancel` assim que assume o gesto.) */
-  bindToolbarButton(btn, agir) {
-    let inicio = null;
+      Dragged further than DRAG_MAX: it was a scroll, and the button does not act. (A long scroll
+      does not even get here: the browser sends `touchcancel` as soon as it takes over the gesture.) */
+  bindToolbarButton(btn, act) {
+    let start = null;
     btn.addEventListener('touchstart', (e) => {
-      const toque = e.touches?.[0];
-      inicio = { x: toque?.clientX, y: toque?.clientY };
+      const touch = e.touches?.[0];
+      start = { x: touch?.clientX, y: touch?.clientY };
     }, { passive: true });
-    // O navegador que assume a rolagem avisa por aqui e o gesto deixa de ser um toque no botão
-    btn.addEventListener('touchcancel', () => { inicio = null; }, { passive: true });
+    // The browser taking over the scroll says so through here, and the gesture stops being a touch on the button
+    btn.addEventListener('touchcancel', () => { start = null; }, { passive: true });
     btn.addEventListener('touchend', (e) => {
-      // Cancelado sempre: é o que segura o teclado, e também o que impede o clique sintético de
-      // agir de novo depois de um arrasto
+      // Always cancelled: it is what holds the keyboard, and also what keeps the synthetic click
+      // from acting again after a drag
       e.preventDefault();
-      const gesto = inicio;
-      inicio = null;
-      if (!gesto) return;
-      const toque = e.changedTouches?.[0];
-      const arrastou = toque && Number.isFinite(gesto.x)
-        && Math.hypot(toque.clientX - gesto.x, toque.clientY - gesto.y) > this.ARRASTO_MAX;
-      if (!arrastou) agir();
+      const gesture = start;
+      start = null;
+      if (!gesture) return;
+      const touch = e.changedTouches?.[0];
+      const dragged = touch && Number.isFinite(gesture.x)
+        && Math.hypot(touch.clientX - gesture.x, touch.clientY - gesture.y) > this.DRAG_MAX;
+      if (!dragged) act();
     }, { passive: false });
     btn.addEventListener('mousedown', (e) => e.preventDefault());
-    btn.addEventListener('click', () => agir());
+    btn.addEventListener('click', () => act());
   },
 
   /** Keep toolbar visible above virtual keyboard using visualViewport API */
@@ -3370,7 +3380,7 @@ const App = {
       if (e.key === 'Escape') this.hideModal();
     });
 
-    // Desfazer e refazer
+    // Undo and redo
     document.querySelectorAll('.toolbar-btn[data-history]').forEach(btn => {
       // Nothing marks the note as unsaved here, on purpose. Undoing for real changes the text, and
       // both editors report that by themselves (the CodeMirror through its updateListener, the
@@ -3379,7 +3389,7 @@ const App = {
       // and thirty seconds later the autosave wrote it to the Drive with today's `updated` without
       // a single edit having happened.
       this.bindToolbarButton(btn, () => {
-        if (btn.dataset.history === 'undo') this.Editor.desfazer(); else this.Editor.refazer();
+        if (btn.dataset.history === 'undo') this.Editor.undo(); else this.Editor.redo();
       });
     });
 
@@ -3467,7 +3477,7 @@ const App = {
       navigator.clipboard?.writeText(document.getElementById('debug-text').textContent).catch(() => {});
     });
 
-    // Flush on hide/close — mobile users switch apps constantly.
+    // Flush on hide/close: mobile users switch apps constantly.
     // saveDraft is sync (localStorage) so it always runs; save() is async best-effort.
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden' && this.isDirty) {

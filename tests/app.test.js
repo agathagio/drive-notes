@@ -202,7 +202,7 @@ function apertarEnter(w, view) {
  * era o unico lugar fora da fachada a alcancar a implementacao do editor. E codigo de teste, e o
  * lugar dele e aqui.
  */
-function cm6Digitar(App, texto) {
+function cm6Type(App, texto) {
   const view = App.Editor._impl.view;
   view.dispatch({ changes: { from: view.state.doc.length, insert: texto }, userEvent: 'input.type' });
 }
@@ -228,7 +228,7 @@ function colchetesComuns(App, w) {
 /** Poe o texto, poe o cursor, aperta Enter. Devolve o texto e onde o cursor parou (linha:coluna) */
 function enterEm(App, w, conteudo, em) {
   const view = App.Editor._impl.view;
-  App.Editor.definirTexto(conteudo);
+  App.Editor.setText(conteudo);
   view.dispatch({ selection: { anchor: em } });
   apertarEnter(w, view);
   const cursor = view.state.selection.main.head;
@@ -704,27 +704,27 @@ function enterEm(App, w, conteudo, em) {
 
       // Caminho de reserva: a camera tocada antes de o dedo encostar no texto. Sem cursor posto, a
       // foto vai pro fim da nota, e o fim anda junto com a leva.
-      comEditor.Editor.definirTexto('linha um');
-      let at = comEditor.Editor.marcarCursor();
+      comEditor.Editor.setText('linha um');
+      let at = comEditor.Editor.markCaret();
       check('o editor voltou do seletor sem cursor nenhum', at === null, at);
       for (const n of [1, 2, 3]) at = comEditor.insertOnOwnLine(`![[f${n}]]`, at) || at;
       check('sem cursor no editor, a fila continua na ordem',
-        comEditor.Editor.texto() === 'linha um\n![[f1]]\n![[f2]]\n![[f3]]\n', comEditor.Editor.texto());
+        comEditor.Editor.getText() === 'linha um\n![[f1]]\n![[f2]]\n![[f3]]\n', comEditor.Editor.getText());
 
       // O caso do celular: o cursor foi posto no texto e o seletor de foto levou o foco embora
       // (no CM6 a marca sobrevive a isso). So aqui a ordem depende MESMO de cada insercao devolver
       // a marca da linha seguinte: sem esse retorno, a marca velha e mapeada pra ANTES do que
       // acabou de entrar e a leva sai de tras pra frente, que e o bug do commit 439b920. Partir de
       // marca nula, como o caminho de cima, deixaria a ordem certa por acidente.
-      comEditor.Editor.definirTexto('linha um');
-      comEditor.Editor.focar();
+      comEditor.Editor.setText('linha um');
+      comEditor.Editor.focus();
       view.dispatch({ selection: { anchor: 'linha um'.length } });
       view.contentDOM.blur();
-      at = comEditor.Editor.marcarCursor();
+      at = comEditor.Editor.markCaret();
       check('cursor posto antes de o seletor roubar o foco: a marca existe', !!at, at);
       for (const n of [1, 2, 3]) at = comEditor.insertOnOwnLine(`![[f${n}]]`, at) || at;
       check('com cursor posto, a fila empilha a partir dele, na ordem',
-        comEditor.Editor.texto() === 'linha um\n![[f1]]\n![[f2]]\n![[f3]]\n', comEditor.Editor.texto());
+        comEditor.Editor.getText() === 'linha um\n![[f1]]\n![[f2]]\n![[f3]]\n', comEditor.Editor.getText());
     }
 
     // Erro no meio: o que ja entrou fica, o resto nem sobe
@@ -1766,14 +1766,14 @@ function enterEm(App, w, conteudo, em) {
   console.log('39c. Fachada: o app fala com o Editor, nao com a lib');
   {
     const { App } = await boot();
-    check('sem lib carregada a fachada cai no textarea', App.Editor.ativo() === 'textarea');
-    App.Editor.definirTexto('uma linha\noutra linha');
-    check('texto ida e volta', App.Editor.texto() === 'uma linha\noutra linha');
+    check('sem lib carregada a fachada cai no textarea', App.Editor.kind() === 'textarea');
+    App.Editor.setText('uma linha\noutra linha');
+    check('texto ida e volta', App.Editor.getText() === 'uma linha\noutra linha');
 
-    App.Editor.definirTexto('primeira\nsegunda');
-    const marca = App.Editor.marcarCursor();
-    App.Editor.inserirEmLinhaPropria('![[foto.png]]', marca);
-    check('inseriu em linha propria', App.Editor.texto().includes('![[foto.png]]'), App.Editor.texto());
+    App.Editor.setText('primeira\nsegunda');
+    const marca = App.Editor.markCaret();
+    App.Editor.insertOnOwnLine('![[foto.png]]', marca);
+    check('inseriu em linha propria', App.Editor.getText().includes('![[foto.png]]'), App.Editor.getText());
 
     // A lib do editor tem que ficar atras da fachada: quem esta fora da secao `Editor` fala com
     // App.Editor e mais nada. A secao e delimitada pelos dois marcadores de comentario (o dela e o
@@ -1791,28 +1791,30 @@ function enterEm(App, w, conteudo, em) {
     check('a checagem acima enxerga a lib: dentro da fachada o vocabulario esta la',
       VOCABULARIO_DA_LIB.test(fonteDoApp.split('// ── Editor ──')[1].split('// ── Google Auth ──')[0]));
 
-    // O app nao carrega ajudante que so o teste usa. O cm6Digitar vivia aqui dentro por ser codigo
-    // de teste morando no app: ele alcancava Editor._impl.view de dentro da secao do editor, que e
-    // justo o pedaco onde a checagem acima nao olha. Agora e uma funcao do proprio arquivo de teste
-    check('o app nao expoe ajudante que so o teste usa', App.cm6Digitar === undefined, typeof App.cm6Digitar);
-    check('... e o fonte tambem nao o traz', !/cm6Digitar/.test(fonteDoApp));
+    // O app nao carrega ajudante que so o teste usa. O cm6Type (cm6Digitar, no nome de antes da
+    // traducao) vivia aqui dentro por ser codigo de teste morando no app: ele alcancava
+    // Editor._impl.view de dentro da secao do editor, que e justo o pedaco onde a checagem acima
+    // nao olha. Agora e uma funcao do proprio arquivo de teste
+    check('o app nao expoe ajudante que so o teste usa',
+      App.cm6Type === undefined && App.cm6Digitar === undefined);
+    check('... e o fonte tambem nao o traz', !/cm6Type|cm6Digitar/.test(fonteDoApp));
   }
 
   console.log('39d. CM6: texto, desfazer e a marca de cursor');
   {
     const { App } = await boot({ editor: true });
-    check('o editor ativo e o CM6', App.Editor.ativo() === 'cm6', App.Editor.ativo());
+    check('o editor ativo e o CM6', App.Editor.kind() === 'cm6', App.Editor.kind());
 
-    App.Editor.definirTexto('linha um\nlinha dois');
-    check('texto ida e volta', App.Editor.texto() === 'linha um\nlinha dois');
+    App.Editor.setText('linha um\nlinha dois');
+    check('texto ida e volta', App.Editor.getText() === 'linha um\nlinha dois');
 
     // Abrir uma nota NAO pode entrar na pilha do desfazer. Se entrar, um toque em desfazer logo
     // depois de abrir apaga a nota aberta e traz de volta o texto da anterior, que e o pior jeito
     // de perder texto que este app tem. Quem garante isso e a anotacao addToHistory:false do
-    // definirTexto, mas quem executa e a biblioteca: e propriedade emergente dela, e sem esta
+    // setText, mas quem executa e a biblioteca: e propriedade emergente dela, e sem esta
     // checagem nada no projeto acusaria a volta do bug.
-    check('abrir uma nota nao entra na pilha: nao ha o que desfazer', App.Editor.desfazer() === false);
-    check('... e o texto aberto nao se mexe', App.Editor.texto() === 'linha um\nlinha dois', App.Editor.texto());
+    check('abrir uma nota nao entra na pilha: nao ha o que desfazer', App.Editor.undo() === false);
+    check('... e o texto aberto nao se mexe', App.Editor.getText() === 'linha um\nlinha dois', App.Editor.getText());
 
     // O jsdom nao tem layout e ninguem consegue tocar no texto: o view e usado so pra pôr o cursor
     // onde um dedo poria, que e o unico jeito de simular o uso real aqui.
@@ -1821,89 +1823,89 @@ function enterEm(App, w, conteudo, em) {
 
     // Nota aberta da lista e camera tocada antes de tocar no texto: a selecao esta em 0 por
     // artefato de carregar o texto, nao por escolha, e a foto ali comeria o frontmatter
-    App.Editor.definirTexto(NOTA);
+    App.Editor.setText(NOTA);
     check('editor nunca focado: nao ha cursor de que falar, a marca e null',
-      App.Editor.marcarCursor() === null, App.Editor.marcarCursor());
-    const marcaDoFim = App.Editor.inserirEmLinhaPropria('![[foto.png]]', App.Editor.marcarCursor());
+      App.Editor.markCaret() === null, App.Editor.markCaret());
+    const marcaDoFim = App.Editor.insertOnOwnLine('![[foto.png]]', App.Editor.markCaret());
     check('editor nunca focado: a foto entra no fim, o frontmatter fica na primeira linha',
-      App.Editor.texto() === `${NOTA}\n![[foto.png]]\n`, App.Editor.texto());
+      App.Editor.getText() === `${NOTA}\n![[foto.png]]\n`, App.Editor.getText());
     check('a insercao devolve marca, e marca nunca e falsy', !!marcaDoFim, marcaDoFim);
 
     // A leva da galeria, pelo caminho do savePhoto: cada foto usa o retorno da anterior. Parte de
     // cursor posto de proposito: com marca nula toda insercao cairia no fim do documento e a ordem
     // sairia certa por acidente, mesmo se o retorno da marca sumisse (o bug do commit 439b920).
-    App.Editor.definirTexto('nota com fotos');
-    App.Editor.focar();
+    App.Editor.setText('nota com fotos');
+    App.Editor.focus();
     view.dispatch({ selection: { anchor: 'nota com fotos'.length } });
     view.contentDOM.blur();
-    let at = App.Editor.marcarCursor();
+    let at = App.Editor.markCaret();
     check('cursor posto antes de a leva comecar: a marca existe', !!at, at);
     for (const nome of ['um.jpg', 'dois.jpg', 'tres.jpg']) at = App.insertOnOwnLine(`![[${nome}]]`, at) || at;
     check('a leva de fotos sai na ordem em que foi escolhida',
-      App.Editor.texto() === 'nota com fotos\n![[um.jpg]]\n![[dois.jpg]]\n![[tres.jpg]]\n', App.Editor.texto());
+      App.Editor.getText() === 'nota com fotos\n![[um.jpg]]\n![[dois.jpg]]\n![[tres.jpg]]\n', App.Editor.getText());
 
     // O uso normal: o cursor foi posto no meio do texto e o foco foi embora depois (o seletor de
     // foto rouba). A foto cai no cursor, que e onde ela foi pedida, e nao no fim
-    App.Editor.definirTexto(NOTA);
-    App.Editor.focar();
+    App.Editor.setText(NOTA);
+    App.Editor.focus();
     view.dispatch({ selection: { anchor: NOTA.indexOf('texto da nota') + 5 } });
     view.contentDOM.blur();
     check('o foco foi mesmo embora', !view.hasFocus);
-    const marcaDoMeio = App.Editor.marcarCursor();
+    const marcaDoMeio = App.Editor.markCaret();
     check('cursor posto antes de o foco sumir: a marca existe', !!marcaDoMeio, marcaDoMeio);
-    App.Editor.inserirEmLinhaPropria('![[meio.png]]', marcaDoMeio);
+    App.Editor.insertOnOwnLine('![[meio.png]]', marcaDoMeio);
     check('sem foco mas com cursor posto: a foto entra no cursor e o frontmatter fica inteiro',
-      App.Editor.texto() === `---\ncreated: 2026-09-21\nupdated: 2026-09-21\n---\n\ntexto\n![[meio.png]]\n da nota`,
-      App.Editor.texto());
+      App.Editor.getText() === `---\ncreated: 2026-09-21\nupdated: 2026-09-21\n---\n\ntexto\n![[meio.png]]\n da nota`,
+      App.Editor.getText());
 
     // A nota cresce enquanto a foto sobe: a marca anda junto e a foto cai onde foi pedida
-    App.Editor.definirTexto('uma nota\ncom tres linhas\nde texto');
-    App.Editor.focar();
-    App.Editor.cursorNoFim();
-    const marca = App.Editor.marcarCursor();
-    cm6Digitar(App, '\nescrito enquanto a foto subia');
-    App.Editor.inserirEmLinhaPropria('![[tarde.png]]', marca);
+    App.Editor.setText('uma nota\ncom tres linhas\nde texto');
+    App.Editor.focus();
+    App.Editor.moveCaretToEnd();
+    const marca = App.Editor.markCaret();
+    cm6Type(App, '\nescrito enquanto a foto subia');
+    App.Editor.insertOnOwnLine('![[tarde.png]]', marca);
     check('a foto entra na marca, e o que foi escrito depois continua embaixo',
-      App.Editor.texto() === 'uma nota\ncom tres linhas\nde texto\n![[tarde.png]]\n\nescrito enquanto a foto subia',
-      App.Editor.texto());
+      App.Editor.getText() === 'uma nota\ncom tres linhas\nde texto\n![[tarde.png]]\n\nescrito enquanto a foto subia',
+      App.Editor.getText());
 
     // A marca vence o cursor vivo, e e isso que a docstring do insertOnOwnLine descreve: entre
     // tocar na camera e a foto chegar do Drive a pessoa continua na nota e o cursor anda. A foto
     // cai onde ela estava quando pediu a foto, e nao onde o cursor esta agora.
-    App.Editor.definirTexto('primeira\nsegunda\nterceira');
-    App.Editor.focar();
+    App.Editor.setText('primeira\nsegunda\nterceira');
+    App.Editor.focus();
     view.dispatch({ selection: { anchor: 'primeira'.length } });
-    const marcaDaPrimeira = App.Editor.marcarCursor();
+    const marcaDaPrimeira = App.Editor.markCaret();
     view.dispatch({ selection: { anchor: view.state.doc.length } });
     App.insertOnOwnLine('![[pedida-antes.png]]', marcaDaPrimeira);
     check('a marca vence o cursor vivo: a foto cai onde foi pedida',
-      App.Editor.texto() === 'primeira\n![[pedida-antes.png]]\n\nsegunda\nterceira', App.Editor.texto());
+      App.Editor.getText() === 'primeira\n![[pedida-antes.png]]\n\nsegunda\nterceira', App.Editor.getText());
 
     // Recarga depois de conflito com a pessoa dentro do editor: o texto troca debaixo dela, mas ela
     // continua ali escrevendo, entao o cursor dela continua valendo (nao vira nota aberta da lista)
     check('o editor continua focado', view.hasFocus);
-    App.Editor.definirTexto('texto novo, que chegou do Drive');
+    App.Editor.setText('texto novo, que chegou do Drive');
     check('texto trocado com o editor focado: ainda ha cursor de que falar',
-      App.Editor.marcarCursor() !== null, App.Editor.marcarCursor());
+      App.Editor.markCaret() !== null, App.Editor.markCaret());
 
     // E a nota encolher inteira embaixo da marca (recarregada durante o upload) nao pode estourar
-    App.Editor.definirTexto('curta');
-    App.Editor.inserirEmLinhaPropria('![[depois.png]]', marca);
+    App.Editor.setText('curta');
+    App.Editor.insertOnOwnLine('![[depois.png]]', marca);
     check('marca de nota que encolheu nao estoura: cai no comeco do texto novo',
-      App.Editor.texto() === '![[depois.png]]\ncurta', App.Editor.texto());
+      App.Editor.getText() === '![[depois.png]]\ncurta', App.Editor.getText());
 
-    App.Editor.definirTexto('base');
-    cm6Digitar(App, ' mais');
-    check('digitou', App.Editor.texto() === 'base mais', App.Editor.texto());
-    check('desfez', App.Editor.desfazer() && App.Editor.texto() === 'base', App.Editor.texto());
-    check('refez', App.Editor.refazer() && App.Editor.texto() === 'base mais', App.Editor.texto());
+    App.Editor.setText('base');
+    cm6Type(App, ' mais');
+    check('digitou', App.Editor.getText() === 'base mais', App.Editor.getText());
+    check('desfez', App.Editor.undo() && App.Editor.getText() === 'base', App.Editor.getText());
+    check('refez', App.Editor.redo() && App.Editor.getText() === 'base mais', App.Editor.getText());
 
     // O mesmo, mas com a pilha cheia: escreveu numa nota e abriu outra da lista. O que foi digitado
     // na nota anterior nao pode sobrar pra ser desfeito em cima desta
-    App.Editor.definirTexto('outra nota, aberta da lista');
-    check('abrir outra nota depois de escrever: nao sobra o que desfazer', App.Editor.desfazer() === false);
+    App.Editor.setText('outra nota, aberta da lista');
+    check('abrir outra nota depois de escrever: nao sobra o que desfazer', App.Editor.undo() === false);
     check('... e o texto da nota aberta fica intacto',
-      App.Editor.texto() === 'outra nota, aberta da lista', App.Editor.texto());
+      App.Editor.getText() === 'outra nota, aberta da lista', App.Editor.getText());
   }
 
   console.log('39e. Nota longa: os colchetes comuns acompanham o que esta na tela');
@@ -1920,7 +1922,7 @@ function enterEm(App, w, conteudo, em) {
     const linhas = ['[[comeco]] e o resto da primeira linha'];
     for (let i = 0; i < 3000; i++) linhas.push(`linha ${i} com texto suficiente pra nota ficar grande de verdade`);
     linhas.push('[[fim]]');
-    App.Editor.definirTexto(linhas.join('\n'));
+    App.Editor.setText(linhas.join('\n'));
 
     check('o editor tem so uma parte da nota na tela', view.viewport.to < view.state.doc.length,
       `viewport ate ${view.viewport.to} de ${view.state.doc.length}`);
@@ -1958,7 +1960,7 @@ function enterEm(App, w, conteudo, em) {
     // Agora o comando do app entra em Prec.highest, e e isto aqui que prova que ele chega la.
     const enter = (conteudo, em) => enterEm(App, w, conteudo, em);
 
-    check('o editor do teste e o CM6, nao o textarea', App.Editor.ativo() === 'cm6');
+    check('o editor do teste e o CM6, nao o textarea', App.Editor.kind() === 'cm6');
 
     let r = enter('- [ ] comprar pao', 17);
     check('tarefa com texto: a linha nova nasce tarefa, cursor depois da caixinha',
@@ -1976,7 +1978,7 @@ function enterEm(App, w, conteudo, em) {
     // encerra. Era o que o app fazia de verdade enquanto esta suite achava que nao: o binding do
     // commit 5f96e08 nunca rodou, porque o Enter do markdown() esta em Prec.high.
     {
-      App.Editor.definirTexto('- [ ] comprar pao');
+      App.Editor.setText('- [ ] comprar pao');
       view.dispatch({ selection: { anchor: 17 } });
       apertarEnter(w, view);
       check('primeiro Enter: nasce uma segunda tarefa vazia',
@@ -1985,7 +1987,7 @@ function enterEm(App, w, conteudo, em) {
       check('segundo Enter na tarefa vazia: encerra a lista de uma vez, sem linha em branco no meio',
         view.state.doc.toString() === '- [ ] comprar pao\n', view.state.doc.toString());
 
-      App.Editor.definirTexto('- item');
+      App.Editor.setText('- item');
       view.dispatch({ selection: { anchor: 6 } });
       apertarEnter(w, view);
       apertarEnter(w, view);
@@ -2026,10 +2028,10 @@ function enterEm(App, w, conteudo, em) {
     const { App } = await boot({ editor: true });
     const view = App.Editor._impl.view;
     const formatar = (texto, de, ate, nome) => {
-      App.Editor.definirTexto(texto);
+      App.Editor.setText(texto);
       view.dispatch({ selection: { anchor: de, head: ate } });
-      App.Editor.formatar(nome);
-      return App.Editor.texto();
+      App.Editor.format(nome);
+      return App.Editor.getText();
     };
 
     check('negrito envolve a selecao', formatar('uma palavra', 4, 11, 'bold') === 'uma **palavra**');
@@ -2050,18 +2052,18 @@ function enterEm(App, w, conteudo, em) {
     // ganhar o marcador
     {
       const notaComQuebra = 'compra\nleite\n';
-      App.Editor.definirTexto(notaComQuebra);
+      App.Editor.setText(notaComQuebra);
       view.dispatch({ selection: { anchor: 0, head: notaComQuebra.length } });
-      App.Editor.formatar('quote');
+      App.Editor.format('quote');
       check('selecao ate o fim do texto nao marca a linha vazia que a quebra final cria',
-        App.Editor.texto() === '> compra\n> leite\n', App.Editor.texto());
+        App.Editor.getText() === '> compra\n> leite\n', App.Editor.getText());
     }
 
     // Sem selecao, o negrito precisa deixar a selecao no miolo (em cima de "texto"), senao quem
     // digitar em seguida escreve fora dos asteriscos
-    App.Editor.definirTexto('vazio');
+    App.Editor.setText('vazio');
     view.dispatch({ selection: { anchor: 5, head: 5 } });
-    App.Editor.formatar('bold');
+    App.Editor.format('bold');
     const sel = view.state.selection.main;
     check('sem selecao a marcacao fica selecionada, nao so o cursor no fim',
       view.state.doc.sliceString(sel.from, sel.to) === 'texto',
@@ -2072,9 +2074,9 @@ function enterEm(App, w, conteudo, em) {
     // A selecao armada aqui (a frase inteira) e de proposito diferente da selecao final esperada
     // (so o texto, sem as marcas): se o codigo nao somar antes.length certinho, ou nao mexer na
     // selecao, o resultado nao bate nem no texto nem na posicao
-    App.Editor.definirTexto('uma palavra');
+    App.Editor.setText('uma palavra');
     view.dispatch({ selection: { anchor: 0, head: 11 } });
-    App.Editor.formatar('bold');
+    App.Editor.format('bold');
     const sel2 = view.state.selection.main;
     check('com selecao mais ampla que o esperado, a selecao final encolhe pro texto formatado, sem as marcas',
       view.state.doc.sliceString(sel2.from, sel2.to) === 'uma palavra' && sel2.from === 2 && sel2.to === 13,
@@ -2084,16 +2086,16 @@ function enterEm(App, w, conteudo, em) {
     // Os dois caminhos do formatar (wrap e marcador de linha) retornam em pontos diferentes do
     // codigo, entao os dois precisam ser conferidos.
     view.contentDOM.blur();
-    App.Editor.definirTexto('uma linha');
+    App.Editor.setText('uma linha');
     view.dispatch({ selection: { anchor: 3, head: 3 } });
-    App.Editor.formatar('heading');
+    App.Editor.format('heading');
     check('o foco volta pro editor depois de formatar por marcador de linha (senao o teclado fecha)',
       view.hasFocus);
 
     view.contentDOM.blur();
-    App.Editor.definirTexto('uma palavra');
+    App.Editor.setText('uma palavra');
     view.dispatch({ selection: { anchor: 4, head: 11 } });
-    App.Editor.formatar('bold');
+    App.Editor.format('bold');
     check('o foco volta pro editor depois de formatar por wrap (senao o teclado fecha)',
       view.hasFocus);
 
@@ -2102,12 +2104,12 @@ function enterEm(App, w, conteudo, em) {
     // trecho. No celular isso e tocar em lista e ver o cursor pular pra antes do marcador, longe
     // de onde se estava escrevendo.
     const cursorDepoisDe = (texto, pos, nome) => {
-      App.Editor.definirTexto(texto);
+      App.Editor.setText(texto);
       view.dispatch({ selection: { anchor: pos, head: pos } });
-      App.Editor.formatar(nome);
+      App.Editor.format(nome);
       const linha = view.state.doc.lineAt(view.state.selection.main.head);
       return {
-        texto: App.Editor.texto(),
+        texto: App.Editor.getText(),
         coluna: view.state.selection.main.head - linha.from,
         linha: linha.number,
       };
@@ -2143,15 +2145,15 @@ function enterEm(App, w, conteudo, em) {
 
     // Varias linhas de uma vez: a segunda linha so cai no lugar certo se o deslocamento das
     // anteriores for somado
-    App.Editor.definirTexto('uma\ndois\ntres');
+    App.Editor.setText('uma\ndois\ntres');
     view.dispatch({ selection: { anchor: 1, head: 10 } });
-    App.Editor.formatar('quote');
+    App.Editor.format('quote');
     const selFinal = view.state.selection.main;
     const linhaFinal = view.state.doc.lineAt(selFinal.head);
     check('selecao de tres linhas: as pontas acompanham o texto que se moveu',
-      App.Editor.texto() === '> uma\n> dois\n> tres' && selFinal.anchor === 3
+      App.Editor.getText() === '> uma\n> dois\n> tres' && selFinal.anchor === 3
       && linhaFinal.number === 3 && selFinal.head - linhaFinal.from === 3,
-      { texto: App.Editor.texto(), anchor: selFinal.anchor, head: selFinal.head });
+      { texto: App.Editor.getText(), anchor: selFinal.anchor, head: selFinal.head });
   }
 
   console.log('41b. O teclado do celular sobe a primeira letra da frase');
@@ -2169,8 +2171,8 @@ function enterEm(App, w, conteudo, em) {
   {
     const { App, w } = await boot({ editor: true });
     App._embedInfo.set('foto.png', { url: 'blob:x', width: 800, height: 400 });
-    App.Editor.definirTexto('antes\n![[foto.png]]\ndepois');
-    const mudou = App.Editor.decorarEmbeds((linha) => App.embedDaLinha(linha));
+    App.Editor.setText('antes\n![[foto.png]]\ndepois');
+    const mudou = App.Editor.decorateEmbeds((linha) => App.embedForLine(linha));
     check('a decoracao disse que mudou algo', mudou === true);
 
     const linhas = [...w.document.querySelectorAll('.cm-line')];
@@ -2184,8 +2186,8 @@ function enterEm(App, w, conteudo, em) {
     // Medido: editar uma linha ANTES da foto desloca o offset dela no documento, e a assinatura
     // (que leva a posicao) acusa mudanca corretamente ali, entao o teste evita esse caso pra isolar
     // o que quer provar
-    App.Editor.definirTexto('antes\n![[foto.png]]\ndepois editado');
-    const mudouOutraLinha = App.Editor.decorarEmbeds((linha) => App.embedDaLinha(linha));
+    App.Editor.setText('antes\n![[foto.png]]\ndepois editado');
+    const mudouOutraLinha = App.Editor.decorateEmbeds((linha) => App.embedForLine(linha));
     check('editar uma linha depois da foto nao acusa mudanca (mesma posicao, mesmo estilo)',
       mudouOutraLinha === false, mudouOutraLinha);
     check('a foto continua desenhada depois de editar outra linha',
@@ -2195,7 +2197,7 @@ function enterEm(App, w, conteudo, em) {
     // so o estilo muda. Contar decoracoes nao bastaria pra pegar isso (armadilha do brief); a
     // assinatura tem que levar o estilo, nao so a posicao
     App._embedInfo.set('foto.png', { url: 'blob:novo', width: 800, height: 400 });
-    const mudouTrocaDeFoto = App.Editor.decorarEmbeds((linha) => App.embedDaLinha(linha));
+    const mudouTrocaDeFoto = App.Editor.decorateEmbeds((linha) => App.embedForLine(linha));
     check('trocar a foto por outra do mesmo tamanho e detectado como mudanca de verdade',
       mudouTrocaDeFoto === true, mudouTrocaDeFoto);
 
@@ -2203,23 +2205,23 @@ function enterEm(App, w, conteudo, em) {
     // nada, so a resposta de infoDaLinha. E por isso que o campo se refaz por StateEffect, nao so
     // quando o documento muda
     // Medido: a decoracao que havia (a da troca de foto, acima) some, e isso e uma mudanca real na
-    // tela (o espaco da foto fecha), entao decorarEmbeds acusa mudou=true aqui tambem, nao so
+    // tela (o espaco da foto fecha), entao decorateEmbeds acusa mudou=true aqui tambem, nao so
     // quando uma decoracao aparece
     App._embedInfo.delete('foto.png');
-    App.Editor.definirTexto('antes\n![[foto.png]]\ndepois');
-    let semMedidaAinda = App.Editor.decorarEmbeds((linha) => App.embedDaLinha(linha));
+    App.Editor.setText('antes\n![[foto.png]]\ndepois');
+    let semMedidaAinda = App.Editor.decorateEmbeds((linha) => App.embedForLine(linha));
     check('sem medida ainda, nenhuma linha decorada, e o sumico da decoracao anterior conta como mudanca',
       w.document.querySelectorAll('.cm-line.embed-line').length === 0 && semMedidaAinda === true,
       semMedidaAinda);
 
     App._embedInfo.set('foto.png', { url: 'blob:chegou-depois', width: 800, height: 400 });
-    const medidaChegouDepois = App.Editor.decorarEmbeds((linha) => App.embedDaLinha(linha));
+    const medidaChegouDepois = App.Editor.decorateEmbeds((linha) => App.embedForLine(linha));
     check('a medida chegando depois decora sozinha, sem o texto ter mudado',
       medidaChegouDepois === true && w.document.querySelectorAll('.cm-line.embed-line').length === 1,
       medidaChegouDepois);
 
-    App.Editor.definirTexto('so texto');
-    App.Editor.decorarEmbeds((linha) => App.embedDaLinha(linha));
+    App.Editor.setText('so texto');
+    App.Editor.decorateEmbeds((linha) => App.embedForLine(linha));
     check('sem embed, nenhuma linha decorada',
       w.document.querySelectorAll('.cm-line.embed-line').length === 0);
   }
@@ -2245,7 +2247,7 @@ function enterEm(App, w, conteudo, em) {
 
     App.setMode('edit');
     App._embedInfo.set('foto.png', { url: 'blob:x', width: 800, height: 400 });
-    App.Editor.definirTexto('antes\n![[foto.png]]\ndepois');
+    App.Editor.setText('antes\n![[foto.png]]\ndepois');
     view.contentDOM.blur();
     check('o editor esta sem foco, como quem abriu a nota e so rolou pra ler', !view.hasFocus);
     App.decorateEditorEmbeds();
@@ -2253,7 +2255,7 @@ function enterEm(App, w, conteudo, em) {
       w.document.querySelectorAll('.cm-line.embed-line').length === 1);
     check('sem foco, a foto que chegou nao joga a tela de volta pro cursor', rolagens === 0, rolagens);
 
-    App.Editor.focar();
+    App.Editor.focus();
     check('o editor esta em foco', view.hasFocus);
     App._embedInfo.set('foto.png', { url: 'blob:outra', width: 800, height: 400 });
     App.decorateEditorEmbeds();
@@ -2264,20 +2266,20 @@ function enterEm(App, w, conteudo, em) {
   console.log('43. Botoes de desfazer e refazer na barra');
   {
     const { App, w } = await boot({ editor: true });
-    App.Editor.definirTexto('base');
-    cm6Digitar(App, ' mais');
+    App.Editor.setText('base');
+    cm6Type(App, ' mais');
     const desfazer = w.document.querySelector('.toolbar-btn[data-history="undo"]');
     const refazer = w.document.querySelector('.toolbar-btn[data-history="redo"]');
     check('os dois botoes existem na barra', !!desfazer && !!refazer);
     desfazer.dispatchEvent(new w.Event('click', { bubbles: true }));
-    check('o botao desfez', App.Editor.texto() === 'base', App.Editor.texto());
+    check('o botao desfez', App.Editor.getText() === 'base', App.Editor.getText());
     refazer.dispatchEvent(new w.Event('click', { bubbles: true }));
-    check('o botao refez', App.Editor.texto() === 'base mais', App.Editor.texto());
+    check('o botao refez', App.Editor.getText() === 'base mais', App.Editor.getText());
   }
 
   console.log('43b. Desfazer sem nada pra desfazer nao suja a nota');
   {
-    // Nota recem aberta: a pilha esta vazia. Sem olhar o retorno de desfazer(), o botao marcava a
+    // Nota recem aberta: a pilha esta vazia. Sem olhar o retorno de undo(), o botao marcava a
     // nota como suja de qualquer jeito, e trinta segundos depois o autosave gravava no Drive com o
     // updated de hoje sem uma unica edicao ter acontecido
     const { App, w } = await boot({ editor: true });
@@ -2291,14 +2293,14 @@ function enterEm(App, w, conteudo, em) {
     check('desfazer sem nada pra desfazer nao suja a nota', App.isDirty === false, App.isDirty);
     refazer.dispatchEvent(new w.Event('click', { bubbles: true }));
     check('refazer sem nada pra refazer tambem nao', App.isDirty === false, App.isDirty);
-    check('e o texto continua o que foi aberto', App.Editor.texto() === NOTA, App.Editor.texto());
+    check('e o texto continua o que foi aberto', App.Editor.getText() === NOTA, App.Editor.getText());
 
     // E o botao continua marcando quando desfaz de verdade
-    cm6Digitar(App, ' novo');
+    cm6Type(App, ' novo');
     App.isDirty = false;
     desfazer.dispatchEvent(new w.Event('click', { bubbles: true }));
     check('desfazer de verdade marca a nota como nao salva', App.isDirty === true);
-    check('... e desfez mesmo', App.Editor.texto() === NOTA, App.Editor.texto());
+    check('... e desfez mesmo', App.Editor.getText() === NOTA, App.Editor.getText());
 
     // A pilha do desfazer nao pode atravessar a troca de nota. A edicao da nota A aqui e uma
     // DELECAO (sair de uma lista de um item), que e o caso que sobrevivia ao remapeamento: desfazer
@@ -2310,11 +2312,11 @@ function enterEm(App, w, conteudo, em) {
     apertarEnter(w, view);
     apertarEnter(w, view);
     check('na nota A, sair da lista deixou uma delecao pra tras',
-      App.Editor.texto() === '- [ ] comprar pao\n', App.Editor.texto());
+      App.Editor.getText() === '- [ ] comprar pao\n', App.Editor.getText());
     App.setContent(NOTA_B);
-    check('nota B aberta e limpa', App.isDirty === false && App.Editor.texto() === NOTA_B, App.Editor.texto());
+    check('nota B aberta e limpa', App.isDirty === false && App.Editor.getText() === NOTA_B, App.Editor.getText());
     desfazer.dispatchEvent(new w.Event('click', { bubbles: true }));
-    check('desfazer na nota B nao traz pedaco da nota A', App.Editor.texto() === NOTA_B, App.Editor.texto());
+    check('desfazer na nota B nao traz pedaco da nota A', App.Editor.getText() === NOTA_B, App.Editor.getText());
     check('... e a nota B continua limpa, entao o autosave nao tem o que gravar', App.isDirty === false);
   }
 
@@ -2327,7 +2329,7 @@ function enterEm(App, w, conteudo, em) {
     // Prec.highest, acima do Enter que o markdown() instala em Prec.high
     const enter = (conteudo, em) => enterEm(App, w, conteudo, em);
 
-    check('o editor do teste e o CM6, nao o textarea', App.Editor.ativo() === 'cm6');
+    check('o editor do teste e o CM6, nao o textarea', App.Editor.kind() === 'cm6');
 
     let r = enter('> citacao', 9);
     check('citacao com texto: o Enter continua a citacao', r.text === '> citacao\n> ' && r.at === '1:2', r);
@@ -2356,7 +2358,7 @@ function enterEm(App, w, conteudo, em) {
     // Com um trecho selecionado, o Enter e o da biblioteca: ele troca a selecao pela linha nova.
     // O comando de encerrar citacao olhava so a linha do cursor e ignorava a selecao, entao apagava
     // o `> ` e deixava o trecho selecionado na nota: o Enter da pessoa sumia no caminho.
-    App.Editor.definirTexto('> um\n> dois\n> ');
+    App.Editor.setText('> um\n> dois\n> ');
     view.dispatch({ selection: { anchor: 2, head: 14 } });
     apertarEnter(w, view);
     check('Enter com trecho selecionado substitui a selecao, em vez de so encerrar a citacao',
@@ -2394,7 +2396,7 @@ function enterEm(App, w, conteudo, em) {
     };
 
     const lista = d.querySelector('.toolbar-btn[data-format="list"]');
-    App.Editor.definirTexto('uma linha');
+    App.Editor.setText('uma linha');
     App.Editor._impl.view.dispatch({ selection: { anchor: 9, head: 9 } });
 
     const comeco = toque(lista, 'touchstart', 100, 700);
@@ -2403,36 +2405,36 @@ function enterEm(App, w, conteudo, em) {
       !comeco.defaultPrevented);
     check('o fim do toque e cancelado: e o que segura o teclado aberto', fim.defaultPrevented);
     check('dedo parado em cima do botao: a formatacao acontece',
-      App.Editor.texto() === '- uma linha', App.Editor.texto());
+      App.Editor.getText() === '- uma linha', App.Editor.getText());
 
     // Arrastar em cima do botao e rolar a barra, nao tocar nele
-    App.Editor.definirTexto('outra linha');
+    App.Editor.setText('outra linha');
     toque(lista, 'touchstart', 100, 700);
     toque(lista, 'touchend', 160, 704);
     check('dedo arrastado de lado em cima do botao nao formata nada',
-      App.Editor.texto() === 'outra linha', App.Editor.texto());
+      App.Editor.getText() === 'outra linha', App.Editor.getText());
 
     // Um tremor de dedo continua sendo toque
     toque(lista, 'touchstart', 100, 700);
     toque(lista, 'touchend', 104, 703);
-    check('tremida de dedo ainda e toque', App.Editor.texto() === '- outra linha', App.Editor.texto());
+    check('tremida de dedo ainda e toque', App.Editor.getText() === '- outra linha', App.Editor.getText());
 
     // O navegador que assume a rolagem manda touchcancel e nunca chega ao touchend: o proximo
     // toque nao pode herdar a posicao do gesto abandonado
-    App.Editor.definirTexto('mais uma');
+    App.Editor.setText('mais uma');
     toque(lista, 'touchstart', 100, 700);
     toque(lista, 'touchcancel', 300, 700);
     toque(lista, 'touchend', 300, 700);
     check('gesto que virou rolagem nao formata quando o dedo larga longe',
-      App.Editor.texto() === 'mais uma', App.Editor.texto());
+      App.Editor.getText() === 'mais uma', App.Editor.getText());
 
     // O mouse continua no clique, e sem roubar o foco do editor
-    App.Editor.definirTexto('no mouse');
+    App.Editor.setText('no mouse');
     const abaixou = new w.Event('mousedown', { cancelable: true, bubbles: true });
     lista.dispatchEvent(abaixou);
     lista.click();
     check('no mouse o clique formata, e o mousedown e cancelado pra nao tirar o foco',
-      App.Editor.texto() === '- no mouse' && abaixou.defaultPrevented, App.Editor.texto());
+      App.Editor.getText() === '- no mouse' && abaixou.defaultPrevented, App.Editor.getText());
 
     // A camera e a galeria abrem o seletor de dentro do toque, e o desenho abre a tela cheia:
     // os dois passam pelo mesmo caminho, entao um toque neles tambem tem que agir
