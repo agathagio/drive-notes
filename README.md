@@ -15,9 +15,10 @@ Então fiz o meu. Hoje é por ele que eu leio e escrevo no vault quando estou lo
 ## Telas
 
 <p>
-  <img src="docs/screenshots/inicio.png" alt="Tela inicial com notas não sincronizadas e recentes" width="240">
-  <img src="docs/screenshots/pastas.png" alt="Navegador de pastas do vault" width="240">
-  <img src="docs/screenshots/leitura.png" alt="Modo leitura com callouts, links e checklist" width="240">
+  <img src="docs/screenshots/inicio.png" alt="Tela inicial com notas não sincronizadas e recentes" width="200">
+  <img src="docs/screenshots/pastas.png" alt="Navegador de pastas do vault" width="200">
+  <img src="docs/screenshots/leitura.png" alt="Modo leitura com callouts, links e checklist" width="200">
+  <img src="docs/screenshots/edicao.png" alt="Edição com o markdown da nota e a barra de formatação" width="200">
 </p>
 
 ## O que faz
@@ -36,6 +37,7 @@ Então fiz o meu. Hoje é por ele que eu leio e escrevo no vault quando estou lo
 - Datas no padrão do vault: nota nova nasce com `created` e `updated` nas propriedades, e salvar uma edição troca o `updated` pra data do dia. `created` nunca é inventado em nota antiga, e pastas como `_templates` e `_archive` ficam de fora.
 - Barra de formatação fixa acima do teclado virtual, sem fechar o teclado a cada toque.
 - Funciona com ditado por voz, e a página encolhe junto com o teclado pra ele não cobrir o texto.
+- Modo datilografia: a linha que se escreve para no meio da tela e o texto sobe uma linha por vez, em vez de afundar até a borda do teclado.
 - Foto direto na nota, com um botão pra câmera e outro pra galeria: a imagem é reduzida no aparelho, sobe pra pasta de anexos do vault e entra como `![[foto-...jpg]]`, do jeito que o Obsidian espera.
 - Na edição o texto é markdown cru, mas a linha do `![[foto.jpg]]` mostra a imagem embaixo: dá pra escrever olhando pro que se está descrevendo.
 - Desenhar na nota: tela cheia pra rabiscar com o dedo, seis cores, três espessuras, borracha e desfazer. Sai um PNG de fundo transparente, recortado no traço, que funciona tanto no tema escuro do app quanto no claro do Obsidian.
