@@ -28,6 +28,8 @@ const SETUP = `
   const FOLDER = 'application/vnd.google-apps.folder';
   const folders = ['_archive', '_inbox', '_media', '00-meta', '10-areas', '20-projetos'];
   const notes = ['00-estado-projeto.md', '01-core.md', 'guia-voz-geral.md', 'Uma nota com um nome bem comprido pra ver como a linha quebra no celular.md', 'voz-blue.md'];
+  // A pasta de cada nota: é ela que a lista do [[ mostra em letra menor debaixo do nome
+  const notesIn = ['ROOT', 'd5', 'd4', 'd3', 'd5'];
   window.fetch = async (url) => {
     const u = new URL(url); const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o });
     // The embedded image of the sample note: found by name, then downloaded as a blob
@@ -41,6 +43,12 @@ const SETUP = `
       { id: 's1', name: 'guia-de-voz-onryo.md', parents: ['d5'], mimeType: 'text/markdown', modifiedTime: new Date(now - 9e8).toISOString() },
       { id: 's2', name: 'Reunião 17 set.md', parents: ['d4'], mimeType: 'text/markdown', modifiedTime: new Date(now - 2e8).toISOString() },
     ] });
+    // The note index lists the whole Drive by type: the folders, then every markdown file
+    const byType = /^mimeType = '([^']+)' and trashed = false$/.exec(u.searchParams.get('q') || '');
+    if (byType) return ok({ files: byType[1] === FOLDER
+      ? folders.map((name, i) => ({ id: 'd' + i, name, mimeType: FOLDER, parents: ['ROOT'] }))
+      : notes.map((name, i) => ({ id: 'n' + i, name, mimeType: 'text/markdown', parents: [notesIn[i]],
+          modifiedTime: new Date(now - i * i * 40e6 - 5e6).toISOString() })) });
     const dir = /files\\/d(\\d)$/.exec(u.pathname);
     if (dir) return ok({ id: 'd' + dir[1], name: folders[dir[1]], parents: ['ROOT'] });
     if (u.searchParams.get('alt') === 'media') return ok(${JSON.stringify(NOTE)});
@@ -92,6 +100,16 @@ const SETUP = `
     // foco, pra tela nao pular sozinha pra quem abriu a nota so pra ler
     await js(`__App.Editor.focus(); __App.Editor.moveCaretToEnd(); __App.Editor.scrollToCaret(); 'ok'`);
     await shot('5b-edicao-imagem');
+    // A lista de notas do [[: o cursor no fim do parágrafo, e o texto entra pelo caminho do teclado
+    // (é o `input` do navegador que aciona a lista, como no celular)
+    await js(`__App.Editor.focus();
+      (() => { const view = __App.Editor._impl.view; const line = view.state.doc.line(8);
+        view.dispatch({ selection: { anchor: line.to }, scrollIntoView: true }); })(); 'ok'`);
+    await send('Input.insertText', { text: ' [[vo' });
+    await sleep(900);
+    await shot('5c-link-list');
+    // A nota volta ao que era, pra lista não sobrar nas telas seguintes
+    await js(`__App.Editor.closeLinkList(); __App.setContent(${JSON.stringify(NOTE)}); 'ok'`);
     await js(`__App.promptRename(); 'ok'`);
     await shot('6-renomear');
     await js(`__App.hideModal(); __App.showConflict(__App.currentFile); 'ok'`);

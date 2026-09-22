@@ -23,6 +23,11 @@ import { history, undo, redo, defaultKeymap, historyKeymap } from '@codemirror/c
 import { markdown, markdownLanguage, insertNewlineContinueMarkupCommand } from '@codemirror/lang-markdown';
 import { syntaxHighlighting, HighlightStyle, syntaxTree } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
+// The link list ([[ opens the vault's note names). Only the completion itself: closeBrackets and the
+// rest of the package stay out, they change how typing behaves everywhere and not just in the link.
+// tooltips: the list floats above the keyboard only with position 'fixed' and the body as parent.
+import { autocompletion, startCompletion, closeCompletion, acceptCompletion, completionStatus, currentCompletions } from '@codemirror/autocomplete';
+import { tooltips } from '@codemirror/view';
 
 window.CM6 = {
   EditorView, ViewPlugin, StateField, StateEffect, Transaction, Prec, Compartment,
@@ -31,5 +36,7 @@ window.CM6 = {
   markdown, markdownLanguage, insertNewlineContinueMarkupCommand,
   syntaxHighlighting, HighlightStyle, syntaxTree,
   tags,
+  autocompletion, startCompletion, closeCompletion, acceptCompletion, completionStatus, currentCompletions,
+  tooltips,
   lineWrapping: EditorView.lineWrapping,
 };

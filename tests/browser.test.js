@@ -26,7 +26,11 @@ const FAKE_DRIVE = `
     const m = u.pathname.match(/files\\/([^/]+)$/);
     if (m) { const f = files[m[1]]; return u.searchParams.get('alt') === 'media' ? ok(f.content) : ok({ ...f, modifiedTime: 't1' }); }
     const q = u.searchParams.get('q') || ''; const parent = /^'([^']+)' in parents/.exec(q);
-    const list = Object.values(files).filter(f => parent ? f.parents.includes(parent[1]) : q.includes("'" + f.name + "'"));
+    // The note index lists the whole Drive by type: folders first, then every markdown file
+    const byType = /^mimeType = '([^']+)' and trashed = false$/.exec(q);
+    const list = Object.values(files).filter(f => parent ? f.parents.includes(parent[1])
+      : byType ? (f.mimeType || 'text/markdown') === byType[1]
+      : q.includes("'" + f.name + "'"));
     return ok({ files: list.map(f => ({ ...f, modifiedTime: '2026-09-19T10:00:00Z' })) });
   };
   CONFIG.VAULT_FOLDER_ID = 'ROOT';
@@ -648,6 +652,63 @@ const FAKE_DRIVE = `
     })()`));
     check('[texto](url), que e link de verdade, continua roxo e sublinhado',
       link.cor === ROXO && link.risco === 'underline', link);
+
+    console.log('13. A lista de notas do [[ na tela, e o toque num item');
+    // So aqui da pra provar: no jsdom o tooltip do CM6 existe no estado, mas nao tem posicao nem
+    // recebe toque (getBoundingClientRect devolve zeros). O que importa neste cenario e o que o
+    // dedo ve e o que o dedo faz: a lista desenhada, e o item tocado escrevendo o link SEM tirar o
+    // foco do editor, que no celular e o que decide se o teclado fecha (ver drive-notes-aprendizados).
+    await open(buildPage('link-list', currentApp));
+    await js(FAKE_DRIVE);
+    // Com nada digitado depois do [[ a lista mostra as recentes: sem elas nao haveria o que desenhar
+    await js(`__App.saveToRecents('N1', 'com link.md'); __App.saveToRecents('N2', 'destino.md'); 'ok'`);
+    await editNote('vai ', 0, 4);
+    // Pelo caminho do teclado, e nao por dispatch no estado: e o `input` do navegador que aciona o
+    // activateOnTyping da lista, e e esse caminho que o celular usa
+    await send('Input.insertText', { text: '[[' });
+    const itens = `[...document.querySelectorAll('.cm-tooltip-autocomplete li')]`;
+    const apareceu = await esperar(`${itens}.length >= 2`);
+    check('digitar [[ desenha a lista na tela, com as recentes', apareceu === true,
+      await js(`JSON.stringify(${itens}.map(li => li.textContent))`));
+
+    await send('Input.insertText', { text: 'de' });
+    const filtrou = await esperar(`${itens}.length === 1 && ${itens}[0].textContent.includes('destino')`);
+    check('digitar filtra ate sobrar destino', filtrou === true, await js(`JSON.stringify(${itens}.map(li => li.textContent))`));
+
+    // O cromo do app em cima do da biblioteca: o tema do @codemirror/autocomplete manda
+    // `font-family: monospace` na lista (e o mesmo seletor que o style.css usa, entao quem ganha
+    // e quem vem depois). Se o CSS do app nao pegar, a lista sai branca e em fonte de codigo.
+    const cromo = JSON.parse(await js(`(() => {
+      const caixa = document.querySelector('.cm-tooltip-autocomplete');
+      const ul = caixa.querySelector('ul'); const li = ul.querySelector('li');
+      return JSON.stringify({ fonte: getComputedStyle(ul).fontFamily, fundo: getComputedStyle(caixa).backgroundColor,
+        altura: Math.round(li.getBoundingClientRect().height), recuo: getComputedStyle(li).paddingLeft,
+        detalhe: getComputedStyle(li.querySelector('.cm-completionDetail')).fontSize });
+    })()`));
+    check('a lista veste o cromo do app: fonte de interface, fundo escuro, item de 44px e a pasta em letra menor',
+      cromo.fonte.includes('Figtree') && !cromo.fonte.includes('monospace')
+      && cromo.fundo === 'rgb(36, 34, 41)' && cromo.altura >= 44 && cromo.recuo === '14px'
+      && cromo.detalhe === '12px', cromo);
+
+    // O print do meio: a lista aberta, com o cromo do app
+    {
+      const { data } = (await send('Page.captureScreenshot', { format: 'png' })).result;
+      fs.mkdirSync(path.join(ROOT, 'tests', '.tmp'), { recursive: true });
+      fs.writeFileSync(path.join(ROOT, 'tests', '.tmp', 'link-list-aberta.png'), Buffer.from(data, 'base64'));
+    }
+
+    const item = JSON.parse(await js(`(() => { const b = ${itens}[0].getBoundingClientRect();
+      return JSON.stringify({ x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) }); })()`));
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: item.x, y: item.y, button: 'left', clickCount: 1 });
+    }
+    const escolheu = await esperar(`__App.getContent() === 'vai [[destino]]'`);
+    check('tocar no item escreve o link e fecha a lista',
+      escolheu === true && await js(`!document.querySelector('.cm-tooltip-autocomplete')`) === true,
+      await js('__App.getContent()'));
+    check('o foco continua no editor: no celular, o teclado nao fecharia',
+      await js(`document.activeElement === document.querySelector('.cm-content')`) === true,
+      await js(`document.activeElement ? document.activeElement.className : null`));
   } finally {
     browser.close();
   }

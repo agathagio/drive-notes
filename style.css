@@ -280,6 +280,54 @@ body {
   color: var(--text-secondary);
 }
 
+/* The note list of the `[[` (the @codemirror/autocomplete tooltip). It is fixed and hangs off the
+   body, which is why it gets the dialogs' chrome here instead of inheriting the editor's. Finger
+   target: 44px per item. Above the toolbar (50) and the dialogs (300): it is the topmost thing on
+   screen while it is open, and the back button closes it first.
+
+   The class is repeated on purpose. The library's base theme uses THE SAME selectors
+   (`.cm-tooltip.cm-tooltip-autocomplete > ul` and so on) and its stylesheet is injected at runtime,
+   so on equal specificity it wins and the list comes out in `font-family: monospace`. Measured in
+   scenario 13 of browser.test.js, which is what guards this. */
+.cm-tooltip.cm-tooltip-autocomplete.cm-tooltip-autocomplete {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  font-family: var(--font-ui);
+  z-index: 1001;
+}
+.cm-tooltip.cm-tooltip-autocomplete.cm-tooltip-autocomplete > ul {
+  max-height: 40vh;
+  min-width: 240px;
+  max-width: calc(100vw - 32px);
+  font-family: var(--font-ui);
+}
+.cm-tooltip.cm-tooltip-autocomplete.cm-tooltip-autocomplete > ul > li {
+  padding: 10px 14px;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  color: var(--text-primary);
+  font-size: 15px;
+}
+.cm-tooltip.cm-tooltip-autocomplete.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: var(--accent);
+  color: var(--bg-primary);
+}
+.cm-tooltip.cm-tooltip-autocomplete.cm-tooltip-autocomplete .cm-completionDetail {
+  font-style: normal;
+  font-size: 12px;
+  margin-left: 0;
+  color: var(--text-secondary);
+}
+.cm-tooltip.cm-tooltip-autocomplete.cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionDetail {
+  color: var(--bg-primary);
+  opacity: 0.8;
+}
+
 /* Fallback textarea (if the CodeMirror bundle fails to load) */
 .editor-fallback {
   flex: 1 1 0;

@@ -16,6 +16,8 @@ const FOLDER = 'application/vnd.google-apps.folder';
 const bodyOf = (content) => content.replace(/^---\n[\s\S]*?\n---\n\n?/, '');
 // The browser and the attachment folder hang off whatever vault the app is configured with
 const VAULT = /VAULT_FOLDER_ID: '([^']+)'/.exec(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8'))[1];
+// Where a new note is born: the note index puts it in only if the folder answers a trail
+const INBOX = /DEFAULT_FOLDER_ID: '([^']+)'/.exec(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8'))[1];
 
 function makeDrive() {
   const drive = {
@@ -41,6 +43,15 @@ function makeDrive() {
         if (drive.failReads) return json({}, 500);
         const files = [...drive.files.values()].filter(f => !f.trashed && f.parents.includes(parent[1]))
           .map(f => ({ id: f.id, name: f.name, mimeType: f.mimeType || 'text/markdown', modifiedTime: f.modifiedTime }));
+        return json({ files });
+      }
+      // The index of titles lists the whole Drive by type: folders first, then every markdown file
+      const byType = /^mimeType = '([^']+)' and trashed = false$/.exec(q);
+      if (byType) {
+        drive.log.push(`LIST-TYPE ${byType[1]}`);
+        if (drive.failReads) return json({}, 500);
+        const files = [...drive.files.values()].filter(f => !f.trashed && (f.mimeType || 'text/markdown') === byType[1])
+          .map(f => ({ id: f.id, name: f.name, parents: f.parents, mimeType: f.mimeType || 'text/markdown', modifiedTime: f.modifiedTime }));
         return json({ files });
       }
       if (q.includes(' contains ')) {
@@ -946,7 +957,8 @@ function enterEm(App, w, conteudo, em) {
     dir('d-proj', '20-projetos', VAULT); dir('d-inbox', '_inbox', VAULT); dir('d-obs', '.obsidian', VAULT); dir('d-10', '10-areas', VAULT); dir('d-2', '2-rascunho', VAULT);
     drive.put('n-z', 'zebra.md', 'z', [VAULT]); drive.put('n-a', 'Abacaxi.md', 'a', [VAULT]); drive.put('n-e', 'émile.md', 'e', [VAULT]);
     drive.put('n-img', 'foto.png', 'bin', [VAULT]); drive.files.get('n-img').mimeType = 'image/png';
-    drive.put('n-txt', 'lista.txt', 't', [VAULT]);
+    // The Drive types a .txt as text/plain, and the note index only lists text/markdown
+    drive.put('n-txt', 'lista.txt', 't', [VAULT]); drive.files.get('n-txt').mimeType = 'text/plain';
     drive.put('n-sub', 'nota do projeto.md', '# dentro', ['d-proj']);
   };
 
@@ -2513,8 +2525,10 @@ function enterEm(App, w, conteudo, em) {
 
     App.Editor.setText('');
     App.applyFormat('wikilink');
-    check('sem selecao entra [[texto]] com "texto" ja selecionado, pra digitar por cima',
-      App.Editor.getText() === '[[texto]]' && sel() === '2,7', { texto: App.Editor.getText(), sel: sel() });
+    // Mudou com a lista de notas (v39): o link nasce vazio, cursor no meio, e a lista abre em cima
+    // dele. Um "texto" de enfeite filtraria a lista ate nao sobrar nada. Ver o cenario 55.
+    check('sem selecao entra [[]] com o cursor no meio, pra lista filtrar do zero',
+      App.Editor.getText() === '[[]]' && sel() === '2,2', { texto: App.Editor.getText(), sel: sel() });
 
     App.Editor.setText('etiqueta');
     view.dispatch({ selection: { anchor: 0, head: 8 } });
@@ -2757,6 +2771,156 @@ function enterEm(App, w, conteudo, em) {
       && drive.files.get('D').content === 'mexeram no PC'
       && App.els.saveStatus.textContent === 'Conflito com o Drive',
       [semSave, drive.files.get('W').trashed, App.els.saveStatus.textContent]);
+  }
+
+  console.log('54. Indice de titulos: monta do Drive, guarda no aparelho, filtra e ordena');
+  {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    drive.put('n-old', 'antiga.md', 'x', ['d-proj']); drive.files.get('n-old').modifiedTime = '2026-01-01T00:00:00.000Z';
+    drive.put('n-fora', 'fora do vault.md', 'x', ['outra-pasta']);
+    drive.put('n-obs', 'workspace.md', 'x', ['d-obs']);
+
+    const notes = await App.noteIndex();
+    const names = notes.map(n => n.name).sort();
+    check('indice tem as notas .md do vault, sem .obsidian, sem fora do vault, sem png nem txt',
+      JSON.stringify(names) === JSON.stringify(['Abacaxi.md', 'antiga.md', 'nota do projeto.md', 'zebra.md', 'émile.md'].sort()), names);
+    check('pasta em texto: raiz e vault, subpasta e o nome dela',
+      notes.find(n => n.id === 'n-z').where === 'vault' && notes.find(n => n.id === 'n-sub').where === '20-projetos');
+    check('duas listagens, nenhuma ida pasta a pasta',
+      drive.log.filter(l => l.startsWith('LIST-TYPE')).length === 2 && drive.log.filter(l => l.startsWith('GET meta')).length === 0, drive.log);
+    const stored = JSON.parse(w.localStorage.getItem('drivenotes_note_index'));
+    check('guardado no aparelho com a hora', Array.isArray(stored.notes) && stored.notes.length === 5 && typeof stored.builtAt === 'number');
+
+    // filtro: sem acento, sem maiuscula, comeca-com antes de contem, recente primeiro
+    check('"ab" acha Abacaxi', App.searchNoteIndex('ab').map(n => n.name).join() === 'Abacaxi.md');
+    check('"emile" acha émile', App.searchNoteIndex('emile').map(n => n.name).join() === 'émile.md');
+    const nota = App.searchNoteIndex('nota').map(n => n.name);
+    check('"nota" acha nota do projeto', nota.join() === 'nota do projeto.md', nota);
+    drive.files.get('n-a').modifiedTime = '2026-09-01T00:00:00.000Z';
+    await App.refreshNoteIndex();
+    const a = App.searchNoteIndex('a').map(n => n.name);
+    check('"a": comeca-com (Abacaxi, antiga) antes de contem (zebra, nota do projeto), recente primeiro dentro do grupo',
+      a[0] === 'Abacaxi.md' && a[1] === 'antiga.md' && a.slice(2).sort().join() === ['nota do projeto.md', 'zebra.md'].sort().join(), a);
+    check('nada digitado: as recentes que estao no indice', (() => {
+      w.localStorage.setItem('drivenotes_recents', JSON.stringify([{ id: 'n-sub', name: 'nota do projeto.md', timestamp: 1 }, { id: 'n-fora', name: 'fora do vault.md', timestamp: 1 }]));
+      return App.searchNoteIndex('').map(n => n.id).join() === 'n-sub';
+    })());
+
+    // sessao seguinte (janela nova, w2): abre da copia guardada na hora e atualiza por tras
+    const storedIndex = w.localStorage.getItem('drivenotes_note_index');
+    const { App: App2, drive: drive2, w: w2 } = await boot({ seedStorage: { drivenotes_note_index: storedIndex } });
+    seedVault(drive2);
+    // A pasta onde nota nova nasce (DEFAULT_FOLDER_ID) precisa existir no Drive falso, dentro do vault,
+    // pro folderTrail dela responder quando o createOnDrive puser a nota no indice
+    drive2.put(INBOX, '_inbox', '', [VAULT]); drive2.files.get(INBOX).mimeType = FOLDER;
+    drive2.put('n-new', 'nova.md', 'x', [VAULT]);
+    drive2.delay = 50;
+    const first = await App2.noteIndex();
+    check('copia guardada responde na hora, sem esperar o Drive', first.length === 5 && !first.find(n => n.id === 'n-new'));
+    await sleep(300);
+    check('a atualizacao por tras trouxe a nota nova', App2._noteIndex.find(n => n.id === 'n-new') && drive2.log.filter(l => l.startsWith('LIST-TYPE')).length === 2);
+
+    // o app mantem o indice em dia com o que ele mesmo faz
+    App2.noteIndexRename('n-new', 'renomeada.md');
+    check('renomear muda o nome no indice', App2._noteIndex.find(n => n.id === 'n-new').name === 'renomeada.md');
+    App2.noteIndexRemove('n-new');
+    check('apagar tira do indice', !App2._noteIndex.find(n => n.id === 'n-new'));
+    await App2.noteIndexAdd({ id: 'n-add', name: 'criada.md', parents: ['d-proj'], modifiedTime: '2026-09-22T00:00:00.000Z' });
+    const added = App2._noteIndex.find(n => n.id === 'n-add');
+    check('nota criada entra com a pasta em texto', added && added.where === '20-projetos', added);
+    // 5 no Drive falso (4 do seedVault mais n-new), menos n-new apagada, mais n-add: 5.
+    // A contagem sozinha nao provaria nada (era 5 antes do par apagar/criar): os ids provam.
+    const guardado = JSON.parse(w2.localStorage.getItem('drivenotes_note_index')).notes;
+    check('o guardado acompanha', guardado.length === 5 && guardado.some(n => n.id === 'n-add')
+      && !guardado.some(n => n.id === 'n-new'), guardado.map(n => n.id));
+
+    // nota nova salva no Drive entra sozinha
+    App2.newFile(); App2.setContent('oi'); App2.markDirty();
+    await App2.save({ manual: true });
+    await sleep(100);
+    check('createOnDrive poe a nota no indice', App2._noteIndex.find(n => n.id === App2.currentFile.id), App2.currentFile.name);
+
+    // Drive fora do ar: o indice guardado continua servindo
+    const { App: App3, drive: drive3 } = await boot({ seedStorage: { drivenotes_note_index: storedIndex } });
+    drive3.failReads = true;
+    const third = await App3.noteIndex();
+    await sleep(50);
+    check('sem Drive, a copia guardada serve e nada estoura', third.length === 5 && App3._noteIndex.length === 5);
+  }
+
+  console.log('55. Lista de notas ao digitar [[ (autocompletar no CodeMirror)');
+  {
+    const { App, drive, w } = await boot({ editor: true });
+    seedVault(drive);
+    drive.put('n-voz', 'voz-blue.md', 'v', ['d-proj']);
+    const { completionStatus, currentCompletions, acceptCompletion } = w.CM6;
+    const view = App.Editor._impl.view;
+    const typeAtCaret = (text) => {
+      const at = view.state.selection.main.head;
+      view.dispatch({ changes: { from: at, insert: text }, selection: { anchor: at + text.length }, userEvent: 'input.type' });
+    };
+    const labels = () => currentCompletions(view.state).map(c => c.label);
+
+    drive.put('N', 'n.md', 'texto ', [VAULT]); // in the vault, so that it is in the index and shows up among the recents
+    await App.openFile('N', 'n.md');
+    App.setMode('edit');
+    App.Editor.moveCaretToEnd();
+
+    typeAtCaret('[[');
+    await sleep(200);
+    check('digitar [[ abre a lista', completionStatus(view.state) === 'active', completionStatus(view.state));
+    check('a lista veio do indice (montado na primeira vez)', App._noteIndex && App._noteIndex.length > 0);
+    typeAtCaret('voz');
+    await sleep(200);
+    check('filtra pelo que foi digitado', labels().join() === 'voz-blue', labels());
+    check('o item mostra a pasta', currentCompletions(view.state)[0].detail === '20-projetos');
+
+    acceptCompletion(view);
+    check('escolher escreve o nome e fecha o link', App.getContent() === 'texto [[voz-blue]]', App.getContent());
+    check('cursor depois dos ]]', view.state.selection.main.head === App.getContent().length);
+    check('lista fechada depois de escolher', completionStatus(view.state) === null);
+
+    // ]] ja presentes (o botao da barra poe): nao duplica
+    App.setContent('a  b');
+    view.dispatch({ selection: { anchor: 2 } });
+    App.applyFormat('wikilink');
+    await sleep(200);
+    check('botao [[ escreve [[]] com o cursor no meio e abre a lista com as recentes',
+      App.getContent() === 'a [[]] b' && view.state.selection.main.head === 4 && completionStatus(view.state) === 'active' && labels().includes('n'),
+      [App.getContent(), view.state.selection.main.head, completionStatus(view.state), labels()]);
+    typeAtCaret('ze');
+    await sleep(200);
+    check('filtra: zebra', labels().join() === 'zebra', labels());
+    acceptCompletion(view);
+    check('nao duplica os ]] e o cursor pula pra depois deles', App.getContent() === 'a [[zebra]] b' && view.state.selection.main.head === 11, [App.getContent(), view.state.selection.main.head]);
+
+    // Enter com a lista fechada continua sendo o Enter do app (continua a lista)
+    App.setContent('- item');
+    App.Editor.moveCaretToEnd();
+    apertarEnter(w, view);
+    check('Enter sem lista aberta segue o Enter do app', App.getContent() === '- item\n- ', JSON.stringify(App.getContent()));
+
+    // fora do [[ nada abre
+    App.setContent('so texto');
+    App.Editor.moveCaretToEnd();
+    typeAtCaret(' mais');
+    await sleep(200);
+    check('digitar fora de [[ nao abre lista', completionStatus(view.state) === null);
+
+    // o botao voltar do Android fecha a lista, nao a nota
+    const { App: AppW, drive: driveW, w: wW } = await boot({ editor: true, watcher: true });
+    seedVault(driveW);
+    driveW.put('N2', 'n2.md', 'texto ', [VAULT]); // no vault: entra no indice e nas recentes, que e o que a lista vazia mostra
+    await AppW.navigateTo('N2', 'n2.md');
+    AppW.setMode('edit');
+    AppW.Editor.moveCaretToEnd();
+    const viewW = AppW.Editor._impl.view;
+    viewW.dispatch({ changes: { from: viewW.state.doc.length, insert: '[[' }, selection: { anchor: viewW.state.doc.length + 2 }, userEvent: 'input.type' });
+    await sleep(200);
+    check('(watcher) lista aberta', wW.CM6.completionStatus(viewW.state) === 'active', wW.CM6.completionStatus(viewW.state));
+    check('voltar fecha a lista e fica na nota', wW.__back() === 'handled' && wW.CM6.completionStatus(viewW.state) === null && AppW.currentFile?.id === 'N2');
+    check('proximo voltar sai da nota', wW.__back() === 'handled' && (await sleep(80), AppW.currentFile == null || AppW.currentFile.id !== 'N2'));
   }
 
   done();

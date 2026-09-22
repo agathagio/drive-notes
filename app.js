@@ -201,6 +201,9 @@ const App = {
     redo() { return this._impl ? this._impl.redo() : false; },
     decorateEmbeds(lineInfo) { return this._impl ? this._impl.decorateEmbeds(lineInfo) : false; },
     scrollToCaret() { this._impl?.scrollToCaret(); },
+    // The link list. The fallback textarea has none: opening does nothing and closing answers false.
+    openLinkList() { this._impl?.openLinkList?.(); },
+    closeLinkList() { return this._impl?.closeLinkList?.() || false; },
     // Lines are counted from 1, the way every editor counts them. Both answer null/false for a line
     // number the text does not have, so the caller never has to know how long the text is.
     lineText(number) { return this._impl ? this._impl.lineText(number) : null; },
@@ -221,6 +224,7 @@ const App = {
       history, undo, redo, defaultKeymap, historyKeymap,
       markdown, markdownLanguage, insertNewlineContinueMarkupCommand,
       syntaxHighlighting, HighlightStyle, syntaxTree, tags: t, lineWrapping,
+      autocompletion, startCompletion, closeCompletion, completionStatus, tooltips,
     } = window.CM6;
 
     // Caret marks. The CM6 knows how to carry a position through the edits that happened after it
@@ -455,6 +459,45 @@ const App = {
     // because the picture chooser steals the focus and the picture has to land where she left it.
     let caretPlaced = false;
 
+    // ── The link list: `[[` opens the vault's note names ──
+    //
+    // The list is the library's (position, keyboard, scrolling, aria); what it shows and what it
+    // writes is the app's: the options come from App.searchNoteIndex, already filtered and ordered
+    // (hence filter: false), and `apply` is a function so that only the stretch between `[[` and
+    // the caret is replaced. Replacing more than that loses the caret and, with the keyboard open,
+    // breaks the dictation. The `]]` only go in when they are not already there: the toolbar button
+    // writes them before opening the list.
+    const LINK_START = /\[\[([^\]\[\n]*)$/;
+    const linkSource = async (context) => {
+      const word = context.matchBefore(LINK_START);
+      if (!word) return null;
+      if (!App._noteIndex) {
+        // First list of the session: the index comes from the device or from the Drive. A failure
+        // is not the list's problem: it shows what it has, and the next `[[` tries again.
+        await App.noteIndex().catch((e) => console.warn('Note index unavailable:', e));
+        if (context.aborted) return null;
+      }
+      const from = word.from + 2;
+      const typed = word.text.slice(2);
+      return {
+        from,
+        filter: false,
+        options: App.searchNoteIndex(typed).map((note) => ({
+          label: note.name.replace(/\.md$/i, ''),
+          detail: note.where,
+          apply: (v, completion, start, end) => {
+            const closed = v.state.doc.sliceString(end, end + 2) === ']]';
+            const insert = completion.label + (closed ? '' : ']]');
+            v.dispatch({
+              changes: { from: start, to: end, insert },
+              selection: { anchor: start + completion.label.length + 2 },
+              userEvent: 'input.complete',
+            });
+          },
+        })),
+      };
+    };
+
     // `let` and not `const`: the decoration field of task 7 runs while the EditorView is being
     // built and needs to read `view`. With `const`, that read would fall in the temporal dead zone
     // and throw a ReferenceError instead of answering null.
@@ -481,6 +524,13 @@ const App = {
         // the keyboard rewrites the whole word it is composing on every keystroke; that was offered
         // and turned down, so the shift key stays in charge on a line with a marker.
         EditorView.contentAttributes.of({ autocapitalize: 'sentences' }),
+        // Before the app's Enter on purpose: the list's Enter (acceptCompletion) is installed in
+        // Prec.highest too, and equal precedence is decided by position. With no list open it
+        // answers false and the app's Enter runs as always.
+        autocompletion({ override: [linkSource], activateOnTyping: true, icons: false, maxRenderedOptions: 12 }),
+        // The list must float above the keyboard and over the fixed toolbar: fixed, on the body,
+        // not inside the container that scrolls
+        tooltips({ position: 'fixed', parent: document.body }),
         // Above the Enter the markdown() installs in Prec.high: see the appEnter comment
         Prec.highest(keymap.of([{ key: 'Enter', run: appEnter }])),
         markdown({ base: markdownLanguage, codeLanguages: [] }),
@@ -537,6 +587,12 @@ const App = {
 
     return {
       view,
+      openLinkList: () => startCompletion(view),
+      closeLinkList: () => {
+        if (completionStatus(view.state) === null) return false;
+        closeCompletion(view);
+        return true;
+      },
       getText: () => view.state.doc.toString(),
       setText: (text) => {
         view.dispatch({
@@ -592,7 +648,7 @@ const App = {
 
         if (format.wrap) {
           const [before, after] = format.wrap;
-          const chosen = view.state.doc.sliceString(sel.from, sel.to) || 'texto';
+          const chosen = (view.state.doc.sliceString(sel.from, sel.to)) || (format.placeholder ?? 'texto');
           view.dispatch({
             changes: { from: sel.from, to: sel.to, insert: `${before}${chosen}${after}` },
             // the selection stays in the middle, so that typing overwrites "texto"
@@ -760,7 +816,7 @@ const App = {
         const [prefix, suffix] = format.wrap;
         const start = ta.selectionStart;
         const end = ta.selectionEnd;
-        const selected = ta.value.substring(start, end) || 'texto';
+        const selected = (ta.value.substring(start, end)) || (format.placeholder ?? 'texto');
         ta.value = ta.value.substring(0, start) + prefix + selected + suffix + ta.value.substring(end);
         ta.selectionStart = start + prefix.length;
         ta.selectionEnd = start + prefix.length + selected.length;
@@ -1314,15 +1370,14 @@ const App = {
     return response.json();
   },
 
-  /** Folders and notes directly inside a folder: folders first, then by name the way a person sorts ("2" before "10") */
-  async driveListFolder(folderId) {
-    const FOLDER = 'application/vnd.google-apps.folder';
+  /** Every file that matches `q`, across the whole Drive, page after page (1000 a page, 20 pages at most) */
+  async driveListAll(q, fileFields) {
     const found = [];
     let pageToken = '';
     for (let page = 0; page < 20; page++) {
       const params = new URLSearchParams({
-        q: `'${folderId}' in parents and trashed = false`,
-        fields: 'nextPageToken, files(id,name,mimeType,modifiedTime)',
+        q,
+        fields: `nextPageToken, files(${fileFields})`,
         pageSize: '1000',
       });
       if (pageToken) params.set('pageToken', pageToken);
@@ -1332,6 +1387,13 @@ const App = {
       pageToken = data.nextPageToken;
       if (!pageToken) break;
     }
+    return found;
+  },
+
+  /** Folders and notes directly inside a folder: folders first, then by name the way a person sorts ("2" before "10") */
+  async driveListFolder(folderId) {
+    const FOLDER = 'application/vnd.google-apps.folder';
+    const found = await this.driveListAll(`'${folderId}' in parents and trashed = false`, 'id,name,mimeType,modifiedTime');
 
     return found
       // Dot-folders (.obsidian, .trash) stay hidden, as in Obsidian
@@ -1489,6 +1551,135 @@ const App = {
       }
     );
     return response.json();
+  },
+
+  // ── Note index ──
+  // Every note of the vault, for the link list: [{ id, name, folder, where, modifiedTime }], `where`
+  // being the folder trail as text ("onryo / personagens"), what the list shows under the name.
+  // Built from two listings of the whole Drive (folders, then markdown files) instead of walking
+  // folder by folder, kept in localStorage, and refreshed in the background from the second session
+  // on. The app keeps it in step with what it does itself (create, rename, delete) without waiting.
+
+  NOTE_INDEX_KEY: 'drivenotes_note_index',
+  _noteIndex: null,
+  _noteIndexRefresh: null,
+
+  /** The index, from the device when there is a copy (then a refresh runs by itself) or from the Drive */
+  async noteIndex() {
+    if (this._noteIndex) return this._noteIndex;
+    const stored = this.readNoteIndex();
+    if (stored) {
+      this._noteIndex = stored.notes;
+      this.refreshNoteIndex().catch((e) => console.warn('Note index refresh failed:', e));
+      return this._noteIndex;
+    }
+    return this.refreshNoteIndex();
+  },
+
+  readNoteIndex() {
+    try {
+      const raw = localStorage.getItem(this.NOTE_INDEX_KEY);
+      const stored = raw ? JSON.parse(raw) : null;
+      return Array.isArray(stored?.notes) ? stored : null;
+    } catch {
+      return null;
+    }
+  },
+
+  writeNoteIndex() {
+    if (!this._noteIndex) return;
+    try {
+      localStorage.setItem(this.NOTE_INDEX_KEY, JSON.stringify({ builtAt: Date.now(), notes: this._noteIndex }));
+    } catch (e) {
+      console.warn('Note index not stored, kept in memory only:', e);
+    }
+  },
+
+  /** Rebuild from the Drive. One rebuild at a time: a second call joins the one running. */
+  refreshNoteIndex() {
+    if (!this._noteIndexRefresh) {
+      this._noteIndexRefresh = this.buildNoteIndex()
+        .then((notes) => {
+          this._noteIndex = notes;
+          this.writeNoteIndex();
+          return notes;
+        })
+        .finally(() => { this._noteIndexRefresh = null; });
+    }
+    return this._noteIndexRefresh;
+  },
+
+  /** Two listings of the whole Drive, then the tree: the folders under the vault (minus dot-folders), then the notes in them */
+  async buildNoteIndex() {
+    await this.ensureAuth();
+    const FOLDER = 'application/vnd.google-apps.folder';
+    const folders = await this.driveListAll(`mimeType = '${FOLDER}' and trashed = false`, 'id,name,parents');
+    const byId = new Map(folders.map(f => [f.id, f]));
+    // Trail of names from the vault root, or null outside it. Memoized: each folder is walked once.
+    const trails = new Map([[CONFIG.VAULT_FOLDER_ID, []]]);
+    const trailOf = (id, depth = 0) => {
+      if (trails.has(id)) return trails.get(id);
+      const folder = byId.get(id);
+      let trail = null;
+      if (folder && depth < 50 && !folder.name.startsWith('.')) {
+        const above = trailOf(folder.parents?.[0], depth + 1);
+        trail = above && [...above, folder.name];
+      }
+      trails.set(id, trail);
+      return trail;
+    };
+    const files = await this.driveListAll(`mimeType = 'text/markdown' and trashed = false`, 'id,name,parents,modifiedTime');
+    const notes = [];
+    for (const f of files) {
+      const folder = f.parents?.[0];
+      const trail = folder ? trailOf(folder) : null;
+      if (!trail) continue;
+      notes.push({ id: f.id, name: f.name, folder, where: trail.join(' / ') || CONFIG.VAULT_NAME, modifiedTime: f.modifiedTime });
+    }
+    return notes;
+  },
+
+  /** A note the app just created on the Drive. Outside the vault, or with the index not loaded yet, nothing to do. */
+  async noteIndexAdd(file) {
+    if (!this._noteIndex || !file?.id || !this.isNote(file)) return;
+    const folder = file.parents?.[0];
+    const trail = folder ? await Promise.resolve(this.folderTrail(folder)).catch(() => null) : null;
+    if (!trail) return;
+    this._noteIndex = this._noteIndex.filter(n => n.id !== file.id);
+    this._noteIndex.push({ id: file.id, name: file.name, folder, where: trail.join(' / ') || CONFIG.VAULT_NAME, modifiedTime: file.modifiedTime });
+    this.writeNoteIndex();
+  },
+
+  noteIndexRename(id, name) {
+    const note = this._noteIndex?.find(n => n.id === id);
+    if (!note) return;
+    note.name = name;
+    this.writeNoteIndex();
+  },
+
+  noteIndexRemove(id) {
+    if (!this._noteIndex?.some(n => n.id === id)) return;
+    this._noteIndex = this._noteIndex.filter(n => n.id !== id);
+    this.writeNoteIndex();
+  },
+
+  /** The notes for the link list. `typed` is matched on the name without extension, minding neither
+      accents nor case; names that start with it come first, then the ones that contain it, and inside
+      each group the most recently edited first. Nothing typed: the recents that are in the index. */
+  searchNoteIndex(typed, limit = 12) {
+    const notes = this._noteIndex || [];
+    const q = this.plain(typed).trim();
+    if (!q) {
+      return this.getRecents().map(r => notes.find(n => n.id === r.id)).filter(Boolean).slice(0, limit);
+    }
+    const ranked = [];
+    for (const note of notes) {
+      const title = this.plain(note.name.replace(/\.md$/i, ''));
+      const rank = title.startsWith(q) ? 0 : title.includes(q) ? 1 : -1;
+      if (rank >= 0) ranked.push({ note, rank });
+    }
+    ranked.sort((a, b) => a.rank - b.rank || (b.note.modifiedTime || '').localeCompare(a.note.modifiedTime || ''));
+    return ranked.slice(0, limit).map(r => r.note);
   },
 
   // ── Recents (localStorage) ──
@@ -2081,7 +2272,9 @@ const App = {
   /** One step back: close the dialog on top, or leave the drawing screen, or else return to the previous view */
   handleBack() {
     const dismiss = document.querySelector('.modal-overlay.visible [data-dismiss]');
-    if (dismiss) {
+    if (this.Editor.closeLinkList()) {
+      // The link list is the topmost thing on screen: "back" closes it and stops there
+    } else if (dismiss) {
       dismiss.click();
     } else if (this.sketch) {
       this.sketchCancel();
@@ -2544,6 +2737,7 @@ const App = {
     }
 
     this.saveToRecents(file.id, file.name);
+    this.noteIndexAdd(file).catch((e) => console.warn('Note index not updated:', e));
     if (this.currentFile === file) this.syncHistory(); // the entry can now name the note by ID
   },
 
@@ -2920,6 +3114,7 @@ const App = {
         // otherwise the next save must still see the conflict.
         if (before.modifiedTime === file.modifiedTime) file.modifiedTime = result.modifiedTime;
         this.saveToRecents(file.id, name);
+        this.noteIndexRename(file.id, name);
       });
     } catch (e) {
       console.error('Rename failed:', e);
@@ -2977,8 +3172,9 @@ const App = {
     strikethrough: { wrap: ['~~', '~~'] },
     // Obsidian's highlight. The reader learns it in the markExtension at the end of this file
     highlight: { wrap: ['==', '=='] },
-    // The note link and the tag are wraps like any other: [[nome]] and #etiqueta
-    wikilink: { wrap: ['[[', ']]'] },
+    // With nothing selected the link is born empty, caret in the middle, and the list opens on it:
+    // "texto" as a placeholder would filter the list down to nothing
+    wikilink: { wrap: ['[[', ']]'], placeholder: '' },
     tag: { wrap: ['#', ''] },
     heading: { line: '## ' },
     list: { line: '- ' },
@@ -2990,6 +3186,7 @@ const App = {
   applyFormat(name) {
     if (!this.FORMATS[name]) return;
     this.Editor.format(name);
+    if (name === 'wikilink') this.Editor.openLinkList();
     // For the fallback textarea, and only for it. It writes into ta.value, which fires no input
     // event, so this line is what gets the note saved there. In the CodeMirror the updateListener
     // already calls the change handler on every docChanged, and this is a second, harmless call.
