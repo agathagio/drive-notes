@@ -3025,5 +3025,68 @@ function enterEm(App, w, conteudo, em) {
     drive.failTrash = false;
   }
 
+  console.log('58. Renomear conserta os [[links]] nas outras notas');
+  {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    drive.put('L1', 'um.md', '---\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\nvai [[zebra]] e ![[zebra]] e [[Zebra|bicho]] e [[zebra#Cabeca]] e [[zebra.md]]', ['d-proj']);
+    drive.put('L2', 'dois.md', 'a palavra zebra e [[zebra-maior]]', [VAULT]);
+    drive.put('L3', 'tres.md', '[[zebra]] mas alguem mexeu', [VAULT]);
+    drive.put('L4', 'quatro.md', '[[zebra]] com rascunho local', [VAULT]);
+    w.localStorage.setItem('drivenotes_draft_L4', JSON.stringify({ fileId: 'L4', name: 'quatro.md', content: '[[zebra]] com rascunho local, editado', baseModifiedTime: drive.files.get('L4').modifiedTime, parents: [VAULT] }));
+
+    check('relinkText troca todas as formas e deixa o resto',
+      App.relinkText('x [[zebra]] ![[zebra]] [[Zebra|b]] [[zebra#C]] [[zebra.md]] [[zebra-maior]] zebra', 'zebra', 'girafa')
+        === 'x [[girafa]] ![[girafa]] [[girafa|b]] [[girafa#C]] [[girafa]] [[zebra-maior]] zebra');
+    check('nome novo com cifrao nao vira padrao de substituicao', App.relinkText('[[zebra]]', 'zebra', 'a$1b') === '[[a$1b]]');
+
+    await App.openFile('n-z', 'zebra.md');
+    // L3 muda entre a busca e a gravacao: o Drive falso adianta o modifiedTime no primeiro GET de meta dela
+    const realFetch = drive.fetch;
+    let bumped = false;
+    w.fetch = drive.fetch = async (url, opts) => {
+      if (!bumped && String(url).includes('/files/L3?') && !String(url).includes('alt=media') && (!opts || !opts.method || opts.method === 'GET')) {
+        bumped = true; drive.remoteEdit('L3', '[[zebra]] mas alguem mexeu MESMO');
+      }
+      return realFetch(url, opts);
+    };
+
+    await App.renameFile(App.currentFile, 'girafa');
+    await App._saveChain;
+    await sleep(100);
+    check('a nota foi renomeada', drive.files.get('n-z').name === 'girafa.md');
+    check('L1: todas as formas trocadas, frontmatter intacto (updated nao mudou)',
+      drive.files.get('L1').content === '---\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\nvai [[girafa]] e ![[girafa]] e [[girafa|bicho]] e [[girafa#Cabeca]] e [[girafa]]', drive.files.get('L1').content);
+    check('L2: sem link de verdade, nao foi escrita', drive.files.get('L2').content === 'a palavra zebra e [[zebra-maior]]' && !drive.log.some(l => l === 'PATCH L2'));
+    check('L3: mudou no meio, pulada', drive.files.get('L3').content === '[[zebra]] mas alguem mexeu MESMO' && !drive.log.some(l => l === 'PATCH L3'));
+    check('L4: Drive e rascunho local trocados', drive.files.get('L4').content === '[[girafa]] com rascunho local'
+      && JSON.parse(w.localStorage.getItem('drivenotes_draft_L4')).content === '[[girafa]] com rascunho local, editado');
+    check('o rascunho de L4 aponta pra versao nova do Drive (sem falso conflito depois)',
+      JSON.parse(w.localStorage.getItem('drivenotes_draft_L4')).baseModifiedTime === drive.files.get('L4').modifiedTime);
+    check('status conta certo', App.els.saveStatus.textContent === 'Renomeado, 2 links atualizados, 1 nota pulada', App.els.saveStatus.textContent);
+    check('o indice acompanhou o nome', App._noteIndex == null || App._noteIndex.find(n => n.id === 'n-z')?.name === 'girafa.md');
+
+    // busca fora do ar: renomeia, avisa que nao procurou
+    w.fetch = drive.fetch = realFetch;
+    await App.openFile('n-a', 'Abacaxi.md');
+    drive.put('L5', 'cinco.md', '[[Abacaxi]]', [VAULT]);
+    const okFetch = drive.fetch;
+    w.fetch = drive.fetch = async (url, opts) => {
+      if (String(url).includes('fullText')) return { ok: false, status: 500, json: async () => ({}), text: async () => '' };
+      return okFetch(url, opts);
+    };
+    await App.renameFile(App.currentFile, 'Abacate');
+    await App._saveChain; await sleep(50);
+    check('renomeou mesmo sem conseguir procurar os links', drive.files.get('n-a').name === 'Abacate.md' && drive.files.get('L5').content === '[[Abacaxi]]');
+    check('status avisa', App.els.saveStatus.textContent === 'Renomeado, não deu pra procurar os links', App.els.saveStatus.textContent);
+    w.fetch = drive.fetch = okFetch;
+
+    // sem links: so "Renomeado"
+    await App.openFile('n-e', 'émile.md');
+    await App.renameFile(App.currentFile, 'emilia');
+    await App._saveChain; await sleep(50);
+    check('sem links, status curto', App.els.saveStatus.textContent === 'Renomeado', App.els.saveStatus.textContent);
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });

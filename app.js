@@ -3125,11 +3125,22 @@ const App = {
       return;
     }
 
+    if (this.currentFile === file) this.setSaveStatus('saved', 'Renomeado');
+
+    // The links in the other notes, only for a note the Drive already knew by the old name
+    const links = file.id ? await this.relinkNotes(oldName, name, file.id) : { updated: 0, skipped: 0 };
+    let summary = 'Renomeado';
+    if (!links) {
+      summary = 'Renomeado, não deu pra procurar os links';
+    } else if (links.updated || links.skipped) {
+      summary += `, ${links.updated} ${links.updated === 1 ? 'link atualizado' : 'links atualizados'}`;
+      if (links.skipped) summary += `, ${links.skipped} ${links.skipped === 1 ? 'nota pulada' : 'notas puladas'}`;
+    }
     if (this.currentFile === file) {
-      this.setSaveStatus('saved', 'Renomeado');
+      this.setSaveStatus('saved', summary);
       setTimeout(() => {
-        if (this.currentFile === file) this.setSaveStatus('', '');
-      }, 2000);
+        if (this.currentFile === file && this.els.saveStatus.textContent === summary) this.setSaveStatus('', '');
+      }, summary === 'Renomeado' ? 2000 : 5000);
     }
   },
 
@@ -3168,6 +3179,53 @@ const App = {
       linking.push({ id: f.id, name: f.name, modifiedTime: f.modifiedTime, content });
     }
     return linking;
+  },
+
+  /** `text` with every link to `oldBase` pointing to `newBase`. A function replacement: `$` in the new name is a character, not a pattern */
+  relinkText(text, oldBase, newBase) {
+    return text.replace(this.linkPattern(oldBase), (match, open) => `${open}${newBase}`);
+  },
+
+  /** After a rename: rewrite the links in every note that pointed to the old name, one note at a time
+      through the write queue, each with the save's own conflict check. The change is mechanical, so
+      `updated` is left alone. A local draft of one of them gets the same rewrite, and its base moves
+      to the new version, or saving it later would undo the fix or raise a false conflict.
+      Never throws. Answers { updated, skipped }, or null when the search itself failed. */
+  async relinkNotes(oldName, newName, exceptId) {
+    let linking;
+    try {
+      linking = await this.findLinkingNotes(oldName, { exceptId });
+    } catch (e) {
+      console.error('Link search failed:', e);
+      return null;
+    }
+    const oldBase = oldName.replace(/\.md$/i, '');
+    const newBase = newName.replace(/\.md$/i, '');
+    let updated = 0;
+    let skipped = 0;
+    for (const note of linking) {
+      const text = this.relinkText(note.content, oldBase, newBase);
+      try {
+        const written = await this.enqueue(async () => {
+          const remote = await this.driveGetFileMeta(note.id, 'modifiedTime');
+          if (remote.modifiedTime !== note.modifiedTime) return null; // someone is writing in it: not ours to touch
+          return this.driveUpdateFile(note.id, text);
+        });
+        if (!written) { skipped++; continue; }
+        updated++;
+        const draftKey = `drivenotes_draft_${note.id}`;
+        const draft = this.readDraft(draftKey);
+        if (draft) {
+          draft.content = this.relinkText(draft.content, oldBase, newBase);
+          draft.baseModifiedTime = written.modifiedTime;
+          localStorage.setItem(draftKey, JSON.stringify(draft));
+        }
+      } catch (e) {
+        console.error('Relink failed:', note.name, e);
+        skipped++;
+      }
+    }
+    return { updated, skipped };
   },
 
   // ── Delete ──
