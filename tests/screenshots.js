@@ -43,9 +43,10 @@ const SETUP = `
       { id: 's1', name: 'guia-de-voz-onryo.md', parents: ['d5'], mimeType: 'text/markdown', modifiedTime: new Date(now - 9e8).toISOString() },
       { id: 's2', name: 'Reunião 17 set.md', parents: ['d4'], mimeType: 'text/markdown', modifiedTime: new Date(now - 2e8).toISOString() },
     ] });
-    // The note index lists the whole Drive by type: the folders, then every markdown file
-    const byType = /^mimeType = '([^']+)' and trashed = false$/.exec(u.searchParams.get('q') || '');
-    if (byType) return ok({ files: byType[1] === FOLDER
+    // The note index lists the whole Drive by type: the folders, then the note files (one type alone,
+    // or several between parentheses, as the Drive stores a .md made by the API as text/plain)
+    const byType = /^\\(?(mimeType = '[^']+'(?: or mimeType = '[^']+')*)\\)? and trashed = false$/.exec(u.searchParams.get('q') || '');
+    if (byType) return ok({ files: byType[1].includes(FOLDER)
       ? folders.map((name, i) => ({ id: 'd' + i, name, mimeType: FOLDER, parents: ['ROOT'] }))
       : notes.map((name, i) => ({ id: 'n' + i, name, mimeType: 'text/markdown', parents: [notesIn[i]],
           modifiedTime: new Date(now - i * i * 40e6 - 5e6).toISOString() })) });

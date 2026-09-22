@@ -26,10 +26,12 @@ const FAKE_DRIVE = `
     const m = u.pathname.match(/files\\/([^/]+)$/);
     if (m) { const f = files[m[1]]; return u.searchParams.get('alt') === 'media' ? ok(f.content) : ok({ ...f, modifiedTime: 't1' }); }
     const q = u.searchParams.get('q') || ''; const parent = /^'([^']+)' in parents/.exec(q);
-    // The note index lists the whole Drive by type: folders first, then every markdown file
-    const byType = /^mimeType = '([^']+)' and trashed = false$/.exec(q);
+    // The note index lists the whole Drive by type: folders first, then the note files (one type
+    // alone, or several between parentheses, as the Drive stores a .md made by the API as text/plain)
+    const byType = /^\\(?(mimeType = '[^']+'(?: or mimeType = '[^']+')*)\\)? and trashed = false$/.exec(q);
+    const types = byType ? [...byType[1].matchAll(/mimeType = '([^']+)'/g)].map(m => m[1]) : [];
     const list = Object.values(files).filter(f => parent ? f.parents.includes(parent[1])
-      : byType ? (f.mimeType || 'text/markdown') === byType[1]
+      : byType ? types.includes(f.mimeType || 'text/markdown')
       : q.includes("'" + f.name + "'"));
     return ok({ files: list.map(f => ({ ...f, modifiedTime: '2026-09-19T10:00:00Z' })) });
   };

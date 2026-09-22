@@ -1557,7 +1557,7 @@ const App = {
   // ── Note index ──
   // Every note of the vault, for the link list: [{ id, name, folder, where, modifiedTime }], `where`
   // being the folder trail as text ("onryo / personagens"), what the list shows under the name.
-  // Built from two listings of the whole Drive (folders, then markdown files) instead of walking
+  // Built from two listings of the whole Drive (folders, then the note files) instead of walking
   // folder by folder, kept in localStorage, and refreshed in the background from the second session
   // on. The app keeps it in step with what it does itself (create, rename, delete) without waiting.
 
@@ -1610,7 +1610,7 @@ const App = {
     return this._noteIndexRefresh;
   },
 
-  /** Two listings of the whole Drive, then the tree: the folders under the vault (minus dot-folders), then the notes in them */
+  /** Two listings of the whole Drive, then the tree: the folders under the vault (minus dot-folders), then the .md notes in them */
   async buildNoteIndex() {
     await this.ensureAuth();
     const FOLDER = 'application/vnd.google-apps.folder';
@@ -1629,9 +1629,13 @@ const App = {
       trails.set(id, trail);
       return trail;
     };
-    const files = await this.driveListAll(`mimeType = 'text/markdown' and trashed = false`, 'id,name,parents,modifiedTime');
+    // Two types, and not text/markdown alone: the Drive does not type a .md consistently, and a note
+    // the app itself uploads as text/markdown is stored as text/plain. The extension is what decides,
+    // because text/plain also brings .txt, .log and the like.
+    const files = await this.driveListAll(`(mimeType = 'text/markdown' or mimeType = 'text/plain') and trashed = false`, 'id,name,parents,modifiedTime');
     const notes = [];
     for (const f of files) {
+      if (!/\.md$/i.test(f.name)) continue;
       const folder = f.parents?.[0];
       const trail = folder ? trailOf(folder) : null;
       if (!trail) continue;

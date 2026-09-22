@@ -45,12 +45,14 @@ function makeDrive() {
           .map(f => ({ id: f.id, name: f.name, mimeType: f.mimeType || 'text/markdown', modifiedTime: f.modifiedTime }));
         return json({ files });
       }
-      // The index of titles lists the whole Drive by type: folders first, then every markdown file
-      const byType = /^mimeType = '([^']+)' and trashed = false$/.exec(q);
+      // The index of titles lists the whole Drive by type: folders first, then the note files.
+      // One type alone, or several between parentheses: `(mimeType = 'a' or mimeType = 'b') and trashed = false`
+      const byType = /^\(?(mimeType = '[^']+'(?: or mimeType = '[^']+')*)\)? and trashed = false$/.exec(q);
       if (byType) {
-        drive.log.push(`LIST-TYPE ${byType[1]}`);
+        const types = [...byType[1].matchAll(/mimeType = '([^']+)'/g)].map(m => m[1]);
+        drive.log.push(`LIST-TYPE ${types.join(' ')}`);
         if (drive.failReads) return json({}, 500);
-        const files = [...drive.files.values()].filter(f => !f.trashed && (f.mimeType || 'text/markdown') === byType[1])
+        const files = [...drive.files.values()].filter(f => !f.trashed && types.includes(f.mimeType || 'text/markdown'))
           .map(f => ({ id: f.id, name: f.name, parents: f.parents, mimeType: f.mimeType || 'text/markdown', modifiedTime: f.modifiedTime }));
         return json({ files });
       }
@@ -2791,17 +2793,19 @@ function enterEm(App, w, conteudo, em) {
     drive.put('n-old', 'antiga.md', 'x', ['d-proj']); drive.files.get('n-old').modifiedTime = '2026-01-01T00:00:00.000Z';
     drive.put('n-fora', 'fora do vault.md', 'x', ['outra-pasta']);
     drive.put('n-obs', 'workspace.md', 'x', ['d-obs']);
+    // Nota criada pelo proprio app: o Drive guarda ela como text/plain, e mesmo assim ela e do indice
+    drive.put('n-plain', 'criada pelo app.md', 'x', [VAULT]); drive.files.get('n-plain').mimeType = 'text/plain';
 
     const notes = await App.noteIndex();
     const names = notes.map(n => n.name).sort();
-    check('indice tem as notas .md do vault, sem .obsidian, sem fora do vault, sem png nem txt',
-      JSON.stringify(names) === JSON.stringify(['Abacaxi.md', 'antiga.md', 'nota do projeto.md', 'zebra.md', 'émile.md'].sort()), names);
+    check('indice tem as notas .md do vault (inclusive as text/plain), sem .obsidian, sem fora do vault, sem png nem txt',
+      JSON.stringify(names) === JSON.stringify(['Abacaxi.md', 'antiga.md', 'criada pelo app.md', 'nota do projeto.md', 'zebra.md', 'émile.md'].sort()), names);
     check('pasta em texto: raiz e vault, subpasta e o nome dela',
       notes.find(n => n.id === 'n-z').where === 'vault' && notes.find(n => n.id === 'n-sub').where === '20-projetos');
     check('duas listagens, nenhuma ida pasta a pasta',
       drive.log.filter(l => l.startsWith('LIST-TYPE')).length === 2 && drive.log.filter(l => l.startsWith('GET meta')).length === 0, drive.log);
     const stored = JSON.parse(w.localStorage.getItem('drivenotes_note_index'));
-    check('guardado no aparelho com a hora', Array.isArray(stored.notes) && stored.notes.length === 5 && typeof stored.builtAt === 'number');
+    check('guardado no aparelho com a hora', Array.isArray(stored.notes) && stored.notes.length === 6 && typeof stored.builtAt === 'number');
 
     // filtro: sem acento, sem maiuscula, comeca-com antes de contem, recente primeiro
     check('"ab" acha Abacaxi', App.searchNoteIndex('ab').map(n => n.name).join() === 'Abacaxi.md');
@@ -2811,8 +2815,8 @@ function enterEm(App, w, conteudo, em) {
     drive.files.get('n-a').modifiedTime = '2026-09-01T00:00:00.000Z';
     await App.refreshNoteIndex();
     const a = App.searchNoteIndex('a').map(n => n.name);
-    check('"a": comeca-com (Abacaxi, antiga) antes de contem (zebra, nota do projeto), recente primeiro dentro do grupo',
-      a[0] === 'Abacaxi.md' && a[1] === 'antiga.md' && a.slice(2).sort().join() === ['nota do projeto.md', 'zebra.md'].sort().join(), a);
+    check('"a": comeca-com (Abacaxi, antiga) antes de contem (zebra, nota do projeto, criada pelo app), recente primeiro dentro do grupo',
+      a[0] === 'Abacaxi.md' && a[1] === 'antiga.md' && a.slice(2).sort().join() === ['criada pelo app.md', 'nota do projeto.md', 'zebra.md'].sort().join(), a);
     check('nada digitado: as recentes que estao no indice', (() => {
       w.localStorage.setItem('drivenotes_recents', JSON.stringify([{ id: 'n-sub', name: 'nota do projeto.md', timestamp: 1 }, { id: 'n-fora', name: 'fora do vault.md', timestamp: 1 }]));
       return App.searchNoteIndex('').map(n => n.id).join() === 'n-sub';
@@ -2828,7 +2832,7 @@ function enterEm(App, w, conteudo, em) {
     drive2.put('n-new', 'nova.md', 'x', [VAULT]);
     drive2.delay = 50;
     const first = await App2.noteIndex();
-    check('copia guardada responde na hora, sem esperar o Drive', first.length === 5 && !first.find(n => n.id === 'n-new'));
+    check('copia guardada responde na hora, sem esperar o Drive', first.length === 6 && !first.find(n => n.id === 'n-new'));
     await sleep(300);
     check('a atualizacao por tras trouxe a nota nova', App2._noteIndex.find(n => n.id === 'n-new') && drive2.log.filter(l => l.startsWith('LIST-TYPE')).length === 2);
 
@@ -2857,7 +2861,7 @@ function enterEm(App, w, conteudo, em) {
     drive3.failReads = true;
     const third = await App3.noteIndex();
     await sleep(50);
-    check('sem Drive, a copia guardada serve e nada estoura', third.length === 5 && App3._noteIndex.length === 5);
+    check('sem Drive, a copia guardada serve e nada estoura', third.length === 6 && App3._noteIndex.length === 6);
   }
 
   console.log('55. Lista de notas ao digitar [[ (autocompletar no CodeMirror)');
