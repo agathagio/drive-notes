@@ -911,6 +911,113 @@ const FAKE_DRIVE = `
     const depoisDoToque = await ondeEsta();
     check('tocar numa linha perto do pe poe o cursor la sem rolar', depoisDoToque.rolagem === 0 && depoisDoToque.altura > 80, depoisDoToque);
     await send('Emulation.clearDeviceMetricsOverride');
+
+    console.log('18. Retomar a nota onde parou: reabre no mesmo paragrafo, com a foto de cima chegando depois');
+    // O que o jsdom nao prova: o layout de verdade, e a foto que chega do Drive depois de a nota aparecer.
+    // Guardado em pixels, o lugar cairia mais pra baixo enquanto a foto de cima nao chegou; guardado pelo
+    // bloco, cai no mesmo paragrafo, e a ancoragem de rolagem do navegador segura ele quando a foto cresce
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    const DRIVE_DA_FOTO = `
+      localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
+      __App.accessToken = 'fake';
+      window.__foto = { atraso: 0, chegou: false };
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="800"><rect width="100%" height="100%" fill="#bb86fc"/></svg>';
+      const longa = '# Longa\\n\\n![[foto.png]]\\n\\n'
+        + Array.from({ length: 60 }, (_, i) => 'paragrafo ' + i + ' ' + 'texto '.repeat((i % 7) * 6)).join('\\n\\n');
+      window.fetch = async (url) => {
+        const u = new URL(url);
+        const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o });
+        if (/files\\/FOTO$/.test(u.pathname)) {
+          await new Promise(r => setTimeout(r, window.__foto.atraso));
+          window.__foto.chegou = true;
+          return { ok: true, status: 200, blob: async () => new Blob([svg], { type: 'image/svg+xml' }) };
+        }
+        if (u.searchParams.get('alt') === 'media') return ok(longa);
+        if (/files\\/N3$/.test(u.pathname)) return ok({ id: 'N3', name: 'longa.md', parents: ['F1'], modifiedTime: 't1' });
+        const q = u.searchParams.get('q') || '';
+        return ok({ files: q.includes("'foto.png'") ? [{ id: 'FOTO', name: 'foto.png', mimeType: 'image/png', parents: ['m'] }] : [] });
+      };
+      'ok'`;
+    // O bloco no topo da tela, onde ele esta em relacao ao topo, e a altura da foto
+    const noTopo = async () => JSON.parse(await js(`(() => {
+      const c = document.getElementById('preview-container');
+      const top = c.getBoundingClientRect().top;
+      const el = [...c.children].find(e => e.getBoundingClientRect().bottom > top);
+      const foto = document.querySelector('#preview-container img[data-embed]');
+      return JSON.stringify({ texto: el ? el.textContent.split(' texto')[0].trim() : '', px: el ? Math.round(el.getBoundingClientRect().top - top) : 0,
+        foto: foto ? Math.round(foto.getBoundingClientRect().height) : -1 });
+    })()`));
+    // O paragrafo 30 no topo, com 30px dele ja passados
+    const PARAGRAFO_30 = `(() => {
+      const c = document.getElementById('preview-container');
+      const p = [...c.children].find(e => e.textContent.startsWith('paragrafo 30 '));
+      c.scrollTop += p.getBoundingClientRect().top - c.getBoundingClientRect().top + 30;
+      return 'ok';
+    })()`;
+    const FOTO_NA_TELA = `window.__foto.chegou && document.querySelector('#preview-container img[data-embed]')?.naturalHeight > 0`;
+    const abrirLonga = () => js(`__App.openFile('N3', 'longa.md'); 'ok'`);
+
+    // Abre, espera a foto, e deixa o paragrafo 30 no topo. Devolve o que estava no topo ao sair.
+    const lerAteOMeio = async (app) => {
+      await open(buildPage('retomar', app));
+      await js(`localStorage.clear(); 'ok'`);
+      await js(APAGAR_BANCO);
+      await js(DRIVE_DA_FOTO);
+      await abrirLonga();
+      await esperar(FOTO_NA_TELA, 3000);
+      await sleep(300);
+      await js(PARAGRAFO_30);
+      await sleep(100);
+      return noTopo();
+    };
+
+    const aoSair = await lerAteOMeio(currentApp);
+    console.log('     ao sair:', JSON.stringify(aoSair));
+    check('(o paragrafo 30 no topo, com a foto de cima ja na tela)', aoSair.texto === 'paragrafo 30' && aoSair.px === -30 && aoSair.foto > 500, aoSair);
+
+    await js(`__App.goHome(); 'ok'`);
+    await abrirLonga();
+    await sleep(300);
+    const voltou = await noTopo();
+    console.log('     voltando pela home:', JSON.stringify(voltou));
+    check('sair e voltar: o mesmo paragrafo, no mesmo ponto', voltou.texto === 'paragrafo 30' && Math.abs(voltou.px - aoSair.px) <= 2, voltou);
+
+    // O app morto com a nota aberta (a pagina vai embora sem sair da nota) e aberto de novo: a foto
+    // agora tem que vir do Drive outra vez, e demora
+    await open(buildPage('retomar', currentApp));
+    await js(DRIVE_DA_FOTO);
+    await js(`window.__foto.atraso = 1500; 'ok'`);
+    await abrirLonga();
+    await sleep(250);
+    const cedo = await noTopo();
+    const fotoChegou = await js('window.__foto.chegou');
+    console.log('     reaberto, foto a caminho:', JSON.stringify(cedo));
+    check('app morto e aberto de novo: o mesmo paragrafo, com a foto de cima ainda a caminho',
+      cedo.texto === 'paragrafo 30' && Math.abs(cedo.px - aoSair.px) <= 2 && !fotoChegou && cedo.foto < 100, { cedo, fotoChegou });
+    await esperar(FOTO_NA_TELA, 4000);
+    await sleep(300);
+    const tarde = await noTopo();
+    console.log('     depois de a foto chegar:', JSON.stringify(tarde));
+    check('... e a foto crescendo em cima nao tira o paragrafo do lugar',
+      tarde.foto > 500 && tarde.texto === 'paragrafo 30' && Math.abs(tarde.px - aoSair.px) <= 2, tarde);
+
+    // Controle: o app de antes do card abre a mesma nota no topo, senao este cenario nao prova nada
+    let appAntesDoRetomar = null;
+    try {
+      appAntesDoRetomar = execSync(`git -C "${ROOT}" show 7bed916:app.js`, { encoding: 'utf8', maxBuffer: 1e7, stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch { /* shallow clone or no git: the control is skipped */ }
+    if (appAntesDoRetomar) {
+      await lerAteOMeio(appAntesDoRetomar);
+      await js(`__App.goHome(); 'ok'`);
+      await abrirLonga();
+      await sleep(300);
+      const semOCard = await noTopo();
+      check('controle: sem o card (7bed916), a nota reabre no topo', semOCard.texto === 'Longa', semOCard);
+    } else {
+      console.log('     (controle pulado: commit antigo indisponivel)');
+    }
+    await js(APAGAR_BANCO);
+    await send('Emulation.clearDeviceMetricsOverride');
   } finally {
     browser.close();
   }

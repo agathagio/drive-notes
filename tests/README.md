@@ -22,7 +22,8 @@ O editor aqui é o textarea de fallback. A exceção são os cenários que pedem
 - datas: o cursor da nota nova cai embaixo das propriedades, salvar não mexe no texto nem no cursor de quem está digitando, e o editor alcança o `updated` do Drive ao ir pro modo leitura;
 - desenho: canvas com `devicePixelRatio`, ponta de traço redonda, o traço nascendo sob o dedo (e não deslocado pela faixa do topo), borracha apagando pra transparente e o PNG recortado no traço;
 - tarefa: um clique de verdade na caixa do modo leitura vira `[x]` no editor;
-- deslizar da borda: toque emulado em tela de celular, com o CloseWatcher real; a seta sai da borda certa e fica roxa, e os prints do meio do gesto saem em `tests/.tmp/`.
+- deslizar da borda: toque emulado em tela de celular, com o CloseWatcher real; a seta sai da borda certa e fica roxa, e os prints do meio do gesto saem em `tests/.tmp/`;
+- retomar a nota onde parou: sair e voltar, e a página recarregada como o app que o Android matou, reabrem no mesmo parágrafo, inclusive com uma foto de cima chegando do Drive depois (quem segura o lugar enquanto ela cresce é a ancoragem de rolagem do navegador). Tem um controle que roda o app do `7bed916` e confere que nele a nota reabre no topo.
 
 Pra escolher o navegador: variável de ambiente `BROWSER_PATH`.
 
@@ -30,9 +31,9 @@ Pra escolher o navegador: variável de ambiente `BROWSER_PATH`.
 
 `sw.test.js`: o service worker de ponta a ponta, que as outras suítes não tocam (elas abrem páginas `file://`, sem service worker). Um servidor local em `http://127.0.0.1:8336` faz o papel do GitHub Pages, com o mesmo `max-age=600`, e um Edge headless com perfil limpo faz o papel do celular. Cada "deploy" é o servidor passar a responder outra versão: o `CACHE_NAME` servido muda, e o `app.js` servido diz qual versão é (`window.__servedVersion`). As CDNs e o Google saem da conta: as bibliotecas vêm do `node_modules` (mesmos bytes, então o hash confere), a folha de fontes e o login do Google são tirados, e o Drive é um falso guardado no `localStorage`, pra o que um salvar escreveu sobreviver à recarga.
 
-Cobre: a primeira abertura de todas não recarrega; deploy e abrir o app traz a versão nova na mesma abertura, com uma recarga só; voltar do fundo confere se há versão nova; nota com texto por salvar nunca recarrega, e o aviso salva, recarrega e reabre a mesma nota no mesmo modo. Leva uns 40 segundos.
+Cobre: a primeira abertura de todas não recarrega; deploy e abrir o app traz a versão nova na mesma abertura, com uma recarga só; voltar do fundo confere se há versão nova; nota com texto por salvar nunca recarrega, e o aviso salva, recarrega e reabre a mesma nota no mesmo modo; nota lida até o meio volta, depois do aviso, no mesmo parágrafo. Leva uns 50 segundos.
 
-Controle: `SW_COMMIT=dba1d23 npm run test:sw` serve o app daquele commit (a `v46`, de antes do aviso) e os cenários 2 a 4 têm que falhar. Se não falharem, o teste deixou de provar alguma coisa.
+Controle: `SW_COMMIT=dba1d23 npm run test:sw` serve o app daquele commit (a `v46`, de antes do aviso) e os cenários 2 a 4 têm que falhar; `SW_COMMIT=7bed916` (a `v47`, de antes do retomar) faz falhar o 5. Se não falharem, o teste deixou de provar alguma coisa.
 
 ## `npm run screenshots`
 

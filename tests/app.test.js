@@ -162,7 +162,7 @@ function fakeCtx(canvas) {
   return ctx;
 }
 
-async function boot({ auth = true, seedStorage = {}, seedSession = {}, watcher = false, editor = false, idb = null, drive: givenDrive = null } = {}) {
+async function boot({ auth = true, seedStorage = {}, seedSession = {}, watcher = false, editor = false, idb = null, drive: givenDrive = null, beforeApp = null } = {}) {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const dom = new JSDOM(html, { url: 'http://localhost:8000/', runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
@@ -202,6 +202,8 @@ async function boot({ auth = true, seedStorage = {}, seedSession = {}, watcher =
   }
   w.eval(fs.readFileSync(LIBS.marked, 'utf8'));
   w.eval(fs.readFileSync(LIBS.purify, 'utf8'));
+  // Whatever has to be in place before the app's own init runs (it may open a note by itself)
+  if (beforeApp) beforeApp(w);
   w.eval(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8') + ';window.__App = App; window.__CONFIG = CONFIG;');
   await new Promise(r => w.document.readyState === 'complete' ? r() : w.addEventListener('load', r));
   const App = w.__App;
@@ -3719,6 +3721,132 @@ function enterEm(App, w, conteudo, em) {
       check('pasta aberta: volta pra mesma pasta, com a busca',
         App.folder?.id === 'F' && w.document.body.dataset.view === 'browse' && App.els.browserSearch.value === 'dentro',
         [App.folder, w.document.body.dataset.view]);
+    }
+  }
+
+  console.log('69. Retomar a nota onde parou: a leitura reabre no bloco em que ficou');
+  {
+    // jsdom has no layout. Stand-in: every block of the reading view is 100px tall, stacked from the top
+    // of the container, which sits at 50px on screen. Installed before the app runs (boot's beforeApp), so
+    // it also holds for what init opens by itself. The real layout, with a picture arriving late above
+    // the place, is test:browser 18.
+    const layout = (w) => {
+      const c = w.document.getElementById('preview-container');
+      let scroll = 0;
+      Object.defineProperty(c, 'scrollTop', { configurable: true, get: () => scroll, set: (v) => { scroll = Math.max(0, v); } });
+      c.getBoundingClientRect = () => ({ top: 50, bottom: 850 });
+      const real = w.Element.prototype.getBoundingClientRect;
+      w.Element.prototype.getBoundingClientRect = function () {
+        const i = this.parentElement === c ? [...c.children].indexOf(this) : -1;
+        if (i < 0) return real.call(this);
+        return { top: 50 + i * 100 - scroll, bottom: 150 + i * 100 - scroll };
+      };
+      w.__scroll = (px) => { scroll = px; };
+      // The block at the top of the screen, and how far into it
+      w.__at = () => ({ block: Math.floor(scroll / 100), into: scroll % 100 });
+    };
+    // 31 blocks: the title, then paragraph i at block i + 1
+    const LONG = '# Titulo\n\n' + Array.from({ length: 30 }, (_, i) => `paragrafo ${i}`).join('\n\n');
+    const places = (w) => JSON.parse(w.localStorage.getItem('drivenotes_places') || '[]');
+    const TOKEN = { drivenotes_token: 'fake', drivenotes_token_expires: String(Date.now() + 3600e3) };
+    const until = async (cond, limit = 3000) => {
+      const end = Date.now() + limit;
+      while (!cond() && Date.now() < end) await sleep(10);
+    };
+
+    {
+      const { App, w, drive } = await boot({ beforeApp: layout });
+      drive.put('A', 'a.md', LONG);
+      drive.put('B', 'b.md', 'b curta');
+      await App.openFile('A', 'a.md');
+      check('(sem nada guardado, abre no topo, como sempre)', w.__at().block === 0 && w.__at().into === 0, w.__at());
+      w.__scroll(1250);
+      await App.openFile('B', 'b.md');
+      check('sair da nota guarda o bloco do topo da tela e quanto dele ja passou',
+        JSON.stringify(places(w)) === JSON.stringify([{ id: 'A', block: 12, into: 50 }]), places(w));
+      await App.openFile('A', 'a.md');
+      check('voltar pra ela: o mesmo bloco, no mesmo ponto', w.__at().block === 12 && w.__at().into === 50, w.__at());
+      check('... e nada guardado pra B, deixada no topo', !places(w).some(p => p.id === 'B'), places(w));
+      check('... e o painel de diagnostico conta', App._log.some(l => l.includes('resume block 12')), App._log.slice(-4));
+
+      await App.openFile('B', 'b.md');
+      let intoView = null;
+      w.HTMLElement.prototype.scrollIntoView = function () { intoView = this.textContent; };
+      await App.openFile('A', 'a.md', { heading: 'Titulo' });
+      check('link com #Secao: vai pro titulo, e nao pro lugar guardado', intoView === 'Titulo' && w.__at().block === 0, [intoView, w.__at()]);
+
+      w.__scroll(2000);
+      App.togglePreview();
+      check('tocar em Editar guarda onde a leitura estava', places(w)[0]?.id === 'A' && places(w)[0].block === 20, places(w));
+      App.goHome();
+      await App.openFile('A', 'a.md');
+      check('... e sair pela edicao nao apaga: reabre no bloco 20', w.__at().block === 20, w.__at());
+
+      // A note with a draft opens straight into the editor, with A still drawn in the reading view behind it
+      w.__scroll(500);
+      drive.put('C', 'c.md', 'c do Drive');
+      w.localStorage.setItem('drivenotes_draft_C', JSON.stringify({ fileId: 'C', name: 'c.md', content: 'rascunho de C',
+        baseModifiedTime: drive.files.get('C').modifiedTime, timestamp: Date.now() }));
+      await App.openFile('C', 'c.md');
+      check('(C abriu no rascunho, na edicao)', App.currentFile?.id === 'C' && App.mode === 'edit', [App.currentFile?.id, App.mode]);
+      check('nota com rascunho nao herda o lugar da nota de tras, que fica com o dela',
+        !places(w).some(p => p.id === 'C') && places(w).find(p => p.id === 'A')?.block === 5, places(w));
+      // Leaves without saving the draft, so C stays as it is on the fake Drive
+      App.isDirty = false;
+      w.localStorage.removeItem('drivenotes_draft_C');
+    }
+
+    {
+      const old = Array.from({ length: 25 }, (_, i) => ({ id: `X${i}`, block: 3, into: 0 }));
+      const { App, w, drive } = await boot({ beforeApp: layout,
+        seedStorage: { drivenotes_places: JSON.stringify([{ id: 'A', block: 100, into: 30 }, ...old]) } });
+      drive.put('A', 'a.md', LONG);
+      drive.put('B', 'b.md', 'b');
+      await App.openFile('A', 'a.md');
+      check('nota que encolheu desde que foi deixada (mudou no PC): cai no ultimo bloco', w.__at().block === 30 && w.__at().into === 30, w.__at());
+      await App.openFile('B', 'b.md');
+      check('a lista fica nas ultimas 20 notas, a mais recente primeiro', places(w).length === 20 && places(w)[0].id === 'A', places(w).length);
+    }
+
+    {
+      const { App, w, drive, idb } = await boot({ beforeApp: layout, idb: true });
+      drive.put('A', 'a.md', LONG);
+      await App.openFile('A', 'a.md');
+      w.__scroll(900);
+      w.dispatchEvent(new w.Event('pagehide'));
+      check('a pagina indo embora guarda o lugar', places(w)[0]?.block === 9, places(w));
+      w.__scroll(730);
+      Object.defineProperty(w.document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+      w.document.dispatchEvent(new w.Event('visibilitychange'));
+      check('o app indo pro fundo com a nota aberta tambem', places(w)[0]?.block === 7 && places(w)[0].into === 30, places(w));
+      await sleep(30);
+
+      // The Android kills it in the background; opened again, with what the device kept
+      const { App: App2, w: w2 } = await boot({ beforeApp: layout, idb, drive,
+        seedStorage: { drivenotes_places: w.localStorage.getItem('drivenotes_places') } });
+      await App2.openFile('A', 'a.md');
+      check('app morto e aberto de novo: a nota guardada no aparelho reabre no mesmo ponto',
+        w2.__at().block === 7 && w2.__at().into === 30, w2.__at());
+      check('(veio do aparelho, sem esperar o Drive)', App2._log.some(l => /cached a\.md/.test(l)), App2._log.slice(-4));
+    }
+
+    {
+      const drive = makeDrive();
+      drive.put('A', 'a.md', LONG);
+      const { App, w } = await boot({ beforeApp: layout, drive, watcher: true });
+      await App.navigateTo('A', 'a.md');
+      w.__scroll(1840);
+      App.reloadPage = () => {};
+      await App.applyUpdate();
+      const marker = w.sessionStorage.getItem('drivenotes_reopen');
+      check('tocar na faixa de versao nova guarda o lugar junto', !!marker && places(w)[0]?.block === 18, [marker, places(w)]);
+
+      const { App: App2, w: w2 } = await boot({ beforeApp: layout, drive, watcher: true,
+        seedStorage: { ...TOKEN, drivenotes_places: w.localStorage.getItem('drivenotes_places') },
+        seedSession: { drivenotes_reopen: marker } });
+      await until(() => App2.currentFile?.id === 'A');
+      check('depois de recarregar pela faixa: a mesma nota, no mesmo ponto da leitura',
+        App2.mode === 'preview' && w2.__at().block === 18 && w2.__at().into === 40, [App2.mode, w2.__at()]);
     }
   }
 

@@ -4,11 +4,12 @@
 //
 // What it proves: a new version reaches the screen in one opening (the home screen reloads on its own,
 // once), coming back from the background looks for one, and a note with text not on the Drive yet is
-// never reloaded: the bar offers the update, and tapping it saves, reloads and reopens the same note.
+// never reloaded: the bar offers the update, and tapping it saves, reloads and reopens the same note,
+// back on the same paragraph of the reading view.
 //
 // SW_COMMIT=<commit> serves the app as it was in that commit instead of the working tree. It is the
 // control: against dba1d23 (v46, before the card "Versão nova numa abertura só") scenarios 2 to 4 must
-// fail, or they prove nothing.
+// fail, and against 7bed916 (v47, before "Retomar a nota onde parou") scenario 5 must, or they prove nothing.
 const { execSync } = require('child_process');
 const fs = require('fs');
 const http = require('http');
@@ -202,6 +203,44 @@ const EVERY_DOCUMENT = `(() => {
       check('... recarregou uma vez, ja na versao 4', reopened && after.served === 4 && after.loads === 5 && !after.bar, after);
       check('... e reabriu a mesma nota, no modo de edicao, sem nada por salvar',
         note.id === 'A' && note.mode === 'edit' && !note.dirty && note.text.endsWith('versao 1 com o que ela escreveu'), note);
+    }
+
+    console.log('5. Nota longa lida ate o meio: o aviso recarrega e ela volta no mesmo paragrafo');
+    {
+      // The block at the top of the reading view, and where it sits against the top
+      const atTop = () => js(`(() => {
+        const c = document.getElementById('preview-container');
+        const top = c.getBoundingClientRect().top;
+        const el = [...c.children].find(e => e.getBoundingClientRect().bottom > top);
+        return { text: el ? el.textContent.split(' texto')[0].trim() : '', px: el ? Math.round(el.getBoundingClientRect().top - top) : 0 };
+      })()`, false);
+      const long = Array.from({ length: 60 }, (_, i) => `paragrafo ${i} ` + 'texto '.repeat((i % 7) * 6)).join('\n\n');
+      await js(`const d = JSON.parse(localStorage.getItem('__drive'));
+        d.L = { id: 'L', name: 'longa.md', parents: [${JSON.stringify(VAULT)}], modifiedTime: '2026-09-22T11:00:00.000Z', content: ${JSON.stringify(long)} };
+        localStorage.setItem('__drive', JSON.stringify(d)); 'ok'`, false);
+      await js(`App.navigateTo('L', 'longa.md')`);
+      await esperar(`App.currentFile?.id === 'L' && document.body.dataset.view === 'preview'`, 5000);
+      await js(`(() => {
+        const c = document.getElementById('preview-container');
+        const p = [...c.children].find(e => e.textContent.startsWith('paragrafo 30 '));
+        c.scrollTop += p.getBoundingClientRect().top - c.getBoundingClientRect().top + 10;
+        return 'ok';
+      })()`);
+      const left = await atTop();
+      // 10px, not more: in this wide window a paragraph can be a single 26px line
+      check('(o paragrafo 30 no topo, com 10px dele ja passados)', left.text === 'paragrafo 30' && left.px === -10, left);
+
+      deploy(5);
+      await resume();
+      const offered = await esperar(`document.getElementById('update-bar')?.classList.contains('hidden') === false`, 20000);
+      await sleep(2000);
+      check('a versao 5 assumiu, e o aviso apareceu', offered, await state());
+      await js(`document.getElementById('update-bar')?.click(); 'ok'`);
+      const reopened = await esperar(`window.__servedVersion === 5 && App.currentFile?.id === 'L' && document.body.dataset.view === 'preview'`, 20000);
+      await sleep(500);
+      const back = await atTop();
+      check('tocar no aviso: recarregou, na versao 5, e reabriu a mesma nota na leitura', reopened, await state());
+      check('... no mesmo paragrafo, no mesmo ponto', back.text === 'paragrafo 30' && Math.abs(back.px - left.px) <= 2, back);
     }
   } finally {
     browser.close();

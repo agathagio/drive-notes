@@ -78,6 +78,9 @@ const App = {
   // A navigation begun by a tap (or a swipe forward) whose view has not landed yet: { pushed }, pushed
   // telling whether it put an entry on navStack. Null once a view lands or the navigation is dropped.
   _pending: null,
+  // The note the reading view was last drawn for (see rememberPlace). Not always currentFile: a note with
+  // a draft opens straight into the editor, and the reading view behind it still holds the previous note.
+  _previewOf: null,
   // The drawing screen while it is open: { canvas, ctx, dpr, strokes, stroke, color, width, erase, at }.
   // `strokes` is the whole drawing (painting works from it, never from the pixels on screen) and
   // `at` is where the caret was in the note. Null while the screen is closed.
@@ -1417,7 +1420,7 @@ const App = {
       // What the editor gives back for an untouched file, so opening never counts as a change
       file.lastSavedContent = this.getContent();
       this.showEditor('preview');
-      this.scrollToHeading(heading);
+      this.landInNote(heading);
       this.setSaveStatus('saved', 'Carregado');
       setTimeout(() => {
         if (this.currentFile === file) this.setSaveStatus('', '');
@@ -1445,7 +1448,7 @@ const App = {
     // What the editor gives back for an untouched file, so opening never counts as a change
     file.lastSavedContent = this.getContent();
     this.showEditor('preview');
-    this.scrollToHeading(heading);
+    this.landInNote(heading);
     this.setSaveStatus('', '');
     this.saveToRecents(file.id, file.name);
     this.log(`cached ${file.name} ${Date.now() - tapped}ms`);
@@ -2077,6 +2080,62 @@ const App = {
     return '';
   },
 
+  // ── Where the reading stopped (localStorage) ──
+  //
+  // A note opens in the reading view where it was left, instead of at the top. What is kept is the block
+  // at the top of the screen and how far into it, not the scroll in pixels: pictures come from the Drive
+  // after the note shows, so a pixel count taken with them in place lands too far down while they are
+  // still on their way. Anchored to a block, the note lands on the same paragraph, and the browser's
+  // scroll anchoring holds it there as the pictures above grow. Per device, for the last 20 notes, like the
+  // recents. A note changed on the computer in between may land a little off: accepted.
+
+  PLACES_KEY: 'drivenotes_places',
+
+  getPlaces() {
+    try {
+      return JSON.parse(localStorage.getItem(this.PLACES_KEY)) || [];
+    } catch {
+      return [];
+    }
+  },
+
+  /** Keep where the reading view is, for the note it shows. Called whenever that note is about to be
+      left: another view (flushCurrent), "Editar", the app going to the background, the reload into a
+      new version. */
+  rememberPlace() {
+    const file = this._previewOf;
+    const container = this.els.previewContainer;
+    const blocks = [...container.children];
+    if (!file?.id || document.body.dataset.view !== 'preview' || !blocks.length) return;
+    const top = container.getBoundingClientRect().top;
+    // The first block still on screen: everything before it is above the top
+    const block = blocks.findIndex((el) => el.getBoundingClientRect().bottom > top);
+    const places = this.getPlaces().filter((p) => p.id !== file.id);
+    // Left at the top, there is nothing to keep: that is where a note opens anyway
+    if (container.scrollTop > 0 && block >= 0) {
+      places.unshift({ id: file.id, block, into: Math.round(top - blocks[block].getBoundingClientRect().top) });
+    }
+    try {
+      localStorage.setItem(this.PLACES_KEY, JSON.stringify(places.slice(0, 20)));
+    } catch { /* storage full or blocked: the note opens at the top, as it always did */ }
+  },
+
+  /** A note just drawn in the reading view: to the heading a link asked for, or else back where it was left */
+  landInNote(heading) {
+    if (heading) {
+      this.scrollToHeading(heading);
+      return;
+    }
+    const container = this.els.previewContainer;
+    const blocks = container.children;
+    const place = this.getPlaces().find((p) => p.id === this.currentFile?.id);
+    if (!place || !blocks.length) return;
+    // Fewer blocks than when it was left (it changed on the computer): the last one
+    const el = blocks[Math.min(place.block, blocks.length - 1)];
+    container.scrollTop += el.getBoundingClientRect().top - container.getBoundingClientRect().top + place.into;
+    this.log(`resume block ${place.block}`);
+  },
+
   // ── UI State ──
 
   showBrowser() {
@@ -2107,6 +2166,8 @@ const App = {
   },
 
   setMode(mode) {
+    // "Editar" leaves the reading view behind: its place is kept for the next opening
+    if (mode === 'edit') this.rememberPlace();
     this.mode = mode;
     document.body.dataset.view = mode;
 
@@ -2130,6 +2191,7 @@ const App = {
   renderPreview() {
     const container = this.els.previewContainer;
     const { frontmatter, body } = this.splitFrontmatter(this.getContent());
+    this._previewOf = this.currentFile;
 
     // The token in this page has full Drive scope, so rendered HTML is never trusted:
     // without the sanitizer (or the renderer) the note is shown as plain text instead
@@ -2834,6 +2896,8 @@ const App = {
     } catch (e) {
       console.warn('View not kept for the reload:', e);
     }
+    // Where the reading was comes back with the note's own opening (landInNote)
+    this.rememberPlace();
     this.log('reload: new version, from the bar');
     this.reloadPage();
   },
@@ -2842,8 +2906,8 @@ const App = {
   REOPEN_KEY: 'drivenotes_reopen',
 
   /** Right after the reload from the bar: back to the view it was tapped on, in the same mode, and with
-      "back" going where it went before. Where the view was in the note is the next step (see the card
-      "Retomar a nota onde parou"). */
+      "back" going where it went before. The reading view comes back where it was, as in any opening
+      (landInNote); the caret in the editor is still the next step (card "Retomar a nota onde parou"). */
   async reopenAfterUpdate() {
     let kept = null;
     try {
@@ -3021,8 +3085,10 @@ const App = {
   },
 
   /** Called before the editor switches to another file: the open one is saved in the background.
-      The draft is written first, synchronously, so the text survives whatever happens to the request. */
+      The draft is written first, synchronously, so the text survives whatever happens to the request.
+      Where its reading stopped is kept too (rememberPlace). */
   flushCurrent() {
+    this.rememberPlace();
     clearTimeout(this.autoSaveTimer);
     const file = this.currentFile;
     if (!file || !this.isDirty) return;
@@ -4600,13 +4666,17 @@ const App = {
 
     // Flush on hide/close: mobile users switch apps constantly.
     // saveDraft is sync (localStorage) so it always runs; save() is async best-effort.
+    // The place in the note too: an app killed in the background never gets to leave the note.
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden' && this.isDirty) {
+      if (document.visibilityState !== 'hidden') return;
+      this.rememberPlace();
+      if (this.isDirty) {
         this.saveDraft();
         this.save();
       }
     });
     window.addEventListener('pagehide', () => {
+      this.rememberPlace();
       if (this.isDirty) this.saveDraft();
     });
   },
