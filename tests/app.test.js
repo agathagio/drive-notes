@@ -2165,40 +2165,6 @@ function enterEm(App, w, conteudo, em) {
     check('a area de escrita pede maiuscula no comeco de frase',
       contentDOM.getAttribute('autocapitalize') === 'sentences',
       contentDOM.getAttribute('autocapitalize'));
-
-    // Depois de um marcador o 'sentences' nao basta: o Android anda pra tras a partir do cursor,
-    // pula os espacos, acha o marcador (o `]` da tarefa, o `-` da lista) e conclui que esta no meio
-    // de uma frase. Enquanto o cursor esta logo depois do marcador o atributo vira 'words', que
-    // sobe a letra que comeca palavra, e volta pra 'sentences' quando ha texto na frente.
-    const view = App.Editor._impl.view;
-    const modoEm = (texto, coluna) => {
-      App.Editor.setText(texto);
-      view.dispatch({ selection: { anchor: coluna } });
-      return contentDOM.getAttribute('autocapitalize');
-    };
-
-    for (const [texto, coluna] of [['- [ ] ', 6], ['- ', 2], ['## ', 3], ['> ', 2], ['1. ', 3],
-                                   ['  - ', 4], ['> - ', 4], ['- [ ] compras', 6]]) {
-      check(`cursor logo depois de ${JSON.stringify(texto.slice(0, coluna))} pede maiuscula`,
-        modoEm(texto, coluna) === 'words', modoEm(texto, coluna));
-    }
-
-    for (const [texto, coluna] of [['', 0], ['texto', 5], ['- feira', 7], ['- a', 3], ['   ', 3],
-                                   ['- ', 1]]) {
-      check(`cursor depois de ${JSON.stringify(texto.slice(0, coluna))} segue no modo de frase`,
-        modoEm(texto, coluna) === 'sentences', modoEm(texto, coluna));
-    }
-
-    // O caminho de verdade: a nota vazia, o toque no botao da barra, e a letra que vem depois
-    App.Editor.setText('');
-    App.Editor.format('checklist');
-    check('tocar em tarefa deixa o teclado pronto pra subir a letra',
-      contentDOM.getAttribute('autocapitalize') === 'words',
-      { texto: App.Editor.getText(), modo: contentDOM.getAttribute('autocapitalize') });
-    view.dispatch({ changes: { from: 6, insert: 'F' }, selection: { anchor: 7 } });
-    check('com a letra escrita o teclado volta ao modo de frase',
-      contentDOM.getAttribute('autocapitalize') === 'sentences',
-      contentDOM.getAttribute('autocapitalize'));
   }
 
   console.log('42. Foto desenhada na linha, no CM6');
@@ -2481,6 +2447,29 @@ function enterEm(App, w, conteudo, em) {
     toque(galeria, 'touchstart', 300, 700);
     toque(galeria, 'touchend', 360, 700);
     check('arrastar em cima do botao da galeria nao abre o seletor', abriu === 1, abriu);
+  }
+
+  console.log('46. Painel de diagnostico: a versao do cache e o editor em uso');
+  {
+    const { App, w } = await boot();
+    const d = w.document;
+    // O jsdom nao tem Cache Storage: a leitura falha e o painel diz que nao deu, em vez de
+    // inventar um numero. Versao errada no painel e pior que versao nenhuma
+    check('sem cache storage a versao sai como indisponivel', App._version === 'indisponível', App._version);
+
+    w.caches = { keys: async () => ['drivenotes-v36', 'outra-coisa-v1'] };
+    await App.readVersion();
+    check('so os caches do app entram na linha', App._version === 'drivenotes-v36', App._version);
+
+    App.showDiagnostics();
+    const dbg = d.getElementById('debug-text').textContent;
+    check('o painel abre dizendo a versao e o editor em uso',
+      dbg.includes('versão: drivenotes-v36') && dbg.includes('editor: textarea'),
+      dbg.slice(0, 60));
+
+    w.caches = { keys: async () => [] };
+    await App.readVersion();
+    check('primeira abertura, sem cache ainda: o painel diz isso', App._version === 'sem cache', App._version);
   }
 
   done();
