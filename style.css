@@ -1,4 +1,4 @@
-/* Drive Notes — Mobile-first dark theme */
+/* Drive Notes: Mobile-first dark theme */
 
 :root {
   /* Os controles que o navegador desenha sozinho seguem o esquema declarado aqui, não o CSS.
@@ -26,6 +26,10 @@
      funcionar por cima de qualquer uma das camadas escuras. Quem usa no editor é o realce de
      sintaxe do CodeMirror, montado no app.js: ele lê esta variável, não um hex próprio. */
   --code-bg: rgba(255,255,255,0.08);
+  /* Marca-texto (==texto== na nota). O mesmo roxo do accent, transparente: por cima do fundo
+     escuro ele fica discreto o bastante para o texto continuar legível, e acompanha a paleta
+     em vez de fixar um amarelo de caneta. */
+  --mark-bg: color-mix(in srgb, var(--accent) 40%, transparent);
   /* Desbotados de propósito: os cheios do Material antigo gritavam mais alto que o nome da nota */
   --success: #6bbf7b;
   --warning: #e0a458;
@@ -332,6 +336,14 @@ body {
 .preview-container li { margin: 0.2em 0; }
 /* The item that follows a blank line in the note: the only place where a list opens up (see app.js) */
 .preview-container li.gap { margin-top: var(--list-gap); }
+
+/* Marca-texto: ==texto== na nota (ver markExtension no app.js) */
+mark {
+  background: var(--mark-bg);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 2px;
+}
 
 /* Wikilinks */
 .preview-container a.wikilink {

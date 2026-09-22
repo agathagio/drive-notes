@@ -2472,5 +2472,92 @@ function enterEm(App, w, conteudo, em) {
     check('primeira abertura, sem cache ainda: o painel diz isso', App._version === 'sem cache', App._version);
   }
 
+  console.log('47. A barra de formatacao: 18 botoes, todos desenhados');
+  {
+    const { w } = await boot();
+    const botoes = [...w.document.querySelectorAll('.toolbar .toolbar-btn')];
+    const ordem = botoes.map(b => b.dataset.history || b.dataset.format || b.dataset.photo || b.dataset.sketch);
+    // A ordem e a barra que a Agatha usa com o polegar: desfazer e refazer, os links da nota, a
+    // foto e o desenho, a formatacao de texto, os blocos, e as listas no fim
+    const esperada = ['undo', 'redo', 'wikilink', 'tag', 'camera', 'gallery', 'open', 'heading',
+      'bold', 'italic', 'strikethrough', 'highlight', 'code', 'quote', 'link', 'list', 'ordered', 'checklist'];
+    check('a barra tem os 18 botoes na ordem combinada', ordem.join(',') === esperada.join(','), ordem);
+    // Letra e emoji na barra saiam com a fonte de cada Android e nao herdavam a cor do botao:
+    // todo botao e SVG de traco, e nenhum tem texto solto dentro
+    const semDesenho = botoes.filter(b => !b.querySelector('svg') || b.textContent.trim());
+    check('todo botao e um SVG, sem letra nem emoji sobrando', semDesenho.length === 0,
+      semDesenho.map(b => b.title));
+    const semNome = botoes.filter(b => !(b.getAttribute('aria-label') || '').trim());
+    check('todo botao se anuncia pro leitor de tela', semNome.length === 0, semNome.map(b => b.title));
+  }
+
+  console.log('48. Botoes de link entre notas e de tag');
+  {
+    const { App } = await boot({ editor: true });
+    const view = App.Editor._impl.view;
+    const sel = () => { const s = view.state.selection.main; return `${s.from},${s.to}`; };
+
+    App.Editor.setText('nome');
+    view.dispatch({ selection: { anchor: 0, head: 4 } });
+    App.applyFormat('wikilink');
+    check('com texto selecionado o botao envolve a selecao',
+      App.Editor.getText() === '[[nome]]', App.Editor.getText());
+
+    App.Editor.setText('');
+    App.applyFormat('wikilink');
+    check('sem selecao entra [[texto]] com "texto" ja selecionado, pra digitar por cima',
+      App.Editor.getText() === '[[texto]]' && sel() === '2,7', { texto: App.Editor.getText(), sel: sel() });
+
+    App.Editor.setText('etiqueta');
+    view.dispatch({ selection: { anchor: 0, head: 8 } });
+    App.applyFormat('tag');
+    check('a tag so poe o # na frente da selecao',
+      App.Editor.getText() === '#etiqueta', App.Editor.getText());
+
+    App.Editor.setText('');
+    App.applyFormat('tag');
+    check('sem selecao a tag deixa #texto com "texto" selecionado',
+      App.Editor.getText() === '#texto' && sel() === '1,6', { texto: App.Editor.getText(), sel: sel() });
+  }
+
+  console.log('49. Lista numerada na barra');
+  {
+    // A numerada entra pela tabela FORMATS como qualquer outro marcador de linha: quem faz o
+    // trabalho e o linePrefixChange, e e ele que segura o cursor onde a escrita estava
+    const { App } = await boot({ editor: true });
+    const view = App.Editor._impl.view;
+    const cursor = () => view.state.selection.main.head;
+
+    App.Editor.setText('- a');
+    view.dispatch({ selection: { anchor: 3 } });
+    App.applyFormat('ordered');
+    check('a lista vira numerada e o cursor continua depois do "a"',
+      App.Editor.getText() === '1. a' && cursor() === 4, { texto: App.Editor.getText(), cursor: cursor() });
+
+    App.applyFormat('ordered');
+    check('numerada de novo tira o marcador',
+      App.Editor.getText() === 'a' && cursor() === 1, { texto: App.Editor.getText(), cursor: cursor() });
+
+    App.Editor.setText('1. a');
+    view.dispatch({ selection: { anchor: 4 } });
+    App.applyFormat('list');
+    check('numerada vira lista com um toque, sem virar duas linhas de marcador',
+      App.Editor.getText() === '- a' && cursor() === 3, { texto: App.Editor.getText(), cursor: cursor() });
+  }
+
+  console.log('50. O leitor entende marca-texto e riscado');
+  {
+    const { App } = await boot();
+    const ler = (texto) => { App.setContent(texto); App.setMode('preview'); return App.els.previewContainer.innerHTML; };
+    check('==x== vira marca-texto', ler('==x==').includes('<mark>x</mark>'), ler('==x=='));
+    check('o negrito sobrevive dentro da marca',
+      ler('==**x**==').includes('<mark><strong>x</strong></mark>'), ler('==**x**=='));
+    // O sanitizador nao pode comer a tag nova, e os casos que nao sao marca-texto continuam texto
+    check('o DOMPurify deixa o <mark> passar', ler('==x==').includes('<mark'), ler('==x=='));
+    check('==== sozinho nao abre marca nenhuma', !ler('====').includes('<mark'), ler('===='));
+    check('== x == com espaco encostado fica texto', !ler('== x ==').includes('<mark'), ler('== x =='));
+    check('~~x~~ continua saindo riscado pelo GFM', ler('~~x~~').includes('<del>x</del>'), ler('~~x~~'));
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });

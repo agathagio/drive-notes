@@ -540,8 +540,10 @@ const FAKE_DRIVE = `
     // rola e o navegador, e o jsdom nao rola nada.
     await send('Emulation.setTouchEmulationEnabled', { enabled: true });
     const alvo = await js(`(() => {
-      const b = document.querySelector('.toolbar-btn[data-format="quote"]').getBoundingClientRect();
-      return { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) };
+      // The target has to be on the 360px screen before the bar scrolls: the quote button was, with 11
+      // buttons; with 18 it sits past the edge and a touch out there lands on nothing (v37)
+      const b = document.querySelector('.toolbar-btn[data-format="wikilink"]').getBoundingClientRect();
+      return { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2), right: Math.round(b.right) };
     })()`);
     const textoAntes = await js('__App.Editor.getText()');
     let rolou = false;
@@ -558,6 +560,7 @@ const FAKE_DRIVE = `
       await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
       if (!rolou) console.log(`     (tentativa ${tentativa} de rolar a barra perdida)`);
     }
+    check('o botao alvo do arrasto esta na tela (senao o toque cai no nada)', alvo.right <= 360, alvo);
     check('o dedo arrastado em cima de um botao rola a barra', rolou,
       await js('document.querySelector(".toolbar").scrollLeft'));
     check('e o arrasto nao formatou nada: rolar nao e tocar',

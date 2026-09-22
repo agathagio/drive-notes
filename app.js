@@ -2845,8 +2845,15 @@ const App = {
     italic: { wrap: ['*', '*'] },
     code: { wrap: ['`', '`'] },
     link: { wrap: ['[', '](url)'] },
+    strikethrough: { wrap: ['~~', '~~'] },
+    // Obsidian's highlight. The reader learns it in the markExtension at the end of this file
+    highlight: { wrap: ['==', '=='] },
+    // The note link and the tag are wraps like any other: [[nome]] and #etiqueta
+    wikilink: { wrap: ['[[', ']]'] },
+    tag: { wrap: ['#', ''] },
     heading: { line: '## ' },
     list: { line: '- ' },
+    ordered: { line: '1. ' },
     quote: { line: '> ' },
     checklist: { line: '- [ ] ' },
   },
@@ -3560,6 +3567,32 @@ const wikilinkExtension = {
   },
 };
 
+// Obsidian's highlight: ==texto== becomes <mark>texto</mark>. Inline, so a highlight inside a code
+// span or a fenced block is left alone, and its children go back through the lexer so ==**x**==
+// keeps the bold inside the mark.
+const markExtension = {
+  name: 'highlight',
+  level: 'inline',
+  start(src) {
+    const index = src.indexOf('==');
+    return index < 0 ? undefined : index;
+  },
+  tokenizer(src) {
+    // The lookahead rules out ==== and "== x ==": a highlight opens on a non-space and closes on one
+    const match = /^==(?=\S)([\s\S]*?\S)==/.exec(src);
+    if (!match) return undefined;
+    return {
+      type: 'highlight',
+      raw: match[0],
+      text: match[1],
+      tokens: this.lexer.inlineTokens(match[1]),
+    };
+  },
+  renderer(token) {
+    return `<mark>${this.parser.parseInline(token.tokens)}</mark>`;
+  },
+};
+
 // ── Lists: a blank line groups, it does not respace ──
 // A blank line between two items is how a list is split into groups while writing, and Obsidian shows it
 // that way: the items of a group stay together and only the groups are set apart. One blank line makes
@@ -3591,7 +3624,7 @@ if (typeof marked !== 'undefined') {
     gfm: true,
   });
   marked.use({
-    extensions: [wikilinkExtension],
+    extensions: [wikilinkExtension, markExtension],
     walkTokens: ungroupLooseLists,
     renderer: {
       listitem(item) {
