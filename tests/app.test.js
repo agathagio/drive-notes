@@ -54,6 +54,17 @@ function makeDrive() {
           .map(f => ({ id: f.id, name: f.name, parents: f.parents, mimeType: f.mimeType || 'text/markdown', modifiedTime: f.modifiedTime }));
         return json({ files });
       }
+      // "Who links to this note": full text alone, the way the Drive does it (any file with the word, in any form)
+      const fullText = /^fullText contains '((?:[^'\\]|\\.)*)'/.exec(q);
+      if (fullText) {
+        drive.log.push(`FULLTEXT ${fullText[1]}`);
+        if (drive.failReads) return json({}, 500);
+        const word = fullText[1].replace(/\\(.)/g, '$1').toLowerCase();
+        const files = [...drive.files.values()].filter(f => !f.trashed && f.mimeType !== FOLDER
+          && (String(f.content).toLowerCase().includes(word) || f.name.toLowerCase().includes(word)))
+          .map(f => ({ id: f.id, name: f.name, parents: f.parents, mimeType: f.mimeType || 'text/markdown', modifiedTime: f.modifiedTime }));
+        return json({ files });
+      }
       if (q.includes(' contains ')) {
         // Search, the way the Drive does it: a name matches on the start of a word, the text on a whole word
         drive.log.push(`SEARCH ${q}`);
@@ -2921,6 +2932,97 @@ function enterEm(App, w, conteudo, em) {
     check('(watcher) lista aberta', wW.CM6.completionStatus(viewW.state) === 'active', wW.CM6.completionStatus(viewW.state));
     check('voltar fecha a lista e fica na nota', wW.__back() === 'handled' && wW.CM6.completionStatus(viewW.state) === null && AppW.currentFile?.id === 'N2');
     check('proximo voltar sai da nota', wW.__back() === 'handled' && (await sleep(80), AppW.currentFile == null || AppW.currentFile.id !== 'N2'));
+  }
+
+  console.log('56. Quem aponta pra esta nota: busca no Drive, conferida no texto');
+  {
+    const { App, drive } = await boot();
+    seedVault(drive);
+    drive.put('L1', 'um.md', 'vai [[zebra]] e volta', ['d-proj']);
+    drive.put('L2', 'dois.md', 'foto ![[zebra]] alias [[Zebra|a bicha]] secao [[zebra#Cabeca]] com md [[zebra.md]]', [VAULT]);
+    drive.put('L3', 'tres.md', 'a palavra zebra sem link, e [[zebra-maior]] que e outra nota', [VAULT]);
+    drive.put('L4', 'fora.md', '[[zebra]] fora do vault', ['outra-pasta']);
+    drive.put('L5', 'oculta.md', '[[zebra]] dentro do .obsidian', ['d-obs']);
+    drive.put('L6', 'lixo.json', '[[zebra]]', [VAULT]); drive.files.get('L6').mimeType = 'application/json';
+
+    const re = App.linkPattern('zebra');
+    const forms = ['[[zebra]]', '![[zebra]]', '[[Zebra|a]]', '[[zebra#Cabeca]]', '[[zebra#Cabeca|a]]', '[[zebra.md]]'];
+    check('a regex casa todas as formas de link', forms.every(f => { re.lastIndex = 0; return re.test(f); }));
+    const not = ['[[zebra-maior]]', 'zebra', '[zebra]', '[[pasta/zebra]]'];
+    check('e nao casa o que nao e link pra ela', not.every(f => { re.lastIndex = 0; return !re.test(f); }));
+
+    const linking = await App.findLinkingNotes('zebra.md');
+    check('acha as duas notas do vault com link de verdade, e so elas',
+      linking.map(n => n.id).sort().join() === 'L1,L2', linking.map(n => n.id));
+    check('cada uma vem com o texto e o modifiedTime de antes do download',
+      linking.every(n => typeof n.content === 'string' && n.modifiedTime === drive.files.get(n.id).modifiedTime));
+    // Baixadas: L1, L2, L3 (tem a palavra, sem link) e a propria zebra.md (o nome casa na busca). Fora do
+    // vault (L4), dentro do .obsidian (L5) e o json (L6) nao sao baixados.
+    check('so as candidatas do vault foram baixadas',
+      drive.log.filter(l => l.startsWith('GET content')).length === 4, drive.log.filter(l => l.startsWith('GET content')));
+    const except = await App.findLinkingNotes('zebra.md', { exceptId: 'L1' });
+    check('exceptId deixa a propria nota de fora', except.map(n => n.id).join() === 'L2');
+  }
+
+  console.log('57. Apagar a nota aberta: lixeira do Drive, some das recentes e do indice, volta a tela');
+  {
+    const { App, drive, w, type } = await boot({ watcher: true });
+    seedVault(drive);
+    drive.put('L1', 'um.md', 'vai [[zebra]]', ['d-proj']);
+    drive.put('L2', 'dois.md', '[[zebra]] de novo', [VAULT]);
+    const d = w.document;
+    await App.noteIndex();
+
+    // nota nova, ainda sem id: o botao nem aparece
+    App.newFile();
+    App.els.fileName.click();
+    check('nota sem id: modal sem o botao apagar', App.els.modal.classList.contains('visible') && d.getElementById('modal-delete').hidden);
+    App.hideModal();
+
+    d.getElementById('welcome-open').click(); await sleep(80);
+    [...d.querySelectorAll('.browser-item')].find(li => li.textContent.includes('zebra')).click(); await sleep(80);
+    // Tres passos atras dela: a tela inicial, a nota nova de cima e a pasta. E dessa pasta que o apagar tem que voltar.
+    check('zebra aberta', App.currentFile?.id === 'n-z' && App.navStack.length === 3
+      && App.navStack[2].view === 'browse' && App.navStack[2].id === VAULT, [App.navStack.length, App.navStack]);
+    App.els.fileName.click();
+    check('nota do Drive: modal com o botao apagar', !d.getElementById('modal-delete').hidden);
+
+    // cancelar nao apaga
+    d.getElementById('modal-delete').click();
+    await sleep(20);
+    check('modal do nome fechou e o dialogo de confirmacao abriu',
+      !App.els.modal.classList.contains('visible') && d.getElementById('confirm-overlay').classList.contains('visible')
+      && d.getElementById('confirm-title').textContent === 'Apagar esta nota?');
+    await sleep(120);
+    check('o dialogo ganhou a contagem de quem aponta pra ela',
+      d.getElementById('confirm-text').textContent.includes('2 notas têm link pra esta; os links ficam.'), d.getElementById('confirm-text').textContent);
+    d.getElementById('confirm-cancel').click(); await sleep(20);
+    check('cancelar: nada na lixeira, nota continua aberta', !drive.files.get('n-z').trashed && App.currentFile?.id === 'n-z');
+
+    // edicao pendente e apagar: o save enfileirado roda antes, e a lixeira depois; nada recria a nota
+    App.setMode('edit'); type('mexi');
+    App.els.fileName.click(); d.getElementById('modal-delete').click(); await sleep(20);
+    d.getElementById('confirm-ok').click();
+    await sleep(150); await App._saveChain; await sleep(50);
+    const trashed = drive.files.get('n-z');
+    check('foi pra lixeira', trashed.trashed === true);
+    check('a fila terminou na lixeira, nao num save', drive.log.filter(l => l.startsWith('TRASH ') || l.startsWith('PATCH n-z')).pop().startsWith('TRASH'), drive.log.slice(-4));
+    check('saiu das recentes', !App.getRecents().some(r => r.id === 'n-z'));
+    check('saiu do indice', !App._noteIndex.some(n => n.id === 'n-z'));
+    check('sem rascunho sobrando', !w.localStorage.getItem('drivenotes_draft_n-z'));
+    check('voltou pra pasta', d.body.dataset.view === 'browse' && App.folder?.id === VAULT, d.body.dataset.view);
+    check('os links das outras notas ficaram', drive.files.get('L1').content === 'vai [[zebra]]' && drive.files.get('L2').content === '[[zebra]] de novo');
+    check('nao ha mais nota nenhuma com id n-z criada de novo', [...drive.files.values()].filter(f => f.name === 'zebra.md').length === 1);
+
+    // o Drive recusa: a nota fica
+    await App.navigateTo('n-a', 'Abacaxi.md'); await sleep(50);
+    drive.failTrash = true;
+    App.els.fileName.click(); d.getElementById('modal-delete').click(); await sleep(20);
+    d.getElementById('confirm-ok').click();
+    await sleep(100); await App._saveChain;
+    check('Drive recusou: nota continua aberta, status diz', App.currentFile?.id === 'n-a' && !drive.files.get('n-a').trashed
+      && App.els.saveStatus.textContent === 'Erro ao apagar', App.els.saveStatus.textContent);
+    drive.failTrash = false;
   }
 
   done();

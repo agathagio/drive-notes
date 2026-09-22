@@ -699,6 +699,19 @@ mark {
   color: var(--bg-primary);
 }
 
+/* The delete inside the name dialog: on the left, with no fill, so that it does not compete with
+   the rename. The red of the border and of the text is the same --error as the dialogs.
+   The display: none is not redundant: .btn is a flex box, which beats the hidden attribute. */
+.btn.btn-danger.btn-quiet {
+  background: transparent;
+  color: var(--error);
+  margin-right: auto;
+}
+
+.btn.btn-danger.btn-quiet[hidden] {
+  display: none;
+}
+
 .modal.modal-wide {
   max-width: 560px;
 }

@@ -113,6 +113,7 @@ const App = {
       modalInput: document.getElementById('modal-input'),
       modalCancel: document.getElementById('modal-cancel'),
       modalConfirm: document.getElementById('modal-confirm'),
+      modalDelete: document.getElementById('modal-delete'),
       conflict: document.getElementById('conflict-overlay'),
       conflictText: document.getElementById('conflict-text'),
       browser: document.getElementById('browser'),
@@ -3062,6 +3063,7 @@ const App = {
     this.showModal('Renomear nota', 'Nome do arquivo', (value) => this.renameFile(file, value), {
       value: file.name,
       confirmLabel: 'Renomear',
+      onDelete: file.id ? () => this.promptDelete(file) : null,
     });
   },
 
@@ -3131,13 +3133,104 @@ const App = {
     }
   },
 
+  // ── Links to a note ──
+
+  /** Every form of a link to the note called `base` (the name without .md): [[base]], [[base|alias]],
+      [[base#heading]], [[base#heading|alias]], ![[base]], with or without the .md inside. Case does not
+      matter, as in the Obsidian. `[[base-bigger]]` and `[[folder/base]]` are other links and do not match.
+      Group 1 is the opening `[[`, so that a replacement can keep it. */
+  linkPattern(base) {
+    const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(\\[\\[)${escaped}(?:\\.md)?(?=[\\]#|])`, 'gi');
+  },
+
+  /** The vault notes whose text links to the note called `name`, each with its text as downloaded and
+      the modifiedTime read BEFORE the download (the conflict check of whoever writes it back).
+      The Drive's full-text search brings every file with the word, in any form: only a real link counts. */
+  async findLinkingNotes(name, { exceptId = null } = {}) {
+    const base = name.replace(/\.md$/i, '');
+    const pattern = this.linkPattern(base);
+    const params = new URLSearchParams({
+      q: `fullText contains ${this.driveQuote(base)} and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
+      fields: 'files(id,name,parents,mimeType,modifiedTime)',
+      pageSize: '100',
+    });
+    const response = await this.driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
+    const candidates = ((await response.json()).files || []).filter(f => this.isNote(f) && f.id !== exceptId);
+    const linking = [];
+    for (const f of candidates) {
+      const folder = f.parents?.[0];
+      const trail = folder ? await Promise.resolve(this.folderTrail(folder)).catch(() => null) : null;
+      if (!trail || trail.some(n => n.startsWith('.'))) continue;
+      const content = await this.driveGetFileContent(f.id);
+      pattern.lastIndex = 0;
+      if (!pattern.test(content)) continue;
+      linking.push({ id: f.id, name: f.name, modifiedTime: f.modifiedTime, content });
+    }
+    return linking;
+  },
+
+  // ── Delete ──
+
+  /** "Apagar" in the name dialog: confirm, then the note goes to the Drive's bin. The count of notes
+      that link to it arrives while the dialog is open, and the dialog does not wait for it. */
+  async promptDelete(file) {
+    this.hideModal();
+    const title = 'Apagar esta nota?';
+    const base = 'Vai pra lixeira do Drive, de onde dá pra recuperar por 30 dias.';
+    this.findLinkingNotes(file.name, { exceptId: file.id }).then((notes) => {
+      const overlay = document.getElementById('confirm-overlay');
+      if (!notes.length || !overlay.classList.contains('visible')) return;
+      if (document.getElementById('confirm-title').textContent !== title) return;
+      const count = notes.length === 1 ? '1 nota tem' : `${notes.length} notas têm`;
+      document.getElementById('confirm-text').textContent = `${base} ${count} link pra esta; os links ficam.`;
+    }).catch((e) => console.warn('Link count failed:', e));
+    const remove = await this.confirmDialog(title, base, 'Apagar');
+    if (!remove) return false;
+    return this.deleteFile(file);
+  },
+
+  /** The note goes to the bin, after whatever the queue still holds for it (a save on its way would
+      otherwise recreate it). Unsaved text in the editor is let go: deleting is the decision. */
+  async deleteFile(file) {
+    if (!file.id) return false;
+    try {
+      await this.ensureAuth();
+    } catch {
+      this.setSaveStatus('error', 'Faça login pra apagar');
+      return false;
+    }
+    if (this.currentFile === file) {
+      clearTimeout(this.autoSaveTimer);
+      this.isDirty = false;
+    }
+    try {
+      await this.enqueue(() => this.driveTrashFile(file.id));
+    } catch (e) {
+      console.error('Delete failed:', e);
+      if (this.currentFile === file) this.setSaveStatus('error', 'Erro ao apagar');
+      return false;
+    }
+    this.clearDraft(file);
+    this.removeFromRecents(file.id);
+    this.noteIndexRemove(file.id);
+    if (this.currentFile === file) {
+      this.setSaveStatus('saved', 'Apagada');
+      this.goBack('delete');
+    }
+    return true;
+  },
+
   // ── Modal ──
 
-  showModal(title, placeholder, onConfirm, { value = '', confirmLabel = 'Criar' } = {}) {
+  showModal(title, placeholder, onConfirm, { value = '', confirmLabel = 'Criar', onDelete = null } = {}) {
     this.els.modal.querySelector('h3').textContent = title;
     this.els.modalInput.placeholder = placeholder;
     this.els.modalInput.value = value;
     this.els.modalConfirm.textContent = confirmLabel;
+    // The delete button only exists for a note that is on the Drive; showModal is also the "new note" dialog
+    this.els.modalDelete.hidden = !onDelete;
+    this._modalDelete = onDelete;
     this.els.modal.classList.add('visible');
     this.els.modalInput.focus();
     // Ready to type over the name, keeping the extension
@@ -3155,6 +3248,7 @@ const App = {
   hideModal() {
     this.els.modal.classList.remove('visible');
     this._modalConfirm = null;
+    this._modalDelete = null;
     this.armWatcher();
   },
 
@@ -3788,6 +3882,9 @@ const App = {
     this.els.modalCancel.addEventListener('click', () => this.hideModal());
     this.els.modalConfirm.addEventListener('click', () => {
       if (this._modalConfirm) this._modalConfirm();
+    });
+    this.els.modalDelete.addEventListener('click', () => {
+      if (this._modalDelete) this._modalDelete();
     });
     this.els.modalInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && this._modalConfirm) this._modalConfirm();

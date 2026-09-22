@@ -110,8 +110,16 @@ const SETUP = `
     await shot('5c-link-list');
     // A nota volta ao que era, pra lista não sobrar nas telas seguintes
     await js(`__App.Editor.closeLinkList(); __App.setContent(${JSON.stringify(NOTE)}); 'ok'`);
+    // O modal do nome numa nota que ja esta no Drive: e por ele que se apaga, e por isso o Apagar
+    // aparece aqui, discreto e do outro lado dos dois botoes de sempre
     await js(`__App.promptRename(); 'ok'`);
     await shot('6-renomear');
+    // O dialogo de apagar. O nome vem de uma nota que as outras apontam, pra contagem de links
+    // (que chega depois de o dialogo abrir) sair no print
+    await js(`__App.promptDelete({ id: 'n1', name: 'Plano de ação.md' }); 'ok'`);
+    await sleep(600);
+    await shot('6b-delete-dialog');
+    await js(`document.getElementById('confirm-cancel').click(); 'ok'`);
     await js(`__App.hideModal(); __App.showConflict(__App.currentFile); 'ok'`);
     await shot('7-conflito');
     await js(`__App.resolveConflict('later'); __App.goHome();
