@@ -2398,6 +2398,18 @@ function enterEm(App, w, conteudo, em) {
     r = enter('a > b', 5);
     check('sinal de maior no meio da frase nao e citacao', r.text === 'a > b\n' && r.at === '1:0', r);
 
+    // Dentro de bloco de codigo, `> ` e texto do codigo, nao citacao: o Enter so quebra a linha. O
+    // comando decidia pelo texto da linha e apagava o conteudo dela
+    r = enter('```\n> \n```', 6);
+    check('linha "> " dentro de bloco de codigo: o Enter quebra a linha e o "> " fica',
+      r.text === '```\n> \n\n```' && r.at === '2:0', r);
+    r = enter('```\n>\n```', 5);
+    check('linha ">" dentro de bloco de codigo tambem fica', r.text === '```\n>\n\n```' && r.at === '2:0', r);
+    // Bloco de codigo dentro de uma citacao: a linha e codigo, a citacao em volta nao encerra nela
+    r = enter('> ```\n> \n> ```', 8);
+    check('"> " dentro de codigo que mora numa citacao continua sendo codigo',
+      r.text.startsWith('> ```\n> \n') && r.text.endsWith('> ```') && r.text.split('\n').length === 4, r);
+
     // Com um trecho selecionado, o Enter e o da biblioteca: ele troca a selecao pela linha nova.
     // O comando de encerrar citacao olhava so a linha do cursor e ignorava a selecao, entao apagava
     // o `> ` e deixava o trecho selecionado na nota: o Enter da pessoa sumia no caminho.

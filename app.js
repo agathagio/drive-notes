@@ -285,7 +285,9 @@ const App = {
         if (!info) continue;
         if (available === null) available = availableWidth();
         const width = Math.min(available || info.width, info.width);
-        const height = Math.round(Math.min(width * info.height / info.width, App.EMBED_MAX_HEIGHT));
+        // Down, never to the nearest: the picture is drawn at this height times its proportion, and a
+        // height rounded up draws it a pixel or two wider than the line, cut on the right
+        const height = Math.floor(Math.min(width * info.height / info.width, App.EMBED_MAX_HEIGHT));
         marks.push(Decoration.line({
           attributes: { class: 'embed-line', style: `--embed: url("${info.url}"); --embed-h: ${height}px` },
         }).range(line.from));
@@ -428,13 +430,26 @@ const App = {
     // 5f96e08: it never ran, and the app went on spending three Enters to get out of a list. That
     // is why this command's keymap goes in `Prec.highest`, and why scenario 40 presses a real Enter.
     const EMPTY_QUOTE_LINE = /^\s*>\s*$/;
+    // The text says "empty quote line"; only the syntax tree says whether it really is a quote. Inside
+    // a fenced code block, `> ` is code, and ending a quote there wiped the line. The node right
+    // after the `>` is a QuoteMark in a quote and code text in a code block, so the walk up from it
+    // meets a Blockquote or a code block first. The code check comes first on purpose: a code block
+    // that lives inside a quote has the Blockquote further up, and the line is still code.
+    const inQuote = (state, line) => {
+      const markEnd = line.from + line.text.indexOf('>') + 1;
+      for (let node = syntaxTree(state).resolveInner(markEnd, -1); node; node = node.parent) {
+        if (node.name === 'FencedCode' || node.name === 'CodeBlock') return false;
+        if (node.name === 'Blockquote') return true;
+      }
+      return false;
+    };
     const endQuote = (v) => {
       // With something selected, Enter is a replacement, and only the library command knows how to
       // make one. Looking at the line the caret happens to sit on would wipe the `> ` and leave the
       // selected text where it was, which is the Enter going missing.
       if (!v.state.selection.main.empty) return false;
       const line = v.state.doc.lineAt(v.state.selection.main.head);
-      if (!EMPTY_QUOTE_LINE.test(line.text)) return false;
+      if (!EMPTY_QUOTE_LINE.test(line.text) || !inQuote(v.state, line)) return false;
       v.dispatch({ changes: { from: line.from, to: line.to, insert: '' }, userEvent: 'input' });
       return true;
     };
@@ -530,6 +545,15 @@ const App = {
         // the keyboard rewrites the whole word it is composing on every keystroke; that was offered
         // and turned down, so the shift key stays in charge on a line with a marker.
         EditorView.contentAttributes.of({ autocapitalize: 'sentences' }),
+        // Typewriter scrolling: the line being written stops at the middle of the writing area and the
+        // text moves up a line at a time, instead of the caret sinking to the bottom edge, right on top
+        // of the toolbar and the keyboard. It is the library's own scroll-into-view with half the area
+        // as a bottom margin, so it only ever runs where the library already scrolls: typing and
+        // dictation. A tap or a finger dragging a selection never scrolls (the CM6 scrolls a selection
+        // into view only when it came from the keys), and the app's scrollToCaret still asks for focus.
+        // Measured at scroll time, so it follows the keyboard opening and closing. The room to lift the
+        // last line of the note up to the middle is the 50vh at the bottom of .cm-content, in the style.css.
+        EditorView.scrollMargins.of((v) => ({ bottom: v.scrollDOM.clientHeight / 2 })),
         // Before the app's Enter on purpose: the list's Enter (acceptCompletion) is installed in
         // Prec.highest too, and equal precedence is decided by position. With no list open it
         // answers false and the app's Enter runs as always.

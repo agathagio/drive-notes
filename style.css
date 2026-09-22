@@ -226,8 +226,11 @@ body {
   overscroll-behavior: contain;
 }
 
+/* The 50vh at the bottom is the typewriter scrolling's room (see scrollMargins in app.js): without
+   it the last line of the note cannot be lifted up to the middle, because there is nothing below
+   it to scroll into. Half the screen is always at least half the writing area. */
 .cm-editor .cm-content {
-  padding: 16px;
+  padding: 16px 16px 50vh;
 }
 
 /* O drawSelection esconde o cursor e a seleção do navegador e desenha os dois em camadas
@@ -517,6 +520,10 @@ mark {
   padding-left: 24px;
   margin: 0.4em 0;
 }
+/* A list right after another list: tasks, then numbered, then bullets are three lists to the markdown,
+   and only a blank line or a change of kind splits them, so this is the same break as a group inside
+   one list (li.gap) and gets the same gap. Without it the margins collapsed to 6px and the lists glued */
+.preview-container :is(ul, ol) + :is(ul, ol) { margin-top: var(--list-gap); }
 .preview-container img {
   max-width: 100%;
   height: auto;

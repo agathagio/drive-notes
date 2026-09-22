@@ -279,7 +279,9 @@ const FAKE_DRIVE = `
     const desenho = JSON.parse(await js(`(() => {
       const el = document.querySelectorAll('.cm-line')[0];
       const altura = parseFloat(getComputedStyle(el).getPropertyValue('--embed-h'));
-      return JSON.stringify({ embed: el.classList.contains('embed-line'), desenhada: altura * 4, linha: el.clientWidth });
+      const scroller = el.closest('.cm-scroller');
+      return JSON.stringify({ embed: el.classList.contains('embed-line'), desenhada: altura * 4, linha: el.clientWidth,
+        barra: scroller.offsetWidth - scroller.clientWidth, rola: scroller.scrollHeight > scroller.clientHeight });
     })()`));
     check('a foto desenhada cabe na largura real da linha, sem corte',
       desenho.embed && desenho.desenhada <= desenho.linha + 1 && desenho.desenhada >= desenho.linha - 4, desenho);
@@ -824,6 +826,91 @@ const FAKE_DRIVE = `
       trocou === true && await js(`document.getElementById('save-status').textContent`) === 'Atualizada do Drive');
     check('... sem perder a rolagem', antes > 0 && Math.abs(depois - antes) <= 2, { antes, depois });
     await js(APAGAR_BANCO);
+
+    console.log('16. Leitura: lista que vem depois de outra lista abre o mesmo respiro que um grupo');
+    // A nota dos prints da Agatha de 20 set 2026: tarefas em dois grupos, uma numerada, uma com
+    // marcador e sublista. Grupo dentro da mesma lista ja abria o respiro (li.gap, v28); lista
+    // seguinte colava na anterior. Medido em pixels, que so o navegador tem
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    await open(buildPage('listas', currentApp));
+    await js(FAKE_DRIVE);
+    await editNote('- [x] Lady\n- [x] Banguela\n- [x] Chloe\n- [x] Gucci\n\n- [x] Agatha\n- [x] Victor\n- [x] Ceiça\n\n'
+      + '1. Wicked\n2. Hadestown\n3. The Phantom of The Opera\n\n\n- Agatha\n  - Lady\n  - Gucci\n', 0, 0);
+    await js(`__App.setMode('preview'); 'ok'`);
+    await sleep(200);
+    const listas = JSON.parse(await js(`(() => {
+      const items = [...document.querySelectorAll('#preview-container li')];
+      const li = (text) => items.find(el => el.firstChild && el.textContent.trim().startsWith(text) && !el.closest('li li'));
+      const between = (a, b) => Math.round(li(b).getBoundingClientRect().top - li(a).getBoundingClientRect().bottom);
+      return JSON.stringify({
+        mesmoGrupo: between('Lady', 'Banguela'),
+        grupo: between('Gucci', 'Agatha'),
+        tarefaNumerada: between('Ceiça', 'Wicked'),
+        numeradaMarcador: between('The Phantom', 'Agatha\\n'),
+      });
+    })()`));
+    console.log('     distancias em px:', JSON.stringify(listas));
+    check('itens do mesmo grupo continuam juntos', listas.mesmoGrupo < 10, listas);
+    check('tarefas seguidas de numerada: o mesmo respiro de um grupo', Math.abs(listas.tarefaNumerada - listas.grupo) <= 2, listas);
+    check('numerada seguida de lista com marcador: o mesmo respiro', Math.abs(listas.numeradaMarcador - listas.grupo) <= 2, listas);
+    await send('Emulation.clearDeviceMetricsOverride');
+
+    console.log('17. Datilografia: a linha que se escreve para no meio da tela, e so a escrita rola');
+    // Sem teclado de verdade aqui: a area de escrita e a tela inteira menos cabecalho e barra. No
+    // celular o teclado encolhe a pagina (interactive-widget) e o meio passa a ser o meio do que sobra
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    await open(buildPage('datilografia', currentApp));
+    await js(FAKE_DRIVE);
+    const LONGA = Array.from({ length: 80 }, (_, i) => 'linha ' + i).join('\n');
+    // Altura do cursor em % da area que rola (0 = topo, 100 = pe), e a rolagem
+    const ondeEsta = async () => JSON.parse(await js(`(() => {
+      const view = __App.Editor._impl.view;
+      const caret = view.coordsAtPos(view.state.selection.main.head);
+      const box = view.scrollDOM.getBoundingClientRect();
+      return JSON.stringify({ altura: Math.round((caret.bottom - box.top) / box.height * 100),
+        rolagem: Math.round(view.scrollDOM.scrollTop) });
+    })()`));
+
+    await editNote(LONGA, 79, 'linha 79'.length);
+    await send('Input.insertText', { text: ' mais' });
+    await sleep(150);
+    const datiloFim = await ondeEsta();
+    console.log('     escrevendo no fim da nota:', JSON.stringify(datiloFim));
+    check('escrevendo no fim de nota longa, a linha fica no meio e nao colada no pe', datiloFim.altura >= 35 && datiloFim.altura <= 55, datiloFim);
+
+    // Ditado que quebra em varias linhas: a tela acompanha linha a linha e a frase entra inteira
+    const FRASE = 'hoje fui ao mercado e comprei tudo o que faltava pra semana, inclusive a racao dos cachorros e o cafe';
+    for (let n = 10; n <= FRASE.length; n += 15) {
+      await send('Input.imeSetComposition', { text: FRASE.slice(0, n), selectionStart: n, selectionEnd: n });
+      await sleep(40);
+    }
+    await send('Input.insertText', { text: FRASE });
+    await sleep(150);
+    const depoisDoDitado = await ondeEsta();
+    const texto = await js('__App.getContent()');
+    console.log('     depois de um ditado de varias linhas:', JSON.stringify(depoisDoDitado));
+    check('o ditado entra inteiro, uma vez so', texto.endsWith('linha 79 mais' + FRASE), texto.slice(-160));
+    check('... e a linha continua no meio, com a tela tendo subido', depoisDoDitado.altura >= 35 && depoisDoDitado.altura <= 55
+      && depoisDoDitado.rolagem > datiloFim.rolagem, { datiloFim, depoisDoDitado });
+
+    // No alto da nota nao ha o que rolar: escrever ali nao mexe na tela
+    await editNote(LONGA, 2, 0);
+    await js(`__App.Editor._impl.view.scrollDOM.scrollTop = 0; 'ok'`);
+    await send('Input.insertText', { text: 'x' });
+    await sleep(150);
+    const noAlto = await ondeEsta();
+    check('escrevendo no alto da nota, a tela fica parada', noAlto.rolagem === 0, noAlto);
+
+    // O toque so poe o cursor: tocar numa linha la embaixo nao puxa ela pro meio (quem puxa e a escrita)
+    const pe = JSON.parse(await js(`(() => { const b = __App.Editor._impl.view.scrollDOM.getBoundingClientRect();
+      return JSON.stringify({ x: b.left + 80, y: b.bottom - 30 }); })()`));
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: pe.x, y: pe.y, button: 'left', clickCount: 1 });
+    }
+    await sleep(150);
+    const depoisDoToque = await ondeEsta();
+    check('tocar numa linha perto do pe poe o cursor la sem rolar', depoisDoToque.rolagem === 0 && depoisDoToque.altura > 80, depoisDoToque);
+    await send('Emulation.clearDeviceMetricsOverride');
   } finally {
     browser.close();
   }
