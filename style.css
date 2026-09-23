@@ -947,6 +947,20 @@ body.has-selection .toolbar-btn.toolbar-extract {
   gap: 6px;
 }
 
+/* Table of contents: the recents rows, a finger tall, each level one step in (the step is inline, from
+   app.js). A long note has many headings: the list scrolls inside the sheet, Fechar stays in view */
+.toc-list {
+  max-width: none;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin: 0 0 12px;
+}
+
+.toc-list li {
+  min-height: 44px;
+  cursor: pointer;
+}
+
 .recents-list li:hover, .recents-list li:active {
   background: var(--button-bg);
 }
@@ -1195,11 +1209,13 @@ body[data-view="preview"] #btn-new {
   flex-shrink: 0;
 }
 
-/* The title of an open note is tappable: rename */
+/* The title of an open note is tappable: rename. Held in reading view it is the table of contents,
+   so Chrome's own long press callout stays off it (selecting is already off, from the body) */
 body[data-view="edit"] .file-name,
 body[data-view="preview"] .file-name {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
 }
 
 /* ── Utilities ── */

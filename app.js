@@ -72,6 +72,8 @@ const App = {
   // Views ahead of this one after going back (CloseWatcher mode), and the edge swipe under way: { side, x, y, armed }
   fwdStack: [],
   _swipe: null,
+  // The element a long press just fired on: the click its lift sends is swallowed (see onLongPress)
+  _longPressed: null,
   // The note on its way from the Drive, as a view description. Until it arrives the screen still shows the
   // previous view, but for navigation the note is already where we are (see viewState).
   _opening: null,
@@ -139,6 +141,9 @@ const App = {
       arrivalMessage: document.getElementById('arrival-message'),
       arrivalLogin: document.getElementById('arrival-login'),
       arrivalUl: document.getElementById('arrival-ul'),
+      tocOverlay: document.getElementById('toc-overlay'),
+      tocUl: document.getElementById('toc-ul'),
+      tocEmpty: document.getElementById('toc-empty'),
       updateBar: document.getElementById('update-bar'),
     };
 
@@ -2327,6 +2332,87 @@ const App = {
     }
   },
 
+  // ── Long press ──
+
+  LONG_PRESS_MS: 500,
+  LONG_PRESS_SLOP: 10,
+
+  /** Hold a finger still for LONG_PRESS_MS on an element inside `root` that matches `selector` (and that
+      `accept` agrees to): `fire(el)`. Passive touch listeners, like the edge swipe: the browser keeps the
+      scroll, and the swipe (on document) sees every touch as before. A finger that moves more than
+      LONG_PRESS_SLOP px, lifts early or is cancelled is no long press. The click the lift may send after
+      a long press is swallowed (see the capture listener in bindEvents), so a held name does not rename
+      and a held link does not open. */
+  onLongPress(root, selector, fire, { accept = () => true } = {}) {
+    let timer = null;
+    let start = null;
+    const stop = () => {
+      clearTimeout(timer);
+      timer = null;
+    };
+    const target = (e) => {
+      const el = e.target.closest?.(selector);
+      return el && root.contains(el) && accept(el) ? el : null;
+    };
+    root.addEventListener('touchstart', (e) => {
+      stop();
+      const el = e.touches.length === 1 ? target(e) : null;
+      if (!el) return;
+      start = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      timer = setTimeout(() => {
+        timer = null;
+        if (!accept(el)) return; // the screen changed under the finger (another mode, another view)
+        this._longPressed = el;
+        this.log(`long press ${el.id || el.tagName.toLowerCase()}`);
+        fire(el);
+      }, this.LONG_PRESS_MS);
+    }, { passive: true });
+    root.addEventListener('touchmove', (e) => {
+      if (!timer) return;
+      const t = e.touches[0];
+      if (!t || e.touches.length > 1 || Math.hypot(t.clientX - start.x, t.clientY - start.y) > this.LONG_PRESS_SLOP) stop();
+    }, { passive: true });
+    root.addEventListener('touchend', stop, { passive: true });
+    root.addEventListener('touchcancel', stop, { passive: true });
+    // Chrome's own long press (the link menu, the text selection): off only where ours lives
+    root.addEventListener('contextmenu', (e) => {
+      if (target(e)) e.preventDefault();
+    });
+  },
+
+  // ── Table of contents ──
+
+  /** The note's headings as drawn in the reading view, each level one step in. Each row scrolls to its
+      own element, so two headings with the same text are two different rows. Where the reading stops
+      after the jump is kept like any scroll: rememberPlace measures the view when the note is left. */
+  openToc() {
+    const headings = [...this.els.previewContainer.querySelectorAll('h1, h2, h3, h4, h5, h6')];
+    const ul = this.els.tocUl;
+    ul.innerHTML = '';
+    this.els.tocEmpty.hidden = headings.length > 0;
+    const level = (h) => Number(h.tagName[1]);
+    const top = Math.min(...headings.map(level));
+    for (const h of headings) {
+      const li = document.createElement('li');
+      li.className = 'toc-item';
+      li.style.paddingLeft = `${12 + (level(h) - top) * 16}px`;
+      li.textContent = h.textContent.trim();
+      li.addEventListener('click', () => {
+        this.closeToc();
+        h.scrollIntoView({ block: 'start' });
+      });
+      ul.appendChild(li);
+    }
+    this.els.tocOverlay.classList.add('visible');
+    this.els.tocOverlay.querySelector('.toc-list').scrollTop = 0;
+    this.armWatcher();
+  },
+
+  closeToc() {
+    this.els.tocOverlay.classList.remove('visible');
+    this.armWatcher();
+  },
+
   // ── Reading view ──
 
   renderPreview() {
@@ -2769,6 +2855,9 @@ const App = {
 
   /** One step back: close the dialog on top, or leave the drawing screen, or else return to the previous view */
   handleBack() {
+    // The system back button is no touch on the page: a lift click still owed to a long press will not
+    // come now, and left armed it would swallow the dismiss click below (a first "back" doing nothing)
+    this._longPressed = null;
     const dismiss = document.querySelector('.modal-overlay.visible [data-dismiss]');
     if (this.Editor.closeLinkList()) {
       // The link list is the topmost thing on screen: "back" closes it and stops there
@@ -4972,8 +5061,31 @@ const App = {
       this.els.browserSearch.focus();
     });
 
-    // Tap the title to rename the open note
+    // The click a lift sends after a long press: swallowed before anything else sees it. It does not
+    // land on the held element: what the long press opened is on top by then, and the click goes to
+    // it (measured in Edge: the TOC's backdrop, which closed the TOC as it opened). So the one
+    // swallowed is the first click after the long press, wherever it lands, and only until a new
+    // touch begins: any click after that belongs to the new touch and passes untouched.
+    document.addEventListener('touchstart', () => {
+      this._longPressed = null;
+    }, { capture: true, passive: true });
+    document.addEventListener('click', (e) => {
+      if (!this._longPressed) return;
+      this._longPressed = null;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }, true);
+
+    // Tap the title to rename the open note; hold it in reading view for the table of contents
     this.els.fileName.addEventListener('click', () => this.promptRename());
+    this.onLongPress(this.els.fileName, '#file-name', () => this.openToc(), {
+      accept: () => this.mode === 'preview' && !!this.currentFile && document.body.dataset.view === 'preview',
+    });
+    document.getElementById('toc-close')?.addEventListener('click', () => this.closeToc());
+    // A tap on the dimmed backdrop closes, like Fechar
+    this.els.tocOverlay.addEventListener('click', (e) => {
+      if (e.target === this.els.tocOverlay) this.closeToc();
+    });
 
     // Navigation
     this.els.btnBack?.addEventListener('click', () => this.goBack());

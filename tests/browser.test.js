@@ -1310,6 +1310,80 @@ const FAKE_DRIVE = `
     check('o que chegou ocupa no maximo tres linhas', sheet.whatLines <= 3, sheet);
     await js(`__App.hideArrivalSheet(); 'ok'`);
     await send('Emulation.clearDeviceMetricsOverride');
+
+    console.log('22. Toque longo de verdade: segurar o nome abre o sumario, dedo que anda nao, e o painel e tocavel');
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+    await open(buildPage('sumario', currentApp));
+    await esperar('window.__App', 15000);
+    // Uma nota com titulos, aberta na leitura, sem Drive: o conteudo entra direto
+    await js(`(() => { __App.currentFile = { id: 'T', name: 'uma nota com titulos.md' }; __App.setContent('# Um\\n\\ntexto\\n\\n## Dois\\n\\nmais');
+      __App.showEditor(); __App.setMode('preview'); __App.updateFileNameDisplay(); return 'ok'; })()`);
+    // O que a pagina viu, contado na janela em captura (antes do ouvinte do app, que engole o clique):
+    // o toque chegou, o clique veio ou nao, e em quem caiu
+    await js(`window.__renamed = 0; __App.promptRename = () => { window.__renamed++; };
+      window.__seen = { start: 0, move: 0, end: 0, cancel: 0, clicks: [] };
+      window.addEventListener('touchstart', () => window.__seen.start++, true);
+      window.addEventListener('touchmove', () => window.__seen.move++, true);
+      window.addEventListener('touchend', () => window.__seen.end++, true);
+      window.addEventListener('touchcancel', () => window.__seen.cancel++, true);
+      window.addEventListener('click', (e) => window.__seen.clicks.push(e.target.id || e.target.className || e.target.tagName), true); 'ok'`);
+    const caixaNome = JSON.parse(await js(`JSON.stringify(document.getElementById('file-name').getBoundingClientRect())`));
+    const cx = Math.round(caixaNome.x + caixaNome.width / 2), cy = Math.round(caixaNome.y + caixaNome.height / 2);
+    const tocAberto = `document.getElementById('toc-overlay').classList.contains('visible')`;
+    // Cada etapa espera a pagina dizer que viu o toque (fila do Input nao e a do Runtime.evaluate), e o
+    // touchcancel que o navegador as vezes injeta faz a tentativa ser refeita, como no cenario 10
+    const segurar = async (dx) => {
+      let r = null;
+      for (let tentativa = 1; tentativa <= 3; tentativa++) {
+        await js(`__App.closeToc(); window.__seen = { start: 0, move: 0, end: 0, cancel: 0, clicks: [] }; 'ok'`);
+        await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: cx, y: cy }] });
+        await esperar('window.__seen.start >= 1', 4000);
+        if (dx) {
+          await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: cx + dx, y: cy }] });
+          await esperar('window.__seen.move >= 1', 4000);
+        }
+        // Parado: o app abre o sumario com o dedo ainda na tela. Andou: passado o tempo do toque longo
+        // (contado depois de a pagina ver o movimento), nada abriu
+        const abriu = dx ? (await sleep(800), await js(tocAberto)) : await esperar(tocAberto, 4000);
+        await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        await esperar('window.__seen.end + window.__seen.cancel >= 1', 4000);
+        // O clique que o navegador manda depois de soltar (se mandar) vem logo atras do touchend
+        await sleep(300);
+        const seen = JSON.parse(await js('JSON.stringify(window.__seen)'));
+        r = { abriu, seen, aberto: await js(tocAberto), renamed: Number(await js('window.__renamed')) };
+        if (!seen.cancel) return r;
+        console.log(`     (tentativa ${tentativa} do toque longo perdida: touchcancel)`, JSON.stringify(seen));
+      }
+      return r;
+    };
+    const parado = await segurar(0);
+    console.log('     segurar parado:', JSON.stringify(parado));
+    check('segurar o nome abre o sumario', parado.abriu === true && parado.aberto === true, parado);
+    check('... e soltar nao renomeia (o clique, se vier, e engolido)', parado.renamed === 0, parado);
+    const linha = JSON.parse(await js(`(() => { const b = document.querySelector('#toc-ul li').getBoundingClientRect();
+      const el = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2); return JSON.stringify({ hit: !!el && !!el.closest('#toc-ul li'), h: b.height }); })()`));
+    check('a primeira linha do sumario e tocavel e tem altura de dedo', linha.hit && linha.h >= 44, linha);
+    const fechar = JSON.parse(await js(`(() => { const b = document.getElementById('toc-close').getBoundingClientRect();
+      const el = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2); return JSON.stringify({ hit: !!el && !!el.closest('#toc-close'), bottom: b.bottom }); })()`));
+    check('o Fechar e tocavel, dentro da tela', fechar.hit && fechar.bottom <= 844, fechar);
+    // Esc e o voltar do CloseWatcher fora do Android (ver drive-notes-aprendizados, Testes)
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    const fechouNoVoltar = await esperar(`!(${tocAberto})`, 4000);
+    check('o voltar de verdade (Esc) fecha o sumario e fica na nota', fechouNoVoltar && await js(`__App.currentFile.id`) === 'T');
+    const andou = await segurar(40);
+    console.log('     dedo que anda:', JSON.stringify(andou));
+    check('dedo que anda 40px nao abre', andou.abriu === false && andou.aberto === false, andou);
+    // Um toque curto depois de um toque longo: renomeia como sempre (nada ficou preso pra engolir)
+    await js(`window.__seen.clicks = []; 'ok'`);
+    await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: cx, y: cy }] });
+    await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    const renomeou = await esperar('window.__renamed >= 1', 4000);
+    check('toque curto no nome, depois disso, renomeia', renomeou === true && !(await js(tocAberto)), JSON.parse(await js('JSON.stringify(window.__seen)')));
+    console.log(`     o nome comeca em x=${Math.round(caixaNome.x)} (faixa do deslizar: ate 32px da borda)`);
+    await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+    await send('Emulation.clearDeviceMetricsOverride');
   } finally {
     browser.close();
   }

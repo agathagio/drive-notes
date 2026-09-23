@@ -256,6 +256,20 @@
     </div>
   </div>
 
+  <!-- ── Table of contents (hold the note's name in reading view) ── -->
+  <div id="toc-overlay" class="modal-overlay">
+    <div class="modal modal-wide">
+      <h3>Sumário</h3>
+      <p id="toc-empty" class="modal-text" hidden>Esta nota não tem títulos.</p>
+      <div class="recents-list toc-list">
+        <ul id="toc-ul"></ul>
+      </div>
+      <div class="modal-actions">
+        <button id="toc-close" class="btn" data-dismiss>Fechar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Diagnostics (five taps on the welcome title) ── -->
   <div id="debug-overlay" class="modal-overlay">
     <div class="modal modal-wide">

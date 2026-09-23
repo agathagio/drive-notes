@@ -4332,5 +4332,97 @@ async function seedArrival(factory, record) {
     }
   }
 
+  console.log('76. Sumario: segurar o nome da nota na leitura lista os titulos e pula ate o tocado');
+  {
+    const { App, drive, w } = await boot({ watcher: true });
+    // O jsdom nao tem Touch: o evento de toque se monta na mao, com a lista de dedos
+    const touch = (el, type, x = 10, y = 10) => {
+      const e = new w.Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(e, 'touches', { value: type === 'touchend' || type === 'touchcancel' ? [] : [{ clientX: x, clientY: y, target: el }] });
+      el.dispatchEvent(e);
+    };
+    const hold = async (el, { move = 0, click = true } = {}) => {
+      touch(el, 'touchstart');
+      if (move) touch(el, 'touchmove', 10 + move, 10);
+      await sleep(App.LONG_PRESS_MS + 60);
+      touch(el, 'touchend');
+      if (click) el.click();
+      await sleep(20);
+    };
+    let scrolledTo = null;
+    w.HTMLElement.prototype.scrollIntoView = function () { scrolledTo = this; };
+    drive.put('T', 't.md', '# Topo\n\ntexto\n\n## Parte\n\na\n\n### Detalhe\n\nb\n\n## Parte\n\nsegunda parte com o mesmo titulo', ['folderA']);
+    await App.navigateTo('T', 't.md');
+    App.setMode('preview');
+    let renamed = 0;
+    App.promptRename = () => { renamed++; };
+    const items = () => [...App.els.tocUl.querySelectorAll('li')];
+
+    await hold(App.els.fileName);
+    check('segurar o nome abre o sumario, sem renomear', App.els.tocOverlay.classList.contains('visible') && renamed === 0, renamed);
+    const pad = (i) => parseInt(items()[i].style.paddingLeft, 10);
+    check('os titulos na ordem, com o nivel no recuo',
+      JSON.stringify(items().map(li => li.textContent)) === '["Topo","Parte","Detalhe","Parte"]' && pad(0) < pad(1) && pad(1) < pad(2) && pad(1) === pad(3),
+      items().map(li => [li.textContent, li.style.paddingLeft]));
+    items()[3].click();
+    const heads = [...App.els.previewContainer.querySelectorAll('h2')];
+    check('tocar no segundo "Parte" fecha e rola ate ELE, nao o primeiro', !App.els.tocOverlay.classList.contains('visible') && scrolledTo === heads[1], scrolledTo?.nextElementSibling?.textContent);
+
+    await hold(App.els.fileName);
+    w.__back();
+    check('o voltar do celular fecha o sumario e fica na nota', !App.els.tocOverlay.classList.contains('visible') && App.currentFile.id === 'T');
+
+    await hold(App.els.fileName);
+    App.els.tocOverlay.click();
+    check('tocar no fundo fecha', !App.els.tocOverlay.classList.contains('visible'));
+
+    // Fechar tambem fecha; e a leitura nao rolou em nenhum dos tres
+    scrolledTo = null;
+    await hold(App.els.fileName);
+    App.els.tocOverlay.querySelector('[data-dismiss]').click();
+    check('Fechar fecha, e nenhum dos tres jeitos de fechar rola a leitura', !App.els.tocOverlay.classList.contains('visible') && scrolledTo === null);
+
+    // O clique de soltar cai no que abriu por cima (o fundo do sumario), nao no nome: engolido igual
+    // (medido no Edge: sem isso o sumario fechava no mesmo gesto que o abriu)
+    await hold(App.els.fileName, { click: false });
+    App.els.tocOverlay.click();
+    check('o clique de soltar, caindo no fundo do sumario, e engolido: o sumario fica', App.els.tocOverlay.classList.contains('visible'));
+    App.closeToc();
+
+    // Um toque longo sem clique depois (o navegador nem sempre manda): o toque seguinte, em outro lugar, passa
+    await hold(App.els.fileName, { click: false });
+    touch(App.els.tocOverlay, 'touchstart'); touch(App.els.tocOverlay, 'touchend');
+    App.els.tocOverlay.click();
+    check('sem clique depois do toque longo, o proximo toque em outro lugar nao e engolido', !App.els.tocOverlay.classList.contains('visible'));
+
+    // O botao voltar do Android nao e toque na tela: sem clique de soltar, o primeiro voltar ainda fecha
+    await hold(App.els.fileName, { click: false });
+    w.__back();
+    check('sem clique de soltar, o voltar do celular fecha o sumario na primeira vez', !App.els.tocOverlay.classList.contains('visible'));
+
+    await hold(App.els.fileName, { move: 30 });
+    check('dedo que anda nao abre o sumario (e o toque vira o renomear de sempre)', !App.els.tocOverlay.classList.contains('visible') && renamed === 1, renamed);
+
+    App.els.fileName.click();
+    check('toque curto renomeia', renamed === 2, renamed);
+
+    touch(App.els.fileName, 'touchstart');
+    touch(App.els.fileName, 'touchcancel');
+    await sleep(App.LONG_PRESS_MS + 60);
+    check('touchcancel antes da hora nao abre', !App.els.tocOverlay.classList.contains('visible'));
+
+    App.setMode('edit');
+    await hold(App.els.fileName);
+    check('na edicao, segurar nao abre o sumario (e o toque renomeia)', !App.els.tocOverlay.classList.contains('visible') && renamed === 3, renamed);
+
+    drive.put('S', 's.md', 'sem titulo nenhum', ['folderA']);
+    await App.navigateTo('S', 's.md');
+    App.setMode('preview');
+    await hold(App.els.fileName);
+    check('nota sem titulos: o aviso', App.els.tocOverlay.classList.contains('visible') && !App.els.tocEmpty.hidden
+      && App.els.tocEmpty.textContent === 'Esta nota não tem títulos.' && items().length === 0);
+    App.closeToc();
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });

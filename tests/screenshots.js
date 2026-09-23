@@ -101,6 +101,15 @@ const SETUP = `
     await shot('4-leitura-propriedades');
     await js(`__App.els.previewContainer.scrollTop = 1e6; 'ok'`);
     await shot('4b-leitura-imagem');
+    // O sumario (segurar o nome da nota na leitura): os titulos da nota de exemplo, um passo pra dentro por nivel
+    await js(`__App.openToc(); 'ok'`);
+    await shot('4c-sumario');
+    await js(`__App.closeToc(); 'ok'`);
+    // Nota com muitos titulos: a lista rola dentro do painel e o Fechar fica a vista
+    await js(`__App.setContent(${JSON.stringify(Array.from({ length: 30 }, (_, i) => `${'#'.repeat(1 + (i % 3))} Titulo ${i + 1}\n\ntexto`).join('\n\n'))});
+      __App.setMode('preview'); __App.openToc(); 'ok'`);
+    await shot('4d-sumario-longo');
+    await js(`__App.closeToc(); __App.setContent(${JSON.stringify(NOTE)}); __App.setMode('preview'); 'ok'`);
     await js(`__App.setMode('edit'); 'ok'`);
     await shot('5-edicao');
     // Pelo fim da nota, que e onde mora a foto: quem rola por dentro e o .cm-scroller, e o caminho
