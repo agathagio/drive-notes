@@ -482,6 +482,42 @@ mark {
   transform: scale(1.15);
 }
 
+/* Kanban board, read only (decorateKanban in app.js): the columns stacked, each ## heading a bar with its
+   count, a tap folds it. Blocks are only marked and hidden, never wrapped; the hidden attribute must win
+   over any display a block gets elsewhere. The count is data-count, drawn here, out of the heading's text. */
+.preview-container.kanban > [hidden] {
+  display: none;
+}
+.preview-container.kanban h2.kanban-col-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  margin: 16px 0 6px;
+  padding: 8px 12px;
+  font-size: 1.05em;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.preview-container.kanban h2.kanban-col-head::before {
+  content: '▾';
+  color: var(--text-secondary);
+}
+.preview-container.kanban h2.kanban-col-head.collapsed::before {
+  content: '▸';
+}
+.preview-container.kanban h2.kanban-col-head::after {
+  content: attr(data-count);
+  margin-left: auto;
+  font-size: 0.8em;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
 /* Tables: scroll sideways inside their own box */
 .preview-container .table-wrap {
   overflow-x: auto;

@@ -127,7 +127,15 @@ const SETUP = `
     await js(`__App.setContent(${JSON.stringify(Array.from({ length: 30 }, (_, i) => `${'#'.repeat(1 + (i % 3))} Titulo ${i + 1}\n\ntexto`).join('\n\n'))});
       __App.setMode('preview'); __App.openToc(); 'ok'`);
     await shot('4d-sumario-longo');
-    await js(`__App.closeToc(); __App.setContent(${JSON.stringify(NOTE)}); __App.setMode('preview'); 'ok'`);
+    await js(`__App.closeToc(); 'ok'`);
+    // Quadro kanban (so leitura): a amostra do backlog dos testes, colunas empilhadas com a contagem,
+    // Descartados recolhida como no Obsidian e o bloco de configuracao escondido
+    const BOARD = fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'kanban-backlog.md'), 'utf8').replace(/\r\n/g, '\n');
+    await js(`__App.setContent(${JSON.stringify(BOARD)}); __App.setMode('preview'); __App.els.previewContainer.scrollTop = 0; 'ok'`);
+    await shot('4f-kanban');
+    await js(`__App.els.previewContainer.scrollTop = 1e6; 'ok'`);
+    await shot('4g-kanban-fim');
+    await js(`__App.setContent(${JSON.stringify(NOTE)}); __App.setMode('preview'); 'ok'`);
     await js(`__App.setMode('edit'); 'ok'`);
     await shot('5-edicao');
     // Pelo fim da nota, que e onde mora a foto: quem rola por dentro e o .cm-scroller, e o caminho

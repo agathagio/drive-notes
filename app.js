@@ -2168,8 +2168,8 @@ const App = {
     const blocks = [...container.children];
     if (!file?.id || document.body.dataset.view !== 'preview' || !blocks.length) return;
     const top = container.getBoundingClientRect().top;
-    // The first block still on screen: everything before it is above the top
-    const block = blocks.findIndex((el) => el.getBoundingClientRect().bottom > top);
+    // The first block still on screen: everything before it is above the top (a hidden one is never on screen)
+    const block = blocks.findIndex((el) => !el.hidden && el.getBoundingClientRect().bottom > top);
     const places = this.getPlaces().filter((p) => p.id !== file.id);
     // Left at the top, there is nothing to keep: that is where a note opens anyway
     if (container.scrollTop > 0 && block >= 0) {
@@ -2191,8 +2191,12 @@ const App = {
     const place = this.getPlaces().find((p) => p.id === this.currentFile?.id);
     if (!place || !blocks.length) return;
     // Fewer blocks than when it was left (it changed on the computer): the last one
-    const el = blocks[Math.min(place.block, blocks.length - 1)];
-    container.scrollTop += el.getBoundingClientRect().top - container.getBoundingClientRect().top + place.into;
+    const kept = Math.min(place.block, blocks.length - 1);
+    const i = this.shownBlockAt(blocks, kept);
+    const el = blocks[i];
+    // A block hidden now (a board's column that opens folded) has no place of its own: the one before it
+    const into = i === kept ? place.into : 0;
+    container.scrollTop += el.getBoundingClientRect().top - container.getBoundingClientRect().top + into;
     this.log(`resume block ${place.block}`);
   },
 
@@ -2258,13 +2262,23 @@ const App = {
     const els = [...container.children];
     if (!els.length) return null;
     const probe = container.getBoundingClientRect().top + this.VIEW_INSET;
-    let i = els.findIndex((el) => el.getBoundingClientRect().bottom > probe);
-    if (i < 0) i = els.length - 1;
+    // Hidden blocks (a board's folded cards, its settings) take no room and are never the top
+    let i = els.findIndex((el) => !el.hidden && el.getBoundingClientRect().bottom > probe);
+    if (i < 0) i = this.shownBlockAt(els, els.length - 1);
     const { from, to } = this.readingBlocks()[i];
     const rect = els[i].getBoundingClientRect();
     const height = rect.bottom - rect.top;
     const share = height > 0 ? Math.min(Math.max((probe - rect.top) / height, 0), 0.999) : 0;
     return from + share * (to - from + 1);
+  },
+
+  /** Block `i`, or the nearest one before it that is shown: a hidden block measures 0 and cannot be scrolled
+      to. Only a board hides blocks (decorateKanban); its column headings never are, so a folded card lands
+      on its column. Nothing shown before it: the first shown block after. */
+  shownBlockAt(els, i) {
+    for (let j = i; j >= 0; j--) if (!els[j].hidden) return j;
+    const after = els.findIndex((el) => !el.hidden);
+    return after < 0 ? i : after;
   },
 
   /** The reading view scrolled so that this line is at the top */
@@ -2277,8 +2291,11 @@ const App = {
     // The block holding the line, or the next one when the line is a blank one between two blocks
     let i = blocks.findIndex((b) => b.to >= line);
     if (i < 0) i = blocks.length - 1;
+    // A line in a hidden block (a board's folded column, its settings): the shown block before it, from its top
+    const shown = this.shownBlockAt(els, i);
     const { from, to } = blocks[i];
-    const share = line < from ? 0 : Math.min((at - from) / (to - from + 1), 1);
+    const share = shown !== i || line < from ? 0 : Math.min((at - from) / (to - from + 1), 1);
+    i = shown;
     const rect = els[i].getBoundingClientRect();
     container.scrollTop += rect.top + share * (rect.bottom - rect.top) - (container.getBoundingClientRect().top + this.VIEW_INSET);
   },
@@ -2554,6 +2571,7 @@ const App = {
     const container = this.els.previewContainer;
     const { frontmatter, body } = this.splitFrontmatter(this.getContent());
     this._previewOf = this.currentFile;
+    container.classList.remove('kanban');
 
     // The token in this page has full Drive scope, so rendered HTML is never trusted:
     // without the sanitizer (or the renderer) the note is shown as plain text instead
@@ -2565,6 +2583,8 @@ const App = {
     }
 
     this.renderMarkdownInto(container, body);
+    // Only here, not in renderMarkdownInto: the peek card shows a board as its plain list
+    if (this.isKanban(frontmatter)) this.decorateKanban(container);
     this.enableTasks(container);
     this.loadEmbeds(container);
 
@@ -2625,6 +2645,79 @@ const App = {
       quote.classList.add('callout');
       quote.dataset.callout = type;
     });
+  },
+
+  /** A board of the Obsidian Kanban plugin: `kanban-plugin: board` in the properties */
+  isKanban(frontmatter) {
+    return /^kanban-plugin:\s*board\s*$/m.test(frontmatter || '');
+  },
+
+  /** The note as a board, read only. Nothing is wrapped, moved or removed: every block stays a child of
+      the reading view, in order, because "Ler" and "Editar" meet block by block (noteBlocks). A column is
+      its ## heading, marked, plus the blocks up to the next one; folding hides those blocks. The count is
+      a data attribute drawn by the stylesheet, so the heading's text (the table of contents, the links to
+      a heading) stays the column's name. The plugin's settings block (%% kanban:settings, its code block,
+      %%) is hidden too, and its list-collapse says which columns start folded. What comes before the
+      first column stays as plain text. */
+  decorateKanban(container) {
+    const kids = [...container.children].filter((el) => !el.matches('details.frontmatter'));
+    let collapse = [];
+    const start = kids.findIndex((el) => el.tagName === 'P' && /^%%\s*kanban:settings/.test(el.textContent.trim()));
+    if (start >= 0) {
+      const settings = [kids[start]];
+      // The opening line, then its code block and the closing %%, when they are blocks of their own
+      if (!/%%$/.test(kids[start].textContent.trim().replace(/^%%/, ''))) {
+        for (const el of kids.slice(start + 1)) {
+          if (el.tagName === 'PRE') {
+            settings.push(el);
+          } else {
+            if (el.tagName === 'P' && el.textContent.trim() === '%%') settings.push(el);
+            break;
+          }
+        }
+      }
+      for (const el of settings) {
+        el.hidden = true;
+        el.classList.add('kanban-settings');
+      }
+      const code = settings.find((el) => el.tagName === 'PRE');
+      try {
+        const list = code ? JSON.parse(code.textContent)['list-collapse'] : [];
+        collapse = Array.isArray(list) ? list : [];
+      } catch {
+        collapse = []; // settings that do not parse: every column open
+      }
+    }
+    let col = -1;
+    let head = null;
+    for (const el of kids) {
+      if (el.classList.contains('kanban-settings')) continue;
+      if (el.tagName === 'H2') {
+        col++;
+        head = el;
+        el.classList.add('kanban-col-head');
+        el.classList.toggle('collapsed', !!collapse[col]);
+        el.dataset.count = '0';
+        continue;
+      }
+      if (!head) continue;
+      el.classList.add('kanban-col-body');
+      if (el.tagName === 'UL' || el.tagName === 'OL') {
+        const cards = [...el.children].filter((li) => li.tagName === 'LI').length;
+        head.dataset.count = String(Number(head.dataset.count) + cards);
+      }
+      if (collapse[col]) el.hidden = true;
+    }
+    container.classList.add('kanban');
+  },
+
+  /** Fold or unfold one column. Only the screen changes: nothing is written to the note. */
+  toggleKanbanColumn(head) {
+    const folded = head.classList.toggle('collapsed');
+    for (let el = head.nextElementSibling; el && el.classList.contains('kanban-col-body'); el = el.nextElementSibling) {
+      el.hidden = folded;
+    }
+    this.log(`kanban ${folded ? 'fold' : 'unfold'} ${head.textContent.trim()}`);
   },
 
   /** Where each task's mark (the space or the x between the brackets) sits in the note, in the order
@@ -2818,7 +2911,12 @@ const App = {
   /** Taps inside the reading view: wikilinks and relative .md links open notes, the rest leaves the app */
   onPreviewClick(e) {
     const link = e.target.closest('a');
-    if (!link || !this.els.previewContainer.contains(link)) return;
+    if (!link || !this.els.previewContainer.contains(link)) {
+      // A board's column heading (a link inside one is still a link): fold or unfold the column
+      const column = e.target.closest('h2.kanban-col-head');
+      if (column && this.els.previewContainer.contains(column)) this.toggleKanbanColumn(column);
+      return;
+    }
     e.preventDefault();
 
     if (link.classList.contains('wikilink')) {

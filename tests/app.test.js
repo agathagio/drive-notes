@@ -4568,5 +4568,151 @@ async function seedArrival(factory, record) {
     App.closePeek();
   }
 
+  console.log('78. Quadro kanban: colunas empilhadas com contagem, recolhidas como no Obsidian, e o um pra um da leitura intacto');
+  {
+    // The layout stand-in of scenarios 69 and 70, but hidden blocks take no room, as in the browser:
+    // a display:none element measures 0 everywhere, and the visible ones close up, 100px each
+    const boardLayout = (w) => {
+      const c = w.document.getElementById('preview-container');
+      let scroll = 0;
+      Object.defineProperty(c, 'scrollTop', { configurable: true, get: () => scroll, set: (v) => { scroll = Math.max(0, v); } });
+      c.getBoundingClientRect = () => ({ top: 50, bottom: 850, height: 800 });
+      const real = w.Element.prototype.getBoundingClientRect;
+      w.Element.prototype.getBoundingClientRect = function () {
+        if (this.parentElement !== c) return real.call(this);
+        if (this.hidden) return { top: 0, bottom: 0, height: 0 };
+        const k = [...c.children].filter(el => !el.hidden).indexOf(this);
+        return { top: 50 + k * 100 - scroll, bottom: 150 + k * 100 - scroll, height: 100 };
+      };
+      w.__scroll = (px) => { scroll = px; };
+      // The block at the top of the screen, read where the app reads it (VIEW_INSET below the edge)
+      w.__top = () => [...c.children].find(el => el.getBoundingClientRect().bottom > 66);
+      w.__topAt = (el) => { const k = [...c.children].filter(x => !x.hidden).indexOf(el); scroll = k * 100; };
+    };
+    const { App, drive, w } = await boot({ beforeApp: boardLayout });
+    // The repository checks out CRLF; the vault's notes are LF
+    const board = fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'kanban-backlog.md'), 'utf8').replace(/\r\n/g, '\n');
+    const lineOf = (text) => board.split('\n').indexOf(text) + 1;
+    drive.put('K', 'quadro.md', board, ['folderA']);
+    drive.put('N', 'comum.md', '## Nao e quadro\n\n- [ ] item\n\n%% comentario %%', ['folderA']);
+    drive.put('P', 'intro.md', '---\nkanban-plugin: board\n---\n\ntexto antes das colunas\n\n## A\n\n- [ ] a\n- [ ] b\n\n## B\n\n- [ ] c\n\n%% kanban:settings\n```\n{quebrado\n```\n%%', ['folderA']);
+    await App.navigateTo('K', 'quadro.md');
+    App.setMode('preview');
+    const c = App.els.previewContainer;
+    const heads = [...c.querySelectorAll('h2.kanban-col-head')];
+    const names = heads.map(h => h.textContent.trim());
+    // As contagens esperadas saem da propria amostra: cards de uma linha por coluna
+    const expected = board.split(/^## /m).slice(1).map(s => (s.split('\n%%')[0].match(/^- \[[ x]\] /gm) || []).length);
+    check('o quadro: uma coluna por titulo ##', c.classList.contains('kanban') && names.length === expected.length
+      && JSON.stringify(names) === JSON.stringify(board.match(/^## .+$/gm).map(s => s.slice(3))), names);
+    check('... com a contagem de cards de cada uma, fora do texto do titulo', JSON.stringify(heads.map(h => Number(h.dataset.count))) === JSON.stringify(expected),
+      [heads.map(h => h.dataset.count), expected]);
+    const collapse = JSON.parse(/```\n([\s\S]*?)\n```/.exec(board.split('%% kanban:settings')[1])[1])['list-collapse'];
+    const bodiesOf = (h) => { const out = []; let el = h.nextElementSibling; while (el && !el.matches('h2.kanban-col-head') && !el.classList.contains('kanban-settings')) { out.push(el); el = el.nextElementSibling; } return out; };
+    check('(a amostra tem uma coluna recolhida no Obsidian)', collapse.some(Boolean), collapse);
+    check('coluna recolhida no Obsidian nasce recolhida, as outras abertas',
+      heads.every((h, i) => h.classList.contains('collapsed') === !!collapse[i] && bodiesOf(h).every(b => b.hidden === !!collapse[i])),
+      heads.map(h => [h.textContent, h.classList.contains('collapsed')]));
+    check('o bloco de configuracao nao aparece, mas continua na pagina',
+      [...c.querySelectorAll('.kanban-settings')].length === 3 && [...c.querySelectorAll('.kanban-settings')].every(el => el.hidden)
+      && !/kanban:settings/.test([...c.children].filter(el => !el.hidden).map(el => el.textContent).join(' ')));
+    check('um pra um: cada bloco do texto tem o seu filho na leitura', App.noteBlocks(App.getContent()).length === c.children.length,
+      [App.noteBlocks(App.getContent()).length, c.children.length]);
+
+    App.openToc();
+    check('o sumario lista as colunas pelo nome, sem a contagem',
+      JSON.stringify([...App.els.tocUl.querySelectorAll('li')].map(li => li.textContent)) === JSON.stringify(names),
+      [...App.els.tocUl.querySelectorAll('li')].map(li => li.textContent));
+    App.closeToc();
+
+    const open = heads.find(h => !h.classList.contains('collapsed') && Number(h.dataset.count) > 0);
+    open.click();
+    check('tocar no cabecalho recolhe', open.classList.contains('collapsed') && bodiesOf(open).every(b => b.hidden));
+    open.click();
+    check('... e tocar de novo abre', !open.classList.contains('collapsed') && bodiesOf(open).every(b => !b.hidden));
+
+    // Held like a link would be: a heading is no link, so no peek, and the tap that follows still folds
+    const touch = (el, type) => {
+      const e = new w.Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(e, 'touches', { value: type === 'touchend' ? [] : [{ clientX: 10, clientY: 10, target: el }] });
+      el.dispatchEvent(e);
+    };
+    touch(open, 'touchstart'); await sleep(App.LONG_PRESS_MS + 60); touch(open, 'touchend'); open.click();
+    check('segurar o cabecalho nao espia, e o toque dele nao e engolido', !App.els.peekOverlay.classList.contains('visible')
+      && open.classList.contains('collapsed'));
+    open.click();
+    check('recolher nao grava nada', drive.count('PATCH') === 0 && !App.isDirty);
+
+    const box = bodiesOf(open)[0].querySelector('input[type="checkbox"]');
+    const firstCard = lineOf(board.split('\n').find(l => l.startsWith('- [ ] ')));
+    box.click(); await sleep(20);
+    check('a caixinha do card marca a linha certa do texto', box.disabled === false
+      && App.getContent().split('\n')[firstCard - 1].startsWith('- [x] **Card 1**')
+      && App.getContent().split('\n').filter(l => l.startsWith('- [x] ')).length === board.split('\n').filter(l => l.startsWith('- [x] ')).length + 1,
+      App.getContent().split('\n')[firstCard - 1]);
+
+    // Ler e Editar numa nota kanban: o topo de um cai no mesmo trecho do outro (modelo: cenario 70),
+    // com uma coluna recolhida acima do trecho e a configuracao escondida no fim
+    const shown = [];
+    App.Editor.showLine = (at) => shown.push(at);
+    const col = (name) => [...c.querySelectorAll('h2.kanban-col-head')].find(h => h.textContent === name);
+    col('Ideas').click();
+    w.__topAt(col('To-Do'));
+    check('(Ideas recolhida, To-Do no topo da leitura)', col('Ideas').classList.contains('collapsed') && w.__top() === col('To-Do'), w.__top()?.textContent);
+    App.togglePreview();
+    check('Editar com uma coluna no topo, e outra recolhida acima: o editor abre no titulo dela',
+      App.mode === 'edit' && Math.floor(shown[0]) === lineOf('## To-Do'), [shown, lineOf('## To-Do')]);
+
+    App.Editor.topLine = () => lineOf('## Doing') + 0.2;
+    App.togglePreview();
+    check('Ler com uma coluna no topo do editor: a leitura abre nela', App.mode === 'preview' && w.__top() === col('Doing'),
+      w.__top()?.textContent);
+
+    // A line inside the column Obsidian keeps folded: its cards are hidden, so the column's heading stands in
+    App.togglePreview();
+    App.Editor.topLine = () => lineOf(board.split('\n').filter(l => l.startsWith('- [ ] ')).at(-1));
+    App.togglePreview();
+    check('Ler com o topo do editor dentro da coluna recolhida: a leitura abre no cabecalho dela',
+      w.__top() === col('Descartados') && col('Descartados').classList.contains('collapsed'), [w.__top()?.textContent, c.scrollTop]);
+    App.togglePreview();
+    App.Editor.topLine = () => lineOf('%% kanban:settings') + 1;
+    App.togglePreview();
+    check('... e dentro do bloco de configuracao, que nao aparece: o ultimo bloco visivel antes dele',
+      w.__top() === col('Descartados'), [w.__top()?.textContent, c.scrollTop]);
+
+    // Retomar: a place kept inside a column opened by hand; reopened, that column is folded again
+    col('Descartados').click();
+    w.__topAt(bodiesOf(col('Descartados'))[0]);
+    w.__scroll(c.scrollTop + 40);
+    await App.openFile('N', 'comum.md');
+    await App.openFile('K', 'quadro.md');
+    check('lugar guardado dentro de uma coluna que reabre recolhida: a leitura volta no cabecalho dela',
+      App.mode === 'preview' && w.__top() === col('Descartados') && col('Descartados').classList.contains('collapsed'),
+      [App.mode, w.__top()?.textContent, c.scrollTop]);
+
+    // O espiar desenha a nota sem o quadro: uma lista comum, sem quebrar
+    App.openPeek({ target: 'quadro', heading: '' });
+    const end = Date.now() + 3000;
+    while (!App.els.peekBody.textContent.includes('Card 1') && Date.now() < end) await sleep(10);
+    const peek = App.els.peekBody;
+    check('espiar um quadro: a lista de cards, sem colunas nem nada escondido', peek.querySelectorAll('li').length === 44
+      && !peek.querySelector('.kanban-col-head, [hidden]') && !peek.classList.contains('kanban'), peek.querySelectorAll('li').length);
+    App.closePeek();
+
+    await App.navigateTo('P', 'intro.md');
+    App.setMode('preview');
+    const intro = c.querySelector('p');
+    check('texto antes da primeira coluna fica como texto; configuracao que nao abre: tudo aberto',
+      c.classList.contains('kanban') && intro.textContent === 'texto antes das colunas' && !intro.hidden && !intro.classList.contains('kanban-col-body')
+      && [...c.querySelectorAll('h2.kanban-col-head')].map(h => h.dataset.count).join() === '2,1'
+      && ![...c.querySelectorAll('h2.kanban-col-head')].some(h => h.classList.contains('collapsed'))
+      && [...c.children].filter(el => el.hidden).length === 3 && App.noteBlocks(App.getContent()).length === c.children.length);
+
+    await App.navigateTo('N', 'comum.md');
+    App.setMode('preview');
+    check('nota sem kanban-plugin nao vira quadro, e o %% dela fica como esta', !c.classList.contains('kanban')
+      && !c.querySelector('.kanban-col-head, .kanban-col-body, .kanban-settings, [hidden]') && c.textContent.includes('%% comentario %%'));
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });
