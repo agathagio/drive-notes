@@ -4177,8 +4177,14 @@ const App = {
     this.log(`launch ${shortcut || `arrival ${arrival}`}`);
     if (arrival) {
       const record = await this.ArrivalBox.get(arrival);
-      if (record) return this.openArrivalSheet(record);
-      return; // already written into a note, or cancelled: home
+      if (!record) {
+        this.log('arrival not in box');
+        return; // already written into a note, or cancelled: home
+      }
+      // What Chrome handed the service worker (sw.js receiveShare), without content. Older records have no `got`
+      const got = Array.isArray(record.got) ? `[${record.got.join(', ')}]` : '?';
+      this.log(`arrival photos=${(record.photos || []).length} got=${got}`);
+      return this.openArrivalSheet(record);
     }
     if (shortcut === 'anotar') return this.openArrivalSheet(null);
     if (shortcut === 'nova') return this.newFile();
@@ -4194,8 +4200,10 @@ const App = {
     if (document.body.dataset.view === 'browse') this.els.browserSearch.focus();
   },
 
-  /** Something shared earlier and never written into a note (the app died on the sheet, or there was no network) */
+  /** Something shared earlier and never written into a note (the app died on the sheet, or there was no network).
+      Without network it waits: the sheet would have no list, and every opening would land on it. */
   async offerPendingArrival() {
+    if (navigator.onLine === false) return;
     const pending = await this.ArrivalBox.oldest();
     if (pending && !this.els.arrivalOverlay.classList.contains('visible')) this.openArrivalSheet(pending);
   },
@@ -4237,18 +4245,11 @@ const App = {
       els.arrivalLogin.hidden = false;
       return;
     }
-    let notes;
+    let notes = null;
     try {
       notes = await this.inboxNotes();
     } catch (e) {
       console.warn('Inbox list failed:', e);
-      if (navigator.onLine === false) {
-        say(kept ? 'Sem rede. O que chegou fica guardado e volta aqui quando você abrir o app com rede.' : 'Sem rede.');
-      } else {
-        say(kept ? 'Não deu pra abrir a lista do _inbox. O que chegou fica guardado e volta aqui na próxima abertura.'
-          : 'Não deu pra abrir a lista do _inbox.');
-      }
-      return;
     }
     // Closed, or opened for something else, while the list was on its way
     if (this._arrival !== kept || !els.arrivalOverlay.classList.contains('visible')) return;
@@ -4262,6 +4263,25 @@ const App = {
       li.addEventListener('click', () => this.chooseArrivalTarget(note));
       els.arrivalUl.appendChild(li);
     };
+    if (!notes) {
+      // No list, but a new note still works: without network it is kept as a draft and goes up later.
+      // Nothing was decided yet, so _arrivalListed stays false and Cancelar keeps what arrived.
+      // Only photos and no network: they cannot go up, and a new note would be born empty.
+      if (navigator.onLine === false && kept && !this.arrivalEntry(kept)) {
+        const many = (kept.photos || []).length > 1;
+        say(`Sem rede. ${many ? 'As fotos ficam guardadas e voltam' : 'A foto fica guardada e volta'} aqui quando você abrir o app com rede.`);
+        return;
+      }
+      if (navigator.onLine === false) {
+        say(kept ? 'Sem rede. Dá pra guardar numa nota nova agora, ou cancelar: fica guardado e volta aqui quando você abrir o app com rede.'
+          : 'Sem rede. Dá pra escrever numa nota nova.');
+      } else {
+        say(kept ? 'Não deu pra abrir a lista do _inbox. Dá pra guardar numa nota nova agora, ou cancelar: fica guardado e volta aqui na próxima abertura.'
+          : 'Não deu pra abrir a lista do _inbox.');
+      }
+      row('+ Nota nova', null, 'arrival-new');
+      return;
+    }
     row('+ Nota nova', null, 'arrival-new');
     for (const note of notes) row(note.name.replace(/\.md$/i, ''), note);
     this._arrivalListed = true;
@@ -4289,6 +4309,7 @@ const App = {
     const arrival = this._arrival;
     this.hideArrivalSheet();
     const entry = arrival ? this.arrivalEntry(arrival) : '';
+    this.log(`arrival -> ${note ? 'note' : 'new'} photos=${arrival ? (arrival.photos || []).length : 'none'}`);
 
     if (!note) {
       this.newFile({ body: entry ? `${entry}\n` : '' });
@@ -4302,6 +4323,7 @@ const App = {
       const opened = await this.openFile(note.id, note.name, { fresh: true });
       if (!opened || this.currentFile?.id !== note.id) {
         this.cancelNav();
+        this.log('arrival -> note did not open');
         if (arrival) this.setSaveStatus('error', 'Não deu pra abrir a nota. O que chegou fica guardado.');
         return;
       }
@@ -4315,17 +4337,28 @@ const App = {
     }
     if (!arrival) return;
 
-    // The photos, in the order they came, below the entry: the batch path of the gallery button
+    // The photos, in the order they came, below the entry: the batch path of the gallery button.
+    // Without network they are not even tried: the upload can only fail, and its failure forgets the
+    // remembered _media folder. They wait in the box for an opening with network.
     this._photoAt = null;
     const photos = arrival.photos || [];
-    const files = photos.map((p) => new File([p.bytes], p.name || 'foto.jpg', { type: p.type || 'image/jpeg' }));
-    const sent = files.length ? await this.insertPhotos(files) : 0;
+    const offline = navigator.onLine === false;
+    let sent = 0;
+    if (photos.length && !offline) {
+      const files = photos.map((p) => new File([p.bytes], p.name || 'foto.jpg', { type: p.type || 'image/jpeg' }));
+      sent = await this.insertPhotos(files);
+    }
     await this.save();
     // What is in the note now is safe, on the Drive or as a local draft: it leaves the box. Photos that
     // did not go up stay, and the sheet comes back with them on the next opening.
     const left = photos.slice(sent);
     if (left.length) await this.ArrivalBox.put({ ...arrival, title: '', text: '', url: '', photos: left });
     else await this.ArrivalBox.remove(arrival.id);
+    this.log(`arrival done sent=${sent}/${photos.length}${offline && photos.length ? ' offline, photos kept' : ''}`);
+    if (offline && photos.length) {
+      this.setSaveStatus('', photos.length === 1 ? 'Sem rede: a foto fica guardada e volta quando você abrir o app com rede'
+        : 'Sem rede: as fotos ficam guardadas e voltam quando você abrir o app com rede');
+    }
   },
 
   // ── Toolbar formatting ──
@@ -4441,6 +4474,7 @@ const App = {
       this._embedUrls.set(name, Promise.resolve(URL.createObjectURL(photo)));
     } catch (e) {
       console.error('Photo upload failed:', e);
+      this.log(`photo failed: ${e?.name || 'Error'} ${String(e?.message ?? e).slice(0, 80)}`);
       // In case it was the remembered folder that went away: look it up again next time
       localStorage.removeItem('drivenotes_media_folder');
       this.setSaveStatus('error', 'Erro ao enviar a foto');
@@ -4481,6 +4515,7 @@ const App = {
       return blob && blob.size < file.size ? blob : file;
     } catch (e) {
       console.warn('Photo not resized:', e);
+      this.log(`photo not resized: ${e?.name || 'Error'} ${String(e?.message ?? e).slice(0, 80)}`);
       return file;
     }
   },

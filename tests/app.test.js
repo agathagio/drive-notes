@@ -4169,9 +4169,11 @@ async function seedArrival(factory, record) {
       await seedArrival(idb, { id: 'a6', at: 1, title: '', text: 'fica', url: '', photos: [] });
       const { App, w } = await boot({ url: 'http://localhost:8000/index.html?chegada=a6', drive, idb, editor: true, watcher: true, seedStorage: TOKEN });
       await until(() => !App.els.arrivalMessage.hidden);
-      check('lista que nao abre: diz que o que chegou fica guardado',
-        App.els.arrivalMessage.textContent === 'Não deu pra abrir a lista do _inbox. O que chegou fica guardado e volta aqui na próxima abertura.',
+      check('lista que nao abre: diz que da pra usar nota nova ou deixar guardado',
+        App.els.arrivalMessage.textContent === 'Não deu pra abrir a lista do _inbox. Dá pra guardar numa nota nova agora, ou cancelar: fica guardado e volta aqui na próxima abertura.',
         App.els.arrivalMessage.textContent);
+      check('... e oferece so a nota nova', JSON.stringify(rows(w).map((li) => li.textContent.trim())) === '["+ Nota nova"]'
+        && rows(w)[0].classList.contains('arrival-new'), rows(w).map((li) => li.textContent.trim()));
       w.__back();
       await sleep(50);
       check('... e voltar nao descarta', (await App.ArrivalBox.get('a6'))?.id === 'a6');
@@ -4218,6 +4220,115 @@ async function seedArrival(factory, record) {
         const size = isPng ? `${png.readUInt32BE(16)}x${png.readUInt32BE(20)}` : null;
         check(`${s.short_name}: ${icon.src} e PNG ${icon.sizes}`, isPng && icon.type === 'image/png' && size === icon.sizes, size);
       }
+    }
+  }
+
+  console.log('75. Compartilhar sem rede: a tela oferece nota nova, as fotos esperam, e abrir sem rede nao cai na tela');
+  {
+    const TOKEN = { drivenotes_token: 'fake', drivenotes_token_expires: String(Date.now() + 3600e3), drivenotes_media_folder: 'media' };
+    const { IDBFactory } = require('fake-indexeddb');
+    const until = async (cond, limit = 4000) => {
+      const end = Date.now() + limit;
+      while (!(await cond()) && Date.now() < end) await sleep(10);
+    };
+    const rows = (w) => [...w.document.querySelectorAll('#arrival-ul li')];
+    const visible = (App) => App.els.arrivalOverlay.classList.contains('visible');
+    const logged = (App, text) => App._log.some((l) => l.includes(text));
+    // Offline the way the phone is: navigator.onLine false and every request failing before it leaves.
+    // Each boot is a window of its own, so nothing has to be put back afterwards.
+    const offline = (w) => {
+      Object.defineProperty(w.navigator, 'onLine', { configurable: true, get: () => false });
+      w.fetch = () => Promise.reject(new TypeError('Failed to fetch'));
+    };
+    const inbox = () => {
+      const drive = makeDrive();
+      drive.put('media', '_media', '', [VAULT]); drive.files.get('media').mimeType = FOLDER;
+      drive.put('I1', 'ideias-vault.md', 'texto', [INBOX]);
+      return drive;
+    };
+    const drive = inbox();
+    const bytes = new TextEncoder().encode('bytes-da-foto').buffer;
+    const photo = { name: 'IMG_1.jpg', type: 'image/jpeg', bytes };
+    const got = ['title:text(0)', 'text:text(8)', 'url:text(0)', 'photos:file(image/jpeg,13,named)'];
+
+    // Na hora de compartilhar: a mensagem e a nota nova; cancelar deixa na caixa
+    const idb = new IDBFactory();
+    await seedArrival(idb, { id: 'o1', at: 1, title: '', text: 'sem rede', url: '', photos: [photo], got });
+    {
+      const { App, w } = await boot({ url: 'http://localhost:8000/index.html?chegada=o1', drive, idb, watcher: true, seedStorage: TOKEN, beforeApp: offline });
+      await until(() => rows(w).length > 0);
+      check('sem rede: a tela abre, com a mensagem e so a linha da nota nova',
+        visible(App) && App.els.arrivalMessage.textContent === 'Sem rede. Dá pra guardar numa nota nova agora, ou cancelar: fica guardado e volta aqui quando você abrir o app com rede.'
+        && JSON.stringify(rows(w).map((li) => li.textContent.trim())) === '["+ Nota nova"]' && rows(w)[0].classList.contains('arrival-new'),
+        [App.els.arrivalMessage.textContent, rows(w).map((li) => li.textContent.trim())]);
+      check('o log diz o que o Chrome mandou, sem conteudo',
+        logged(App, `arrival photos=1 got=[${got.join(', ')}]`) && !App._log.some((l) => l.includes('sem rede')), App._log);
+      w.__back();
+      await sleep(50);
+      check('... voltar fecha, e o que chegou fica na caixa, inteiro',
+        !visible(App) && (await App.ArrivalBox.get('o1'))?.text === 'sem rede' && (await App.ArrivalBox.get('o1'))?.photos.length === 1);
+    }
+    // Abrir de novo sem rede: nao cai na tela; com rede, cai
+    {
+      const { App } = await boot({ drive, idb, watcher: true, seedStorage: TOKEN, beforeApp: offline });
+      await sleep(200);
+      check('abertura sem rede com algo na caixa: fica na home, sem a tela', !visible(App) && (await App.ArrivalBox.get('o1'))?.id === 'o1');
+    }
+    {
+      const { App } = await boot({ drive, idb, watcher: true, seedStorage: TOKEN });
+      await until(() => visible(App));
+      check('... e a abertura com rede traz a tela de volta', visible(App) && App.els.arrivalWhat.textContent === 'sem rede + 1 foto',
+        App.els.arrivalWhat.textContent);
+    }
+
+    // Nota nova sem rede: o texto vai pra nota (rascunho do aparelho), as fotos ficam na caixa, nenhum envio tentado
+    {
+      const idb = new IDBFactory();
+      await seedArrival(idb, { id: 'o2', at: 1, title: '', text: 'sem rede', url: '', photos: [photo], got });
+      const drive = inbox();
+      const { App, w } = await boot({ url: 'http://localhost:8000/index.html?chegada=o2', drive, idb, watcher: true, seedStorage: TOKEN, beforeApp: offline });
+      await until(() => rows(w).length > 0);
+      rows(w)[0].click();
+      await until(async () => (await App.ArrivalBox.get('o2'))?.text === '');
+      const kept = await App.ArrivalBox.get('o2');
+      const draft = App.listDrafts()[0];
+      check('nota nova sem rede: o texto entra na nota nova e fica num rascunho do aparelho',
+        w.document.body.dataset.view === 'edit' && bodyOf(App.getContent()) === '- sem rede\n' && !!draft && bodyOf(draft.content) === '- sem rede\n',
+        [w.document.body.dataset.view, App.getContent(), draft]);
+      check('... a foto fica na caixa, sem o texto', !!kept && kept.photos.length === 1 && kept.title === '' && kept.url === ''
+        && new TextDecoder().decode(kept.photos[0].bytes) === 'bytes-da-foto', kept);
+      check('... nenhum envio tentado, e a pasta _media lembrada continua', drive.log.length === 0 && w.localStorage.getItem('drivenotes_media_folder') === 'media',
+        [drive.log, w.localStorage.getItem('drivenotes_media_folder')]);
+      check('... o aviso diz que a foto espera a rede', App.els.saveStatus.textContent === 'Sem rede: a foto fica guardada e volta quando você abrir o app com rede',
+        App.els.saveStatus.textContent);
+      check('... e o log diz pra onde foi e o que ficou', logged(App, 'arrival -> new photos=1') && logged(App, 'arrival done sent=0/1 offline, photos kept'), App._log);
+    }
+
+    // Registro de versao anterior, sem `got`, e chegada que nao esta mais na caixa: o log nao quebra
+    {
+      const idb = new IDBFactory();
+      await seedArrival(idb, { id: 'o3', at: 1, title: '', text: 'antigo', url: '', photos: [] });
+      const { App } = await boot({ url: 'http://localhost:8000/index.html?chegada=o3', drive, idb, watcher: true, seedStorage: TOKEN });
+      await until(() => visible(App));
+      check('registro sem got: a tela abre e o log diz que nao se sabe', visible(App) && logged(App, 'arrival photos=0 got=?'), App._log);
+      const gone = await boot({ url: 'http://localhost:8000/index.html?chegada=sumiu', drive, idb, seedStorage: TOKEN });
+      await until(() => logged(gone.App, 'arrival not in box'));
+      check('chegada que nao esta na caixa: o log diz', logged(gone.App, 'arrival not in box'), gone.App._log);
+    }
+
+    // So foto, sem rede: nota nova nasceria vazia, entao a tela so avisa e cancelar guarda
+    {
+      const idb = new IDBFactory();
+      await seedArrival(idb, { id: 'o4', at: 1, title: '', text: '', url: '', photos: [photo], got: ['photos:file(image/jpeg,13,named)'] });
+      const { App, w } = await boot({ url: 'http://localhost:8000/index.html?chegada=o4', drive, idb, watcher: true, seedStorage: TOKEN, beforeApp: offline });
+      await until(() => !App.els.arrivalMessage.hidden);
+      check('so foto sem rede: a tela avisa que a foto espera, sem linha de nota nova',
+        visible(App) && rows(w).length === 0
+        && App.els.arrivalMessage.textContent === 'Sem rede. A foto fica guardada e volta aqui quando você abrir o app com rede.',
+        [App.els.arrivalMessage.textContent, rows(w).length]);
+      w.__back();
+      await sleep(50);
+      check('... e voltar deixa a foto na caixa', !visible(App) && (await App.ArrivalBox.get('o4'))?.photos.length === 1);
     }
   }
 

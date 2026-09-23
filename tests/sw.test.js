@@ -272,13 +272,16 @@ const EVERY_DOCUMENT = `(() => {
         const all = await new Promise((ok) => { const r = db.transaction('arrivals').objectStore('arrivals').getAll(); r.onsuccess = () => ok(r.result); });
         db.close();
         return { search: location.search, path: location.pathname, what: document.getElementById('arrival-what').textContent,
-          kept: all.map((a) => ({ title: a.title, text: a.text, photos: a.photos.map((p) => [p.name, p.type, p.bytes.byteLength]) })) };
+          kept: all.map((a) => ({ title: a.title, text: a.text, photos: a.photos.map((p) => [p.name, p.type, p.bytes.byteLength]) })),
+          got: all.map((a) => a.got) };
       })()`, false);
       check('o app abriu na tela Guardar em…', opened === true, s);
       check('... com o parametro ja fora da URL', s.search === '' && s.path === '/index.html', s);
       check('... mostrando o que chegou', s.what === 'Um vídeo · https://youtu.be/abc + 1 foto', s.what);
       check('... e o service worker guardou texto e foto na caixa',
         JSON.stringify(s.kept) === JSON.stringify([{ title: 'Um vídeo', text: 'https://youtu.be/abc', photos: [['IMG_1.jpg', 'image/jpeg', 4]] }]), s.kept);
+      check('... e o que o Chrome mandou, campo a campo, sem o conteudo',
+        JSON.stringify(s.got) === JSON.stringify([['title:text(8)', 'text:text(20)', 'url:text(0)', 'photos:file(image/jpeg,4,named)']]), s.got);
       // Cancelar with the list on screen drops what arrived: the box is empty for whatever runs next
       await js(`document.getElementById('arrival-cancel').click(); 'ok'`, false);
       await sleep(300);

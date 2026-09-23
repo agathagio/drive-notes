@@ -1,5 +1,5 @@
 // Drive Notes: Service Worker
-const CACHE_NAME = 'drivenotes-v51';
+const CACHE_NAME = 'drivenotes-v52';
 
 // Renderer and sanitizer come from CDNs; without them offline the reading view falls back to
 // plain text. Must match the script tags in index.html, hash included (scenario 0 of
@@ -102,6 +102,11 @@ function keepArrival(record) {
 
 async function receiveShare(request) {
   const form = await request.formData();
+  // What Chrome sent, every entry and without content (the app's diagnostic log shows it): tells a photo
+  // that never came from one that came empty, under another name or in a type the app cannot use
+  const got = [...form.entries()].map(([key, value]) => (typeof value === 'string'
+    ? `${key}:text(${value.length})`
+    : `${key}:file(${value.type || ''},${value.size},${value.name ? 'named' : 'noname'})`));
   const photos = [];
   for (const file of form.getAll('photos')) {
     // Photos go in as bytes: an ArrayBuffer crosses IndexedDB anywhere, a File not always
@@ -114,7 +119,7 @@ async function receiveShare(request) {
     return typeof value === 'string' ? value : '';
   };
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  await keepArrival({ id, at: Date.now(), title: text('title'), text: text('text'), url: text('url'), photos });
+  await keepArrival({ id, at: Date.now(), title: text('title'), text: text('text'), url: text('url'), photos, got });
   return Response.redirect(`./index.html?chegada=${encodeURIComponent(id)}`, 303);
 }
 
