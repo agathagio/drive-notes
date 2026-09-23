@@ -135,6 +135,21 @@ const SETUP = `
     await shot('4f-kanban');
     await js(`__App.els.previewContainer.scrollTop = 1e6; 'ok'`);
     await shot('4g-kanban-fim');
+    // Video do YouTube (![](link)): a capa com o play, e embaixo uma capa que nao carregou, que volta a
+    // ser o texto do link. A primeira vem da rede (i.ytimg.com); sem rede ela tambem vira texto
+    const VIDEO = ['# Aula gravada', '', 'Antes do vídeo, um parágrafo.', '', '![Me at the zoo](https://www.youtube.com/watch?v=jNQXAC9IVRw)', '',
+      'Depois do vídeo, outro parágrafo.', '', '![](https://youtu.be/a1b2c3d4e5f?si=xyz)', '', 'Fim.'].join('\n');
+    await js(`__App.setContent(${JSON.stringify(VIDEO)}); __App.setMode('preview'); __App.els.previewContainer.scrollTop = 0;
+      __App.els.previewContainer.querySelectorAll('a.yt-embed img')[1]?.dispatchEvent(new Event('error')); 'ok'`);
+    await sleep(1500);
+    // What a finger on the play mark hits: it takes no taps, so it has to be the cover inside the link
+    await js(`JSON.stringify([...__App.els.previewContainer.querySelectorAll('a.yt-embed img, a.yt-fallback')]
+      .map(el => el.tagName === 'IMG' ? { src: el.src, complete: el.complete, width: el.naturalWidth } : { fallback: el.textContent })
+      .concat((() => { const r = document.querySelector('.yt-play').getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return { playHit: hit?.tagName, inLink: !!hit?.closest('a.yt-embed') }; })()))`)
+      .then((r) => console.log(`  (youtube: ${r})`));
+    await shot('4h-youtube');
     await js(`__App.setContent(${JSON.stringify(NOTE)}); __App.setMode('preview'); 'ok'`);
     await js(`__App.setMode('edit'); 'ok'`);
     await shot('5-edicao');

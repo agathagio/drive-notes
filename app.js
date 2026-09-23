@@ -2645,6 +2645,46 @@ const App = {
       quote.classList.add('callout');
       quote.dataset.callout = type;
     });
+
+    this.decorateYouTube(container);
+  },
+
+  // youtube.com/watch?v= (also m.), youtu.be/ and youtube.com/shorts/, with an 11 character video ID
+  YOUTUBE_ID: /^https?:\/\/(?:(?:www|m)\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|shorts\/)|youtu\.be\/)([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])/,
+
+  /** ![](a YouTube link) is Obsidian's video embed. Here it is the video's cover with a play mark, and a tap
+      opens the link, which Android hands to the YouTube app: nothing of YouTube runs inside an app that holds
+      the Drive login. Built by the app from the checked ID, after the sanitizer, and it replaces the img
+      inside its own paragraph, so the reading view keeps one child per block. A cover that does not load
+      (no network) goes back to the link as text. */
+  decorateYouTube(container) {
+    container.querySelectorAll('img').forEach((img) => {
+      // ![[foto.jpg]] is a Drive picture; an image already inside a link keeps that link (no link in a link)
+      if (img.dataset.embed || img.closest('a')) return;
+      const src = img.getAttribute('src') || '';
+      const id = this.YOUTUBE_ID.exec(src)?.[1];
+      if (!id) return;
+      const link = document.createElement('a');
+      link.className = 'yt-embed';
+      link.href = src;
+      link.setAttribute('aria-label', img.alt || 'Vídeo do YouTube');
+      const cover = document.createElement('img');
+      cover.src = `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+      cover.alt = img.alt || '';
+      cover.loading = 'lazy';
+      const play = document.createElement('span');
+      play.className = 'yt-play';
+      play.setAttribute('aria-hidden', 'true');
+      // U+FE0E asks for the text glyph: bare, Android may draw ▶ as the coloured emoji, off the palette
+      play.textContent = '▶︎';
+      cover.addEventListener('error', () => {
+        link.className = 'yt-fallback';
+        link.removeAttribute('aria-label');
+        link.textContent = img.alt || src;
+      });
+      link.append(cover, play);
+      img.replaceWith(link);
+    });
   },
 
   /** A board of the Obsidian Kanban plugin: `kanban-plugin: board` in the properties */

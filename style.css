@@ -43,6 +43,9 @@
   /* Respiro entre grupos de uma lista na leitura: uma linha em branco, do tamanho de uma linha de
      texto (o line-height do .preview-container). Mudou o line-height de lá, mude este junto. */
   --list-gap: 1.65em;
+  /* Shadow under the play mark on a YouTube cover: without it the light triangle vanishes on a light
+     cover. Black and soft, so it works over any picture. */
+  --yt-play-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
 }
 
 * {
@@ -634,6 +637,33 @@ mark {
   color: var(--text-secondary);
   font-size: 0.9em;
   font-style: italic;
+}
+/* YouTube embed: the video's cover at the note's width, a play mark over it. The mark takes no taps,
+   so a tap on it lands on the link. */
+.preview-container .yt-embed {
+  position: relative;
+  display: block;
+  max-width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.preview-container .yt-embed img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 0;
+}
+.preview-container .yt-play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 48px;
+  color: var(--text-primary);
+  text-shadow: var(--yt-play-shadow);
+  pointer-events: none;
 }
 .preview-container hr {
   border: none;

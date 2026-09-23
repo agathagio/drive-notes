@@ -4714,5 +4714,70 @@ async function seedArrival(factory, record) {
       && !c.querySelector('.kanban-col-head, .kanban-col-body, .kanban-settings, [hidden]') && c.textContent.includes('%% comentario %%'));
   }
 
+  console.log('79. YouTube: embed vira capa com play, toque abre fora, capa que falha vira o link');
+  {
+    const { App, drive, w } = await boot({ watcher: true });
+    const note = [
+      '![Aula](https://www.youtube.com/watch?v=abcdefghijk&t=120s)',
+      '![](https://m.youtube.com/watch?feature=share&v=ABCDEFGHIJK)',
+      '![](https://youtu.be/a1b2c3d4e5f?si=xyz)',
+      '![](https://www.youtube.com/shorts/Z9y8X7w6V5u)',
+      '![](https://www.youtube.com/watch?v=curto)',
+      '![](https://www.youtube.com.exemplo.com/watch?v=abcdefghijk)',
+      '[link comum](https://www.youtube.com/watch?v=abcdefghijk)',
+      '![foto](https://exemplo.com/foto.jpg)',
+      '![[_media/c931dd3d8e85a740b591f6d2da3a9beb_MD5.jpg]]',
+    ].join('\n\n');
+    drive.put('Y', 'y.md', note, ['folderA']);
+    drive.put('V', 'video.md', 'antes\n\n![Aula](https://youtu.be/a1b2c3d4e5f)', ['folderA']);
+    await App.navigateTo('Y', 'y.md');
+    App.setMode('preview');
+    const c = App.els.previewContainer;
+    const covers = [...c.querySelectorAll('a.yt-embed')];
+    check('os quatro formatos viram capa', JSON.stringify(covers.map(a => /\/vi\/([^/]+)\//.exec(a.querySelector('img').src)[1]))
+      === '["abcdefghijk","ABCDEFGHIJK","a1b2c3d4e5f","Z9y8X7w6V5u"]', covers.map(a => a.querySelector('img').src));
+    check('... com o play por cima e o link original', covers.every(a => a.querySelector('.yt-play')) && covers[0].getAttribute('href') === 'https://www.youtube.com/watch?v=abcdefghijk&t=120s',
+      covers[0]?.getAttribute('href'));
+    check('... e o alt vira o nome da capa', covers[0].getAttribute('aria-label') === 'Aula' && covers[1].getAttribute('aria-label') === 'Vídeo do YouTube',
+      [covers[0].getAttribute('aria-label'), covers[1].getAttribute('aria-label')]);
+    check('ID que nao tem 11 caracteres, ou dominio que so comeca igual, nao vira capa', c.querySelectorAll('a.yt-embed').length === 4
+      && !!c.querySelector('img[src="https://www.youtube.com/watch?v=curto"]') && !!c.querySelector('img[src="https://www.youtube.com.exemplo.com/watch?v=abcdefghijk"]'));
+    check('link comum continua link, e imagem de fora continua imagem',
+      [...c.querySelectorAll('a')].some(a => a.textContent === 'link comum' && !a.classList.contains('yt-embed'))
+      && !!c.querySelector('img[src="https://exemplo.com/foto.jpg"]'));
+    check('a capa fica dentro do paragrafo dela', covers.every(a => a.parentElement.tagName === 'P' && a.parentElement.parentElement === c));
+    check('um pra um da leitura intacto', App.noteBlocks(App.getContent()).length === c.children.length,
+      [App.noteBlocks(App.getContent()).length, c.children.length]);
+    check('segurar a capa nao e link interno: nao espia', covers.length > 0 && App.internalLinkOf(covers[0]) === null);
+    let opened = null;
+    w.open = (url) => { opened = url; };
+    covers[0]?.querySelector('img').click();
+    check('tocar na capa abre o link fora do app', opened === 'https://www.youtube.com/watch?v=abcdefghijk&t=120s', opened);
+    opened = null;
+    covers[0]?.querySelector('.yt-play').click();
+    check('... tambem tocando no play', opened === 'https://www.youtube.com/watch?v=abcdefghijk&t=120s', opened);
+    covers[1]?.querySelector('img').dispatchEvent(new w.Event('error'));
+    const fallback = covers[1];
+    check('capa que nao carrega vira o texto do link, tocavel', !!fallback && fallback.classList.contains('yt-fallback') && !fallback.classList.contains('yt-embed')
+      && fallback.textContent === 'https://m.youtube.com/watch?feature=share&v=ABCDEFGHIJK' && !fallback.querySelector('img') && fallback.isConnected,
+      fallback?.outerHTML);
+    covers[0]?.querySelector('img').dispatchEvent(new w.Event('error'));
+    check('... e com alt, o alt', covers[0]?.textContent === 'Aula' && covers[0].classList.contains('yt-fallback'), covers[0]?.outerHTML);
+    opened = null;
+    fallback?.click();
+    check('... e o texto abre o link fora', opened === 'https://m.youtube.com/watch?feature=share&v=ABCDEFGHIJK', opened);
+
+    // No cartao do espiar: a mesma capa, e o toque sai do app pelo onPeekClick
+    App.openPeek({ target: 'video', heading: '' });
+    const end = Date.now() + 3000;
+    while (!App.els.peekBody.textContent.includes('antes') && Date.now() < end) await sleep(10);
+    const peekCover = App.els.peekBody.querySelector('a.yt-embed');
+    opened = null;
+    peekCover?.querySelector('img').click();
+    check('no cartao do espiar a capa aparece e o toque abre fora', !!peekCover && opened === 'https://youtu.be/a1b2c3d4e5f'
+      && App.currentFile.id === 'Y', [opened, App.els.peekBody.innerHTML]);
+    App.closePeek();
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });
