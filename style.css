@@ -64,6 +64,25 @@ body {
   flex-direction: column;
   height: 100%;
   touch-action: manipulation;
+  /* Interface text is not selectable. On Chrome for Android a single tap on selectable text that
+     is not inside a button, link or field selects the word and opens the "Touch to Search" bar:
+     that is what happened on the note name, on the home title and on any label. Selection comes
+     back only where something is read or written (the rule right below). */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Where text is read or written, it selects: the reading view (long press to copy), the editor,
+   and the fields. The editor is listed on its own, and not only through [contenteditable]: without
+   an explicit value it would inherit the body's none, and selecting in it is what lights the
+   extract button. The diagnostics text (.debug-text) keeps its own rule, further down. */
+.preview-container,
+[contenteditable],
+.cm-editor .cm-content,
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 /* ── Header ── */
@@ -390,6 +409,13 @@ body {
 
 .preview-container.visible {
   display: block;
+}
+
+/* The reading view is focusable (tabindex="-1" in index.html): a tap inside a focusable element is
+   out of the Touch to Search rule, while a long press still selects to copy. A tap focuses it, and
+   that must not draw a ring around the whole note. */
+.preview-container:focus {
+  outline: none;
 }
 
 /* Reading view: comfortable measure on a phone, capped on wider screens */
@@ -789,6 +815,7 @@ body.has-selection .toolbar-btn.toolbar-extract {
   color: var(--text-secondary);
   background: var(--bg-editor);
   border-radius: 6px;
+  -webkit-user-select: text;
   user-select: text;
 }
 

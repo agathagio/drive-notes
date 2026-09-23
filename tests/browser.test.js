@@ -1142,6 +1142,150 @@ const FAKE_DRIVE = `
     }
     await js(APAGAR_BANCO);
     await send('Emulation.clearDeviceMetricsOverride');
+
+    console.log('20. Texto da interface nao seleciona; leitura, editor e campos continuam selecionando');
+    // Chrome for Android's "Touch to Search" opens on a single tap that lands on selectable text outside
+    // any focusable element. That bar does not exist in desktop Chrome or headless Edge, so what is proven
+    // here is what it depends on: a double click (the desktop way of selecting a word) on interface text
+    // selects nothing, while reading, the editor and the fields still select. The reading view is also
+    // focusable now (tabindex="-1"), which is what keeps a single tap there out of the bar's rule: a click
+    // focuses it, draws no outline, does not scroll it, and a link inside it still opens its note.
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    // Counts the clicks the page has seen, so that each read waits for the injected gesture to land
+    const COUNT_CLICKS = `window.__clicks = { click: 0, dblclick: 0 };
+      document.addEventListener('click', () => window.__clicks.click++, true);
+      document.addEventListener('dblclick', () => window.__clicks.dblclick++, true); 'ok'`;
+    // The middle of a word inside an element, on screen
+    const wordAt = (selector, word) => js(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let node; (node = walker.nextNode());) {
+        const i = node.data.indexOf(${JSON.stringify(word)});
+        if (i < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, i); range.setEnd(node, i + ${word.length});
+        const b = range.getBoundingClientRect();
+        return JSON.stringify({ x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) });
+      }
+      return 'null';
+    })()`).then(JSON.parse);
+    const click = async ({ x, y }, count = 1) => {
+      const before = Number(await js('window.__clicks.click'));
+      for (let clickCount = 1; clickCount <= count; clickCount++) {
+        for (const type of ['mousePressed', 'mouseReleased']) {
+          await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount });
+        }
+      }
+      // A double click is only over once its dblclick has fired: the word gets selected before that
+      return esperar(count === 2 ? `window.__clicks.dblclick >= 1 && window.__clicks.click >= ${before + 2}`
+        : `window.__clicks.click >= ${before + 1}`);
+    };
+    const userSelect = (selector) => js(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).userSelect`);
+    const selected = () => js('getSelection().toString()');
+
+    // Interface: the home screen text, where Touch to Search opened
+    await open(buildPage('selecao', currentApp));
+    await js(COUNT_CLICKS);
+    const homeWord = await wordAt('#welcome p', 'pessoal');
+    const homeClicked = await click(homeWord, 2);
+    const homeSelection = await selected();
+    check('duplo clique no texto da home nao seleciona nada', homeClicked === true && homeSelection === '', { homeClicked, homeSelection });
+    const chrome = JSON.parse(await js(`JSON.stringify({ header: getComputedStyle(document.querySelector('.header')).userSelect,
+      name: getComputedStyle(document.getElementById('file-name')).userSelect,
+      title: getComputedStyle(document.querySelector('#welcome h2')).userSelect,
+      body: getComputedStyle(document.body).userSelect })`));
+    check('cabecalho, nome da nota e titulo da home: user-select none', Object.values(chrome).every(v => v === 'none'), chrome);
+
+    // Reading: a long note, left in the middle
+    await js(FAKE_DRIVE);
+    await js(COUNT_CLICKS);
+    // Only paragraph 20, the one left at the top of the screen, has "girassol": the word looked for is on screen
+    const LONG_NOTE = '# Leitura\n\n' + Array.from({ length: 40 }, (_, i) => 'paragrafo ' + i + ' com texto corrido para ler'
+      + (i === 20 ? ' e um girassol no meio' : '')).join('\n\n');
+    await editNote(LONG_NOTE, 0, 0);
+    await js(`__App.setMode('preview'); 'ok'`);
+    await sleep(200);
+    await js(`(() => {
+      const c = document.getElementById('preview-container');
+      const p = [...c.children].find(e => e.textContent.startsWith('paragrafo 20 '));
+      c.scrollTop += p.getBoundingClientRect().top - c.getBoundingClientRect().top;
+      return 'ok';
+    })()`);
+    await sleep(100);
+    const preview = '#preview-container';
+    check('a leitura e selecionavel (user-select text)', await userSelect(preview) === 'text', await userSelect(preview));
+    check('a leitura tem tabindex="-1": focavel, fora da ordem do tab',
+      await js(`document.getElementById('preview-container').getAttribute('tabindex')`) === '-1',
+      await js(`document.getElementById('preview-container').getAttribute('tabindex')`));
+    const scrollBefore = Number(await js(`document.getElementById('preview-container').scrollTop`));
+    const readingWord = await wordAt(preview, 'girassol');
+    await click(readingWord);
+    await sleep(100);
+    const afterTap = JSON.parse(await js(`(() => {
+      const c = document.getElementById('preview-container');
+      return JSON.stringify({ focused: document.activeElement === c, outline: getComputedStyle(c).outlineStyle,
+        scroll: c.scrollTop, selection: getSelection().toString(), view: document.body.dataset.view });
+    })()`));
+    check('um toque na leitura foca o conteiner, sem contorno', afterTap.focused && afterTap.outline === 'none', afterTap);
+    check('... sem rolar a leitura e sem selecionar nada', Math.abs(afterTap.scroll - scrollBefore) <= 1
+      && afterTap.selection === '' && afterTap.view === 'preview', { scrollBefore, afterTap });
+    await js(`window.__clicks.dblclick = 0; 'ok'`);
+    await click(await wordAt(preview, 'girassol'), 2);
+    const readingSelection = await selected();
+    check('duplo clique numa palavra da leitura seleciona a palavra', readingSelection.trim() === 'girassol', readingSelection);
+    check('... e a rolagem continua no mesmo lugar',
+      Math.abs(Number(await js(`document.getElementById('preview-container').scrollTop`)) - scrollBefore) <= 1);
+
+    // A link in the reading view still opens its note with a real click
+    await js(`getSelection().removeAllRanges(); __App.openFile('N1', 'com link.md').then(() => 'ok')`);
+    await esperar(`document.querySelector('#preview-container a.wikilink')`);
+    await click(await wordAt('#preview-container a.wikilink', 'destino'));
+    const followed = await esperar(`__App.currentFile && __App.currentFile.id === 'N2'`);
+    check('um clique de verdade num [[link]] da leitura abre a nota', followed === true, await js('__App.currentFile && __App.currentFile.id'));
+
+    // Editor: explicit user-select text, a real double click selects a word and lights the extract button,
+    // typing replaces it, and the [[ list still opens
+    await js(`__App.saveToRecents('N1', 'com link.md'); __App.saveToRecents('N2', 'destino.md'); 'ok'`);
+    await editNote('uma palavra aqui\noutra linha', 1, 0);
+    await sleep(100);
+    check('o editor e selecionavel (user-select text no .cm-content)', await userSelect('.cm-editor .cm-content') === 'text',
+      await userSelect('.cm-editor .cm-content'));
+    await js(`window.__clicks.dblclick = 0; 'ok'`);
+    await click(await wordAt('.cm-content', 'palavra'), 2);
+    const lit = await esperar(`document.body.classList.contains('has-selection')`);
+    const editorSelection = await js(`(() => { const v = __App.Editor._impl.view; const s = v.state.selection.main;
+      return v.state.sliceDoc(s.from, s.to); })()`);
+    check('duplo clique numa palavra do editor seleciona e acende o botao de extrair', lit === true && editorSelection.trim() === 'palavra',
+      { lit, editorSelection });
+    await send('Input.insertText', { text: 'termo' });
+    const typed = await esperar(`__App.getContent().startsWith('uma termo')`);
+    check('digitar por cima da selecao troca a palavra', typed === true, await js('__App.getContent()'));
+    await send('Input.insertText', { text: ' [[' });
+    const listed = await esperar(`document.querySelectorAll('.cm-tooltip-autocomplete li').length >= 2`);
+    check('... e o [[ ainda abre a lista de notas', listed === true);
+
+    // Fields: the rename box, opened by a real click on the note name, still selects a word
+    await js(`__App.currentFile.name = 'nota de teste.md'; __App.updateFileNameDisplay(); 'ok'`);
+    const nameBox = JSON.parse(await js(`JSON.stringify(document.getElementById('file-name').getBoundingClientRect())`));
+    await click({ x: Math.round(nameBox.x + 10), y: Math.round(nameBox.y + nameBox.height / 2) });
+    const renaming = await esperar(`document.getElementById('modal-overlay').classList.contains('visible')`);
+    check('um clique no nome da nota abre o renomear', renaming === true);
+    check('o campo e selecionavel (user-select text)', await userSelect('#modal-input') === 'text', await userSelect('#modal-input'));
+    await js(`(() => { const i = document.getElementById('modal-input'); i.value = 'nota de teste'; i.setSelectionRange(0, 0); return 'ok'; })()`);
+    const inputBox = JSON.parse(await js(`JSON.stringify(document.getElementById('modal-input').getBoundingClientRect())`));
+    // "teste" starts at the 9th character: measured by a canvas with the field's own font, not guessed
+    const inputWordX = Number(await js(`(() => {
+      const i = document.getElementById('modal-input'); const s = getComputedStyle(i);
+      const ctx = document.createElement('canvas').getContext('2d'); ctx.font = s.fontSize + ' ' + s.fontFamily;
+      return i.getBoundingClientRect().left + parseFloat(s.paddingLeft) + parseFloat(s.borderLeftWidth)
+        + ctx.measureText('nota de ').width + ctx.measureText('teste').width / 2;
+    })()`));
+    await js(`window.__clicks.dblclick = 0; 'ok'`);
+    await click({ x: Math.round(inputWordX), y: Math.round(inputBox.y + inputBox.height / 2) }, 2);
+    const inputSelection = await js(`(() => { const i = document.getElementById('modal-input'); return i.value.slice(i.selectionStart, i.selectionEnd); })()`);
+    check('duplo clique no campo seleciona a palavra', inputSelection.trim().startsWith('teste'), inputSelection);
+    await js('__App.hideModal(); "ok"');
+    await send('Emulation.clearDeviceMetricsOverride');
   } finally {
     browser.close();
   }

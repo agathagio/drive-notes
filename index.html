@@ -100,7 +100,9 @@
   </div>
 
   <!-- ── Preview ── -->
-  <div id="preview-container" class="preview-container"></div>
+  <!-- tabindex="-1": focusable but out of the tab order. On Chrome for Android a tap on text inside a
+       focusable element does not open the Touch to Search bar; a long press still selects to copy -->
+  <div id="preview-container" class="preview-container" tabindex="-1"></div>
 
   <!-- ── Toolbar (bottom, thumb-reachable) ── -->
   <nav class="toolbar">
