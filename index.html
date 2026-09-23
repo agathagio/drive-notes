@@ -270,6 +270,19 @@
     </div>
   </div>
 
+  <!-- ── Peek at a linked note (hold an internal link in reading view) ── -->
+  <div id="peek-overlay" class="modal-overlay">
+    <div class="modal modal-wide peek">
+      <h3 id="peek-title"></h3>
+      <p id="peek-message" class="modal-text" hidden></p>
+      <div id="peek-body" class="preview-container visible peek-body"></div>
+      <div class="modal-actions">
+        <button id="peek-close" class="btn" data-dismiss>Fechar</button>
+        <button id="peek-open" class="btn active">Abrir</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Diagnostics (five taps on the welcome title) ── -->
   <div id="debug-overlay" class="modal-overlay">
     <div class="modal modal-wide">

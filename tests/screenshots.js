@@ -105,6 +105,24 @@ const SETUP = `
     await js(`__App.openToc(); 'ok'`);
     await shot('4c-sumario');
     await js(`__App.closeToc(); 'ok'`);
+    // Espiar (segurar um link de nota na leitura): o cartao com a nota do outro lado, aberto no titulo do
+    // link. A busca e o conteudo sao trocados so aqui, e voltam ao que eram depois do print
+    const PEEK_NOTE = [
+      '---', 'created: 2026-09-17', '---', '', '# Reunião 17 set', '', 'Pauta curta, com **três** pontos e um link pra [[Plano de ação]].', '',
+      '![[quadro-branco.jpg]]', '', '## Presentes', '', '- Agatha', '- Time de produto', '',
+      '## Decisões', '', '- [x] Leva 1 fecha na sexta', '- [ ] Revisar a busca', '- [ ] Marcar a próxima', '',
+      '> [!tip] Lembrete', '> Mandar o resumo no grupo.', '', '## Próximos passos', '', 'Texto corrido pra ver a rolagem dentro do cartão. '.repeat(8),
+    ].join('\n');
+    await js(`(() => {
+      window.__peekOrig = { find: __App.findLinkedNote, get: __App.driveGetFileContent };
+      __App.findLinkedNote = async (target) => ({ base: target, note: { id: 'R', name: 'Reunião 17 set.md' } });
+      __App.driveGetFileContent = async () => ${JSON.stringify(PEEK_NOTE)};
+      __App.els.previewContainer.scrollTop = 0;
+      __App.openPeek({ target: 'Reunião 17 set', heading: '' });
+      return 'ok'; })()`);
+    await sleep(400);
+    await shot('4e-espiar');
+    await js(`__App.closePeek(); __App.findLinkedNote = window.__peekOrig.find; __App.driveGetFileContent = window.__peekOrig.get; 'ok'`);
     // Nota com muitos titulos: a lista rola dentro do painel e o Fechar fica a vista
     await js(`__App.setContent(${JSON.stringify(Array.from({ length: 30 }, (_, i) => `${'#'.repeat(1 + (i % 3))} Titulo ${i + 1}\n\ntexto`).join('\n\n'))});
       __App.setMode('preview'); __App.openToc(); 'ok'`);

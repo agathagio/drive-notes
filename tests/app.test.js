@@ -4424,5 +4424,149 @@ async function seedArrival(factory, record) {
     App.closeToc();
   }
 
+  console.log('77. Espiar: segurar um link interno mostra a nota do outro lado num cartao, sem sair do lugar');
+  {
+    const { App, drive, w } = await boot({ watcher: true, idb: true });
+    // Os mesmos toques do cenario 76: o jsdom nao tem Touch
+    const touch = (el, type, x = 10, y = 10) => {
+      const e = new w.Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(e, 'touches', { value: type === 'touchend' || type === 'touchcancel' ? [] : [{ clientX: x, clientY: y, target: el }] });
+      el.dispatchEvent(e);
+    };
+    const hold = async (el, { move = 0, click = true } = {}) => {
+      touch(el, 'touchstart');
+      if (move) touch(el, 'touchmove', 10, 10 + move);
+      await sleep(App.LONG_PRESS_MS + 60);
+      touch(el, 'touchend');
+      if (click) el.click();
+    };
+    const until = async (cond, limit = 3000) => { const end = Date.now() + limit; while (!cond() && Date.now() < end) await sleep(10); };
+    const visible = () => App.els.peekOverlay.classList.contains('visible');
+    const links = () => [...App.els.previewContainer.querySelectorAll('a')];
+    let scrolledTo = null;
+    w.HTMLElement.prototype.scrollIntoView = function () { scrolledTo = this.textContent; };
+
+    drive.put('A', 'a.md', 'ver [[Nota B#Alvo]] e [[Sumida]] e [[Planilha.xlsx]] e [texto](Nota%20B.md) e [site](https://exemplo.com)', ['folderA']);
+    drive.put('B1', 'Nota B.md', 'B de outra pasta', ['folderZ']);
+    drive.put('B2', 'Nota B.md', '---\ncreated: 2026-09-01\n---\n\n# Topo\n\n![[foto.jpg]]\n\n- [ ] tarefa\n\n## Alvo\n\naqui [[Nota C]]', ['folderA']);
+    drive.put('C', 'Nota C.md', 'C', ['folderA']);
+    drive.put('X', 'Planilha.xlsx', 'bin', ['folderA']); drive.files.get('X').mimeType = 'application/vnd.ms-excel';
+    drive.remoteEdit('B1', 'B de outra pasta'); // B1 mais recente: sem a regra da pasta, ganharia
+    await App.navigateTo('A', 'a.md');
+    App.setMode('preview');
+    const before = App.els.previewContainer.innerHTML;
+    const stackBefore = App.navStack.length;
+    const previewOfBefore = App._previewOf;
+    const embedsBefore = App._embedUrls.size;
+    const placesBefore = w.localStorage.getItem('drivenotes_places');
+
+    // O menu do link do Chrome: cancelado so nos links de nota
+    const ctx = (el) => { const e = new w.Event('contextmenu', { bubbles: true, cancelable: true }); el.dispatchEvent(e); return e.defaultPrevented; };
+    check('menu do Chrome desligado no link de nota, ligado no link de fora e no texto',
+      ctx(links()[0]) && ctx(links()[3]) && !ctx(links()[4]) && !ctx(App.els.previewContainer.querySelector('p')));
+
+    await hold(links()[0]);
+    await until(() => App.els.peekBody.textContent.includes('aqui'));
+    check('segurar o link abre o cartao com a nota da MESMA pasta, sem navegar', visible() && App.currentFile.id === 'A'
+      && App.els.peekTitle.textContent === 'Nota B' && App.els.peekBody.textContent.includes('aqui'), App.els.peekBody.textContent);
+    check('... sem propriedades, foto como rotulo sem pedir ao Drive, caixinha desligada',
+      !App.els.peekBody.textContent.includes('created') && !!App.els.peekBody.querySelector('.wikilink-file')
+      && !App.els.peekBody.querySelector('img') && !drive.log.some(l => l.includes('foto.jpg'))
+      && App.els.peekBody.querySelector('input[type="checkbox"]').disabled === true);
+    check('... rolado ate o titulo do link', scrolledTo === 'Alvo', scrolledTo);
+    check('... e a leitura de baixo intacta', App.els.previewContainer.innerHTML === before && App.navStack.length === stackBefore
+      && App._previewOf === previewOfBefore && App._embedUrls.size === embedsBefore
+      && w.localStorage.getItem('drivenotes_places') === placesBefore);
+    // (sem o toque longo do app ali, o Chrome e que fica com o dedo: nao ha clique de soltar)
+    await hold(App.els.peekBody.querySelector('a.wikilink'), { click: false });
+    await sleep(50);
+    check('segurar um link DENTRO do cartao nao abre outro cartao (nem navega)', visible() && App.els.peekTitle.textContent === 'Nota B' && App.currentFile.id === 'A');
+    w.__back();
+    check('o voltar fecha o cartao e fica na nota', !visible() && App.currentFile.id === 'A');
+
+    // O clique de soltar cai no fundo do cartao, que ja esta por cima: engolido, o cartao fica
+    await hold(links()[0], { click: false });
+    App.els.peekOverlay.click();
+    check('o clique de soltar, caindo no fundo do cartao, e engolido: o cartao fica', visible());
+    App.els.peekOverlay.click();
+    check('um toque de verdade no fundo fecha', !visible());
+
+    await hold(links()[0]);
+    await until(() => App.els.peekBody.textContent.includes('aqui'));
+    App.els.peekOpen.click();
+    await until(() => App.currentFile?.id === 'B2');
+    check('Abrir faz o que o toque curto faria', !visible() && App.currentFile.id === 'B2');
+    App.els.btnBack.click(); await until(() => App.currentFile?.id === 'A');
+    check('... e o voltar traz de volta', App.currentFile.id === 'A');
+    App.setMode('preview');
+
+    await hold(links()[0]);
+    await until(() => App.els.peekBody.textContent.includes('aqui'));
+    App.els.peekBody.querySelector('a.wikilink').click();
+    await until(() => App.currentFile?.id === 'C');
+    check('link dentro do cartao: fecha e segue', !visible() && App.currentFile.id === 'C');
+    App.els.btnBack.click(); await until(() => App.currentFile?.id === 'A');
+    App.setMode('preview');
+
+    await hold(links()[1]); await until(() => /não encontrada/.test(App.els.peekMessage.textContent));
+    check('nota que nao existe: o aviso no cartao', visible() && App.els.peekMessage.textContent === 'Nota não encontrada: Sumida', App.els.peekMessage.textContent);
+    App.closePeek();
+    await hold(links()[2]); await until(() => /tipo/.test(App.els.peekMessage.textContent));
+    check('arquivo que nao e nota: o aviso', App.els.peekMessage.textContent === 'Não abro esse tipo: Planilha.xlsx', App.els.peekMessage.textContent);
+    App.closePeek();
+
+    await hold(links()[3]); await until(() => App.els.peekBody.textContent.includes('aqui'));
+    check('link markdown relativo pra .md tambem espia', visible() && App.els.peekTitle.textContent === 'Nota B');
+    App.closePeek();
+
+    let opened = null;
+    w.open = (url) => { opened = url; };
+    await hold(links()[4]);
+    check('link de fora nao espia (e o toque segue abrindo fora)', !visible() && opened === 'https://exemplo.com', opened);
+
+    // Um dedo que anda e rolagem: o navegador nem manda o clique
+    await hold(links()[0], { move: 30, click: false });
+    check('dedo que anda nao espia', !visible() && App.currentFile.id === 'A');
+    await sleep(50);
+
+    // Cartao fechado antes de a nota chegar: resposta atrasada nao preenche nem reabre
+    drive.delay = 150;
+    touch(links()[0], 'touchstart'); await sleep(App.LONG_PRESS_MS + 30); touch(links()[0], 'touchend');
+    check('(o cartao abriu, carregando)', visible() && App.els.peekMessage.textContent === 'Carregando…', App.els.peekMessage.textContent);
+    App.closePeek();
+    await sleep(500);
+    check('fechado antes de chegar: nada reabre nem preenche', !visible() && !App.els.peekBody.textContent.includes('aqui'));
+
+    // Um segundo espiar por cima do primeiro: a resposta do primeiro, que chega depois, nao preenche o segundo
+    App.openPeek({ target: 'Nota B', heading: '' });
+    await sleep(20);
+    App.openPeek({ target: 'Sumida', heading: '' });
+    await sleep(600);
+    check('segundo espiar por cima do primeiro: so o segundo aparece', visible() && App.els.peekTitle.textContent === 'Sumida'
+      && App.els.peekMessage.textContent === 'Nota não encontrada: Sumida' && !App.els.peekBody.textContent.includes('aqui'),
+      [App.els.peekTitle.textContent, App.els.peekMessage.textContent, App.els.peekBody.textContent]);
+    App.closePeek();
+    drive.delay = 5;
+
+    // Copia guardada no aparelho: na tela na hora, trocada pela do Drive quando ela chega
+    await App.NoteStore.put({ id: 'B2', name: 'Nota B.md', parents: ['folderA'], modifiedTime: 'x', content: '# Velho\n\nguardado' });
+    drive.delay = 150;
+    await hold(links()[0]);
+    await until(() => App.els.peekBody.textContent.includes('guardado'), 1000);
+    const early = App.els.peekBody.textContent.includes('guardado');
+    await until(() => App.els.peekBody.textContent.includes('aqui'), 3000);
+    check('copia guardada aparece antes, e a do Drive troca depois', early && App.els.peekBody.textContent.includes('aqui')
+      && !App.els.peekBody.textContent.includes('guardado'));
+    drive.delay = 5;
+    App.closePeek();
+    check('... e nada disso mexeu na leitura', App.els.previewContainer.innerHTML === before);
+
+    // Sem rede: sempre "Sem rede", mesmo com copia guardada
+    Object.defineProperty(w.navigator, 'onLine', { configurable: true, get: () => false });
+    await hold(links()[0]); await sleep(50);
+    check('sem rede: o aviso', visible() && App.els.peekMessage.textContent === 'Sem rede.', App.els.peekMessage.textContent);
+    App.closePeek();
+  }
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });

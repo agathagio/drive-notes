@@ -460,6 +460,17 @@ mark {
   font-style: italic;
 }
 
+/* Links to other notes in the reading view: a long press is the peek, so Chrome's own callout and
+   selection stay off them. Only on these: the rest of the reading view keeps selecting (the
+   .preview-container rule near the top), and so does the peek card, which reuses the class */
+#preview-container a.wikilink,
+#preview-container a[href$=".md" i],
+#preview-container a[href*=".md#" i] {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 /* Task lists */
 .preview-container li:has(> input[type="checkbox"]) {
   list-style: none;
@@ -800,6 +811,41 @@ body.has-selection .toolbar-btn.toolbar-extract {
 
 .modal.modal-wide {
   max-width: 560px;
+}
+
+/* The peek card (hold a link to another note): about 60% of the screen, the note scrolling inside it
+   with the reading view's type (it is a .preview-container), Abrir and Fechar always in view */
+.modal.peek {
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+}
+
+.modal.peek h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.peek-body.preview-container {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 60vh;
+  margin-bottom: 12px;
+  padding: 0 4px 8px;
+  background: transparent;
+  overflow-y: auto;
+}
+
+/* The dialogs' text field rule (.modal input) would stretch the card's task boxes to a full line:
+   they go back to the reading view's own boxes */
+.peek-body input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+  margin-bottom: 0;
+  background: none;
+  border: none;
 }
 
 .debug-text {

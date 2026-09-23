@@ -74,6 +74,10 @@ const App = {
   _swipe: null,
   // The element a long press just fired on: the click its lift sends is swallowed (see onLongPress)
   _longPressed: null,
+  // The peek card (hold an internal link): the link it shows, { target, heading, note }, or null while
+  // closed; and its sequence, bumped on every open and close, so a late answer never fills a card
+  _peek: null,
+  _peekSeq: 0,
   // The note on its way from the Drive, as a view description. Until it arrives the screen still shows the
   // previous view, but for navigation the note is already where we are (see viewState).
   _opening: null,
@@ -144,6 +148,11 @@ const App = {
       tocOverlay: document.getElementById('toc-overlay'),
       tocUl: document.getElementById('toc-ul'),
       tocEmpty: document.getElementById('toc-empty'),
+      peekOverlay: document.getElementById('peek-overlay'),
+      peekTitle: document.getElementById('peek-title'),
+      peekMessage: document.getElementById('peek-message'),
+      peekBody: document.getElementById('peek-body'),
+      peekOpen: document.getElementById('peek-open'),
       updateBar: document.getElementById('update-bar'),
     };
 
@@ -2413,6 +2422,132 @@ const App = {
     this.armWatcher();
   },
 
+  // ── Peek ──
+
+  /** Hold an internal link: the note on the other side, drawn in a card over the reading view. Nothing of
+      the reading view changes (the note on screen, its place, the back stack, the pictures it holds).
+      Every await checks the card's own sequence: a card closed, or replaced by another one, is never
+      filled late. */
+  async openPeek({ target, heading }) {
+    const seq = ++this._peekSeq;
+    const els = this.els;
+    this._peek = { target, heading, note: null };
+    const say = (text) => {
+      els.peekMessage.textContent = text;
+      els.peekMessage.hidden = !text;
+    };
+    els.peekTitle.textContent = target.split('/').pop().trim().replace(/\.md$/i, '');
+    els.peekBody.innerHTML = '';
+    els.peekBody.scrollTop = 0;
+    say('Carregando…');
+    els.peekOverlay.classList.add('visible');
+    this.armWatcher();
+    this.log(`peek ${target}`);
+
+    // Finding a note by its name always asks the Drive: without network there is nothing to show
+    if (navigator.onLine === false) return say('Sem rede.');
+    // Never a login popup from a long press: the tap on Abrir is where that can happen
+    if (!this.hasValidToken()) return say('O login do Google venceu.');
+    let found;
+    try {
+      found = await this.findLinkedNote(target);
+    } catch (e) {
+      console.error('Peek lookup failed:', e);
+      if (seq !== this._peekSeq) return;
+      return say(navigator.onLine === false ? 'Sem rede.' : 'Não deu pra procurar a nota.');
+    }
+    if (seq !== this._peekSeq) return;
+    if (found.error) return say(found.error === 'type' ? `Não abro esse tipo: ${found.base}` : `Nota não encontrada: ${found.base}`);
+    this._peek.note = found.note;
+    els.peekTitle.textContent = found.note.name.replace(/\.md$/i, '');
+
+    // The copy kept on the device is on screen at once; the Drive's replaces it when it arrives
+    const kept = await this.NoteStore.get(found.note.id);
+    if (seq !== this._peekSeq) return;
+    let shown = null;
+    if (typeof kept?.content === 'string') {
+      this.fillPeek(kept.content, heading);
+      shown = kept.content;
+    }
+    try {
+      const content = await this.driveGetFileContent(found.note.id);
+      if (seq !== this._peekSeq) return;
+      // Only a different text is drawn again, and then where the card already is stays put
+      if (content !== shown) this.fillPeek(content, heading, { keepScroll: shown !== null });
+    } catch (e) {
+      console.error('Peek load failed:', e);
+      if (seq !== this._peekSeq) return;
+      if (shown === null) say(navigator.onLine === false ? 'Sem rede.' : 'Não deu pra abrir a nota.');
+    }
+  },
+
+  /** The note's body in the card: no properties, pictures as their label (no download), tasks left
+      switched off as the renderer draws them. Opens at the link's heading, or at the top; `keepScroll`
+      keeps the card where it is (the Drive's text replacing the kept one, which may have been scrolled). */
+  fillPeek(content, heading, { keepScroll = false } = {}) {
+    const body = this.els.peekBody;
+    const { body: text } = this.splitFrontmatter(content);
+    const at = body.scrollTop;
+    this.els.peekMessage.hidden = true;
+    if (typeof DOMPurify === 'undefined' || typeof marked === 'undefined') {
+      // The same rule as the reading view: no sanitizer, no HTML
+      body.style.whiteSpace = 'pre-wrap';
+      body.textContent = text;
+    } else {
+      body.style.whiteSpace = '';
+      this.renderMarkdownInto(body, text);
+      body.querySelectorAll('img[data-embed]').forEach((img) => {
+        const label = document.createElement('span');
+        label.className = 'wikilink-file';
+        label.textContent = img.alt;
+        img.replaceWith(label);
+      });
+    }
+    if (keepScroll) {
+      body.scrollTop = at;
+      return;
+    }
+    body.scrollTop = 0;
+    this.scrollToHeading(heading, body);
+  },
+
+  closePeek() {
+    this._peekSeq++;
+    this._peek = null;
+    this.els.peekOverlay.classList.remove('visible');
+    this.armWatcher();
+  },
+
+  /** Abrir: exactly what a short tap on the held link does. This runs inside the tap on Abrir, which is
+      where followLink's history entry has to be born (see beginNav). */
+  openPeeked() {
+    const peek = this._peek;
+    this.closePeek();
+    if (peek) this.followLink(peek.target, peek.heading);
+  },
+
+  /** Taps inside the card: a link to another note closes the card and is followed, as in the reading
+      view; a link to a heading of the same note scrolls the card; the rest leaves the app */
+  onPeekClick(e) {
+    const link = e.target.closest('a');
+    if (!link || !this.els.peekBody.contains(link)) return;
+    e.preventDefault();
+    const inner = this.internalLinkOf(link);
+    if (inner) {
+      this.closePeek();
+      this.followLink(inner.target, inner.heading);
+      return;
+    }
+    const href = link.getAttribute('href') || '';
+    if (link.classList.contains('wikilink')) {
+      this.scrollToHeading(link.dataset.heading || '', this.els.peekBody);
+    } else if (href.startsWith('#')) {
+      this.scrollToHeading(decodeURIComponent(href.slice(1)), this.els.peekBody);
+    } else if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+      window.open(href, '_blank', 'noopener');
+    }
+  },
+
   // ── Reading view ──
 
   renderPreview() {
@@ -2429,8 +2564,7 @@ const App = {
       return;
     }
 
-    container.innerHTML = DOMPurify.sanitize(marked.parse(body));
-    this.decoratePreview(container);
+    this.renderMarkdownInto(container, body);
     this.enableTasks(container);
     this.loadEmbeds(container);
 
@@ -2445,6 +2579,13 @@ const App = {
       details.append(summary, pre);
       container.prepend(details);
     }
+  },
+
+  /** Markdown to sanitized, decorated HTML inside `container`: the reading view's own drawing, shared
+      with the peek. The caller checks that the renderer and the sanitizer are there. */
+  renderMarkdownInto(container, body) {
+    container.innerHTML = DOMPurify.sanitize(marked.parse(body));
+    this.decoratePreview(container);
   },
 
   /** Split a leading YAML block (--- ... ---) from the note body */
@@ -2708,15 +2849,12 @@ const App = {
     // Every way out that does not open a note drops it again with cancelNav().
     this.beginNav();
     const seq = ++this._loadSeq; // this tap wins over a note still loading, and "back" can give up on it
-
-    const base = target.split('/').pop().trim();
-    const names = /\.md$/i.test(base) ? [base] : [`${base}.md`, base];
     this.setSaveStatus('saving', 'Procurando...');
 
-    let matches;
+    let found;
     try {
       await this.ensureAuth();
-      matches = await this.driveFindByName(names);
+      found = await this.findLinkedNote(target);
     } catch (e) {
       console.error('Link lookup failed:', e);
       if (seq !== this._loadSeq) return;
@@ -2725,30 +2863,59 @@ const App = {
       return;
     }
     if (seq !== this._loadSeq) return; // overtaken by another tap, or dropped by "back"
-
-    const isText = (f) => /\.(md|markdown|txt)$/i.test(f.name) || (f.mimeType || '').startsWith('text/');
-    const notes = matches.filter(isText);
-    if (!notes.length) {
-      this.setSaveStatus('error', matches.length ? `Não abro esse tipo: ${base}` : `Nota não encontrada: ${base}`);
+    if (found.error) {
+      this.setSaveStatus('error', found.error === 'type' ? `Não abro esse tipo: ${found.base}` : `Nota não encontrada: ${found.base}`);
       this.cancelNav();
       return;
     }
-
-    // Same name in more than one place: the one next to the open note wins, then .md over the rest
-    const folder = this.currentFile?.parents?.[0];
-    const pick = notes.find(f => folder && f.parents?.includes(folder))
-      || notes.find(f => /\.md$/i.test(f.name))
-      || notes[0];
-
-    if (!(await this.openFile(pick.id, pick.name, { heading }))) this.cancelNav();
+    if (!(await this.openFile(found.note.id, found.note.name, { heading }))) this.cancelNav();
   },
 
-  scrollToHeading(heading) {
+  /** The note a link's target names, picked the way a tap picks it: same name in more than one place,
+      the one next to the open note wins, then .md over the rest. { base, note }, or { base, error } with
+      'missing' or 'type'. Throws when the Drive cannot be asked. The tap and the peek both come here, so
+      they always land on the same note. */
+  async findLinkedNote(target) {
+    const base = target.split('/').pop().trim();
+    const names = /\.md$/i.test(base) ? [base] : [`${base}.md`, base];
+    const matches = await this.driveFindByName(names);
+    const isText = (f) => /\.(md|markdown|txt)$/i.test(f.name) || (f.mimeType || '').startsWith('text/');
+    const notes = matches.filter(isText);
+    if (!notes.length) return { base, error: matches.length ? 'type' : 'missing' };
+    const folder = this.currentFile?.parents?.[0];
+    const note = notes.find(f => folder && f.parents?.includes(folder))
+      || notes.find(f => /\.md$/i.test(f.name))
+      || notes[0];
+    return { base, note };
+  },
+
+  /** { target, heading } of a link to another note (a wikilink, or a relative link to a .md), or null:
+      links out of the app, and links to a heading of this same note, are not notes to peek at.
+      The same reading of a link as onPreviewClick's. */
+  internalLinkOf(link) {
+    if (link.classList.contains('wikilink')) {
+      const target = link.dataset.target || '';
+      return target ? { target, heading: link.dataset.heading || '' } : null;
+    }
+    const href = link.getAttribute('href') || '';
+    if (!href || href.startsWith('#') || /^[a-z][a-z0-9+.-]*:/i.test(href)) return null;
+    let decoded;
+    try {
+      decoded = decodeURIComponent(href);
+    } catch {
+      return null;
+    }
+    const [target, heading = ''] = decoded.split('#');
+    return target ? { target, heading } : null;
+  },
+
+  /** Scroll to the heading a link names, looked for inside `root` only (the reading view, or the peek) */
+  scrollToHeading(heading, root = this.els.previewContainer) {
     if (!heading) return;
     const norm = (s) => s.trim().toLowerCase().replace(/\s+/g, ' ');
     const wanted = norm(heading);
     const slug = wanted.replace(/ /g, '-');
-    const found = [...this.els.previewContainer.querySelectorAll('h1, h2, h3, h4, h5, h6')]
+    const found = [...root.querySelectorAll('h1, h2, h3, h4, h5, h6')]
       .find(h => norm(h.textContent) === wanted || norm(h.textContent).replace(/ /g, '-') === slug);
     if (found) found.scrollIntoView({ block: 'start' });
   },
@@ -5085,6 +5252,22 @@ const App = {
     // A tap on the dimmed backdrop closes, like Fechar
     this.els.tocOverlay.addEventListener('click', (e) => {
       if (e.target === this.els.tocOverlay) this.closeToc();
+    });
+
+    // Hold a link to another note in reading view: peek at it. Only the reading view listens, so a link
+    // held inside the card peeks at nothing (no peek inside a peek), and links out of the app keep
+    // Chrome's own long press.
+    this.onLongPress(this.els.previewContainer, 'a', (a) => {
+      const link = this.internalLinkOf(a);
+      if (link) this.openPeek(link);
+    }, {
+      accept: (a) => this.mode === 'preview' && document.body.dataset.view === 'preview' && !!this.internalLinkOf(a),
+    });
+    document.getElementById('peek-close')?.addEventListener('click', () => this.closePeek());
+    this.els.peekOpen.addEventListener('click', () => this.openPeeked());
+    this.els.peekBody.addEventListener('click', (e) => this.onPeekClick(e));
+    this.els.peekOverlay.addEventListener('click', (e) => {
+      if (e.target === this.els.peekOverlay) this.closePeek();
     });
 
     // Navigation

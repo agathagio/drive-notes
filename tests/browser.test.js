@@ -1384,6 +1384,135 @@ const FAKE_DRIVE = `
     console.log(`     o nome comeca em x=${Math.round(caixaNome.x)} (faixa do deslizar: ate 32px da borda)`);
     await send('Emulation.setTouchEmulationEnabled', { enabled: false });
     await send('Emulation.clearDeviceMetricsOverride');
+
+    console.log('23. Espiar de verdade: segurar um link abre o cartao sem o menu do Chrome, rolar e deslizar em cima de um link nao');
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+    await open(buildPage('espiar', currentApp));
+    await esperar('window.__App', 15000);
+    // Uma nota longa, com um link no comeco de cada paragrafo (o texto comeca em x=16, dentro da faixa
+    // do deslizar), aberta na leitura. Sem Drive: a busca e o conteudo da nota do outro lado sao trocados
+    const NOTA_COM_LINKS = Array.from({ length: 40 }, (_, i) => `[[Outra]] paragrafo ${i} com texto bastante pra ocupar a linha e um pouco mais`).join('\n\n');
+    await js(`(() => {
+      localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3)); __App.accessToken = 'fake';
+      __App.findLinkedNote = async (target) => ({ base: target, note: { id: 'O', name: 'Outra.md' } });
+      __App.driveGetFileContent = async () => '# Outra\\n\\ntexto da outra\\n\\n- [ ] uma tarefa';
+      __App.currentFile = { id: 'T', name: 'com links.md' }; __App.setContent(${JSON.stringify(NOTA_COM_LINKS)});
+      __App.showEditor(); __App.setMode('preview'); __App.updateFileNameDisplay(); __App.isDirty = false;
+      window.__seen = { start: 0, move: 0, end: 0, cancel: 0 };
+      window.addEventListener('touchstart', () => window.__seen.start++, true);
+      window.addEventListener('touchmove', () => window.__seen.move++, true);
+      window.addEventListener('touchend', () => window.__seen.end++, true);
+      window.addEventListener('touchcancel', () => window.__seen.cancel++, true);
+      // Registrado depois do app e em bolha: ve o menu do Chrome como ele chega, depois do ouvinte do app
+      window.__ctx = null; document.addEventListener('contextmenu', (e) => { window.__ctx = e.defaultPrevented; });
+      return 'ok'; })()`);
+    const cartaoAberto = `document.getElementById('peek-overlay').classList.contains('visible')`;
+    const topoDoLink = async () => {
+      await js(`document.getElementById('preview-container').scrollTop = 0; 'ok'`);
+      return JSON.parse(await js(`JSON.stringify(document.querySelector('#preview-container a.wikilink').getBoundingClientRect())`));
+    };
+    let caixaLink = await topoDoLink();
+    const lx = Math.round(caixaLink.x + Math.min(caixaLink.width / 2, 30)), ly = Math.round(caixaLink.y + caixaLink.height / 2);
+    const segurarLink = async () => {
+      let r = null;
+      for (let tentativa = 1; tentativa <= 3; tentativa++) {
+        await js(`__App.closePeek(); window.__ctx = null; window.__seen = { start: 0, move: 0, end: 0, cancel: 0 }; 'ok'`);
+        await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: lx, y: ly }] });
+        await esperar('window.__seen.start >= 1', 4000);
+        const abriu = await esperar(cartaoAberto, 4000);
+        // Dedo ainda na tela: o menu do Chrome, se vier, vem agora (medido: o Edge headless nao manda
+        // contextmenu pra toque injetado, nem segurando 1,7s; o ouvinte e provado logo abaixo, direto)
+        await sleep(400);
+        await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        await esperar('window.__seen.end + window.__seen.cancel >= 1', 4000);
+        await sleep(300);
+        const seen = JSON.parse(await js('JSON.stringify(window.__seen)'));
+        r = { abriu, seen, aberto: await js(cartaoAberto), ctx: await js('window.__ctx'), file: await js('__App.currentFile && __App.currentFile.id'), view: await js('document.body.dataset.view') };
+        if (!seen.cancel) return r;
+        console.log(`     (tentativa ${tentativa} do toque longo perdida: touchcancel)`, JSON.stringify(seen));
+      }
+      return r;
+    };
+    const leituraAntes = Number(await js(`document.getElementById('preview-container').scrollTop`));
+    const segurou = await segurarLink();
+    console.log('     segurar o link:', JSON.stringify(segurou));
+    check('segurar o link abre o cartao', segurou.abriu === true && segurou.aberto === true, segurou);
+    check('... e soltar nao navega', segurou.file === 'T' && segurou.view === 'preview', segurou);
+    check('... o menu do Chrome, se veio, chegou cancelado', segurou.ctx === null || segurou.ctx === true, segurou.ctx);
+    // O menu e a selecao, no navegador de verdade: desligados no link de nota, e so nele
+    const menu = JSON.parse(await js(`(() => {
+      const c = document.getElementById('preview-container');
+      const a = c.querySelector('a.wikilink'), p = c.querySelector('p');
+      const ctx = (el) => { const e = new MouseEvent('contextmenu', { bubbles: true, cancelable: true }); el.dispatchEvent(e); return e.defaultPrevented; };
+      return JSON.stringify({ linkCtx: ctx(a), textCtx: ctx(p), linkSelect: getComputedStyle(a).userSelect, textSelect: getComputedStyle(p).userSelect }); })()`));
+    check('menu do Chrome cancelado no link de nota, nao no texto; o link nao seleciona, o texto sim',
+      menu.linkCtx === true && menu.textCtx === false && menu.linkSelect === 'none' && menu.textSelect === 'text', menu);
+    const chegou = await esperar(`document.getElementById('peek-body').textContent.includes('texto da outra')`, 4000);
+    check('o cartao mostra a nota do outro lado, com o nome no topo', chegou && await js(`document.getElementById('peek-title').textContent`) === 'Outra');
+    // A regra dos campos dos dialogos (.modal input, largura cheia) nao pode esticar a caixinha da tarefa
+    const caixinha = JSON.parse(await js(`JSON.stringify(document.querySelector('#peek-body li > input[type="checkbox"]').getBoundingClientRect())`));
+    check('a caixinha de tarefa do cartao tem tamanho de caixinha, na linha do texto', caixinha.width < 30, caixinha);
+    const botoes = JSON.parse(await js(`(() => { const hit = (id) => { const b = document.getElementById(id).getBoundingClientRect();
+      const el = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2); return { hit: !!el && !!el.closest('#' + id), bottom: Math.round(b.bottom), h: Math.round(b.height) }; };
+      const card = document.querySelector('#peek-overlay .modal').getBoundingClientRect();
+      return JSON.stringify({ abrir: hit('peek-open'), fechar: hit('peek-close'), card: { top: Math.round(card.top), bottom: Math.round(card.bottom), h: Math.round(card.height) } }); })()`));
+    console.log('     cartao:', JSON.stringify(botoes));
+    check('o Abrir e o Fechar sao tocaveis, dentro da tela', botoes.abrir.hit && botoes.fechar.hit && botoes.abrir.bottom <= 844 && botoes.fechar.bottom <= 844, botoes);
+    check('... e a leitura de baixo nao rolou', Number(await js(`document.getElementById('preview-container').scrollTop`)) === leituraAntes);
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    check('o voltar de verdade (Esc) fecha o cartao e fica na nota', await esperar(`!(${cartaoAberto})`, 4000) && await js(`__App.currentFile.id`) === 'T');
+
+    // Rolar a leitura com o dedo comecando em cima de um link: rola, e nenhum cartao
+    let rolagem = null;
+    for (let tentativa = 1; tentativa <= 3; tentativa++) {
+      caixaLink = await topoDoLink();
+      await js(`__App.closePeek(); window.__seen = { start: 0, move: 0, end: 0, cancel: 0 }; 'ok'`);
+      await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: lx, y: ly }] });
+      for (let i = 1; i <= 10; i++) {
+        await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: lx, y: ly - 8 * i }] });
+        await sleep(16);
+      }
+      await esperar('window.__seen.move >= 10', 4000);
+      await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await esperar('window.__seen.end + window.__seen.cancel >= 1', 4000);
+      // Passado o tempo do toque longo desde o comeco: nada abriu
+      await sleep(800);
+      const seen = JSON.parse(await js('JSON.stringify(window.__seen)'));
+      rolagem = { seen, scrollTop: Number(await js(`document.getElementById('preview-container').scrollTop`)), aberto: await js(cartaoAberto) };
+      if (!seen.cancel || rolagem.scrollTop > 0) break;
+      console.log(`     (tentativa ${tentativa} da rolagem perdida: touchcancel)`, JSON.stringify(seen));
+    }
+    console.log('     rolar em cima do link:', JSON.stringify(rolagem));
+    check('arrastar 80px pra cima comecando no link rola a leitura e nao abre cartao', rolagem.scrollTop > 0 && rolagem.aberto === false, rolagem);
+
+    // Deslizar da borda comecando em cima de um link (o nome da nota comeca fora da faixa, ver o 22):
+    // o deslizar volta e o cartao nao abre
+    caixaLink = await topoDoLink();
+    const naBorda = JSON.parse(await js(`(() => { const el = document.elementFromPoint(20, ${ly}); return JSON.stringify({ link: !!el && !!el.closest('#preview-container a.wikilink'), x: ${Math.round(caixaLink.x)} }); })()`));
+    check('(o dedo em x=20 cai em cima do link)', naBorda.link, naBorda);
+    let deslizou = null;
+    for (let tentativa = 1; tentativa <= 3; tentativa++) {
+      await js(`__App.closePeek(); window.__seen = { start: 0, move: 0, end: 0, cancel: 0 }; 'ok'`);
+      await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 20, y: ly }] });
+      for (let i = 1; i <= 8; i++) {
+        await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 20 + 130 * i / 8, y: ly }] });
+        await sleep(16);
+      }
+      await esperar('__App._swipe && __App._swipe.armed === true', 4000);
+      await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      const voltou = await esperar(`document.body.dataset.view === 'welcome'`, 4000);
+      await sleep(800);
+      const seen = JSON.parse(await js('JSON.stringify(window.__seen)'));
+      deslizou = { voltou, seen, aberto: await js(cartaoAberto), view: await js('document.body.dataset.view') };
+      if (voltou) break;
+      console.log(`     (tentativa ${tentativa} do deslizar perdida)`, JSON.stringify(deslizou));
+    }
+    console.log('     deslizar da borda em cima do link:', JSON.stringify(deslizou));
+    check('deslizar da borda comecando num link volta, e o cartao nao abre', deslizou.voltou === true && deslizou.aberto === false, deslizou);
+    await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+    await send('Emulation.clearDeviceMetricsOverride');
   } finally {
     browser.close();
   }
