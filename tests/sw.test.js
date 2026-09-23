@@ -27,6 +27,10 @@ const VAULT = /VAULT_FOLDER_ID: '([^']+)'/.exec(fs.readFileSync(path.join(ROOT, 
 
 // The version the server is publishing. A deploy is changing this number.
 let version = 1;
+// No network at all, the service worker's own fetches included: the page's offline emulation
+// (Network.emulateNetworkConditions) does not reach them. Measured on 22 Sep 2026 in scenario 7: with the
+// page offline, the service worker still fetched index.html?atalho=nova from this server and cached it.
+let offline = false;
 
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png' };
 const LOCAL_CDN = {
@@ -64,6 +68,10 @@ function serve(pathname) {
 }
 
 const server = http.createServer((req, res) => {
+  if (offline) {
+    req.socket.destroy();
+    return;
+  }
   const { pathname } = new URL(req.url, ORIGIN);
   const body = serve(pathname);
   if (body === null) {
@@ -241,6 +249,55 @@ const EVERY_DOCUMENT = `(() => {
       const back = await atTop();
       check('tocar no aviso: recarregou, na versao 5, e reabriu a mesma nota na leitura', reopened, await state());
       check('... no mesmo paragrafo, no mesmo ponto', back.text === 'paragrafo 30' && Math.abs(back.px - left.px) <= 2, back);
+    }
+
+    console.log('6. Compartilhar de outro app: o service worker guarda texto e foto, e o app abre na tela Guardar em…');
+    {
+      await send('Page.navigate', { url: `${ORIGIN}/index.html` });
+      await esperar(`navigator.serviceWorker.controller && window.App`, 15000);
+      // What Android does with the manifest's share_target: a multipart POST to the action, as a navigation
+      await js(`(() => {
+        const form = document.createElement('form');
+        form.method = 'POST'; form.enctype = 'multipart/form-data'; form.action = './share-target';
+        const field = (name, value) => { const i = document.createElement('input'); i.type = 'hidden'; i.name = name; i.value = value; form.appendChild(i); };
+        field('title', 'Um vídeo'); field('text', 'https://youtu.be/abc'); field('url', '');
+        const input = document.createElement('input'); input.type = 'file'; input.name = 'photos';
+        const dt = new DataTransfer(); dt.items.add(new File([new Uint8Array([1, 2, 3, 4])], 'IMG_1.jpg', { type: 'image/jpeg' }));
+        input.files = dt.files; form.appendChild(input);
+        document.body.appendChild(form); form.submit(); return 'ok';
+      })()`, false);
+      const opened = await esperar(`document.getElementById('arrival-overlay')?.classList.contains('visible')`, 15000);
+      const s = await js(`(async () => {
+        const db = await new Promise((ok, no) => { const r = indexedDB.open('drivenotes-arrivals', 1); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); });
+        const all = await new Promise((ok) => { const r = db.transaction('arrivals').objectStore('arrivals').getAll(); r.onsuccess = () => ok(r.result); });
+        db.close();
+        return { search: location.search, path: location.pathname, what: document.getElementById('arrival-what').textContent,
+          kept: all.map((a) => ({ title: a.title, text: a.text, photos: a.photos.map((p) => [p.name, p.type, p.bytes.byteLength]) })) };
+      })()`, false);
+      check('o app abriu na tela Guardar em…', opened === true, s);
+      check('... com o parametro ja fora da URL', s.search === '' && s.path === '/index.html', s);
+      check('... mostrando o que chegou', s.what === 'Um vídeo · https://youtu.be/abc + 1 foto', s.what);
+      check('... e o service worker guardou texto e foto na caixa',
+        JSON.stringify(s.kept) === JSON.stringify([{ title: 'Um vídeo', text: 'https://youtu.be/abc', photos: [['IMG_1.jpg', 'image/jpeg', 4]] }]), s.kept);
+      // Cancelar with the list on screen drops what arrived: the box is empty for whatever runs next
+      await js(`document.getElementById('arrival-cancel').click(); 'ok'`, false);
+      await sleep(300);
+    }
+
+    console.log('7. Atalho do icone sem rede: o app abre do cache, e a URL com parametro nao vira copia nova no cache');
+    {
+      await send('Network.enable');
+      await send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+      offline = true;
+      await send('Page.navigate', { url: `${ORIGIN}/index.html?atalho=nova` });
+      const opened = await esperar(`document.body.dataset.view === 'edit' && App.currentFile && !App.currentFile.id`, 15000);
+      const s = await js(`(async () => ({ search: location.search,
+        withQuery: (await Promise.all((await caches.keys()).map(async (k) => (await (await caches.open(k)).keys()).map((r) => r.url))))
+          .flat().filter((u) => u.includes('?atalho') || u.includes('?chegada')) }))()`, false);
+      await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+      offline = false;
+      check('sem rede, o atalho abriu o app numa nota nova', opened === true, s);
+      check('... com a URL limpa, e nenhuma copia da pagina com parametro no cache', s.search === '' && s.withQuery.length === 0, s);
     }
   } finally {
     browser.close();

@@ -826,6 +826,55 @@ body.has-selection .toolbar-btn.toolbar-extract {
   white-space: normal;
 }
 
+/* ── Guardar em… / Anotar em… (App.openArrivalSheet) ── */
+
+/* What arrived, at the top: three lines at most, the rest cut */
+.arrival-what {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  background: var(--bg-editor);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.arrival-what[hidden] {
+  display: none;
+}
+
+.arrival-login {
+  margin-bottom: 12px;
+}
+
+/* Same as the .arrival-what: .btn is a flex box, which beats the hidden attribute */
+.arrival-login[hidden] {
+  display: none;
+}
+
+.arrival-list {
+  max-width: none;
+  max-height: 55vh;
+  overflow-y: auto;
+  margin: 0 0 12px;
+}
+
+/* A finger's height per row */
+.arrival-list li {
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.arrival-list li.arrival-new {
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+
 /* ── Welcome screen ── */
 
 .welcome {

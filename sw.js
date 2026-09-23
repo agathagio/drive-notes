@@ -1,5 +1,5 @@
 // Drive Notes: Service Worker
-const CACHE_NAME = 'drivenotes-v50';
+const CACHE_NAME = 'drivenotes-v51';
 
 // Renderer and sanitizer come from CDNs; without them offline the reading view falls back to
 // plain text. Must match the script tags in index.html, hash included (scenario 0 of
@@ -78,6 +78,46 @@ const network = (request) => CDN_SCRIPTS[request.url]
   ? fetch(request.url, { integrity: CDN_SCRIPTS[request.url] })
   : fetch(request);
 
+// Something shared from another app (manifest share_target) arrives as a POST, which GitHub Pages cannot
+// take. It goes into the arrival box, and the app opens pointing at it. The box is the same database
+// as App.ArrivalBox in app.js (name, store and record: keep the two in step). Kept here, before the page
+// opens, so an expired login or no network at that moment loses nothing.
+const ARRIVALS_DB = 'drivenotes-arrivals';
+const ARRIVALS_STORE = 'arrivals';
+
+function keepArrival(record) {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(ARRIVALS_DB, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore(ARRIVALS_STORE, { keyPath: 'id' });
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const tx = db.transaction(ARRIVALS_STORE, 'readwrite');
+      tx.objectStore(ARRIVALS_STORE).put(record);
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = tx.onabort = () => { db.close(); reject(tx.error); };
+    };
+  });
+}
+
+async function receiveShare(request) {
+  const form = await request.formData();
+  const photos = [];
+  for (const file of form.getAll('photos')) {
+    // Photos go in as bytes: an ArrayBuffer crosses IndexedDB anywhere, a File not always
+    if (file && typeof file === 'object' && file.size) {
+      photos.push({ name: file.name || '', type: file.type || '', bytes: await file.arrayBuffer() });
+    }
+  }
+  const text = (name) => {
+    const value = form.get(name);
+    return typeof value === 'string' ? value : '';
+  };
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  await keepArrival({ id, at: Date.now(), title: text('title'), text: text('text'), url: text('url'), photos });
+  return Response.redirect(`./index.html?chegada=${encodeURIComponent(id)}`, 303);
+}
+
 // Fetch: cache-first for static assets, network-first for API calls
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
@@ -96,6 +136,21 @@ self.addEventListener('fetch', (event) => {
   // versao anterior: o mesmo "abrir e fechar duas vezes" que ja e dor no app viraria dor
   // no proprio lugar onde a gente esta tentando medir uma coisa.
   if (url.origin === self.location.origin && url.pathname.includes('/lab/')) {
+    return;
+  }
+
+  if (event.request.method === 'POST' && url.origin === self.location.origin && url.pathname.endsWith('/share-target')) {
+    event.respondWith(receiveShare(event.request).catch(() => Response.redirect('./index.html', 303)));
+    return;
+  }
+
+  // An opening from a shortcut on the icon (index.html?atalho=...) or from a share (?chegada=...) is the
+  // same page: answered from the cached index.html, the query ignored. Without this it never matches the
+  // cache (no network: an error page) and every new query would be stored as one more copy of the page.
+  if (event.request.mode === 'navigate' && url.origin === self.location.origin && url.search) {
+    event.respondWith(
+      caches.match('./index.html', { ignoreSearch: true }).then((cached) => cached || network(event.request))
+    );
     return;
   }
 

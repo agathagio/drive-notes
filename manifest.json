@@ -7,6 +7,48 @@
   "orientation": "portrait",
   "background_color": "#1c1b1f",
   "theme_color": "#242229",
+  "share_target": {
+    "action": "./share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        { "name": "photos", "accept": ["image/*"] }
+      ]
+    }
+  },
+  "shortcuts": [
+    {
+      "name": "Anotar em…",
+      "short_name": "Anotar em…",
+      "url": "./index.html?atalho=anotar",
+      "icons": [
+        { "src": "shortcut-anotar-96.png", "sizes": "96x96", "type": "image/png" },
+        { "src": "shortcut-anotar-192.png", "sizes": "192x192", "type": "image/png" }
+      ]
+    },
+    {
+      "name": "Nota nova",
+      "short_name": "Nota nova",
+      "url": "./index.html?atalho=nova",
+      "icons": [
+        { "src": "shortcut-nova-96.png", "sizes": "96x96", "type": "image/png" },
+        { "src": "shortcut-nova-192.png", "sizes": "192x192", "type": "image/png" }
+      ]
+    },
+    {
+      "name": "Buscar",
+      "short_name": "Buscar",
+      "url": "./index.html?atalho=buscar",
+      "icons": [
+        { "src": "shortcut-buscar-96.png", "sizes": "96x96", "type": "image/png" },
+        { "src": "shortcut-buscar-192.png", "sizes": "192x192", "type": "image/png" }
+      ]
+    }
+  ],
   "icons": [
     {
       "src": "icon-192.png",

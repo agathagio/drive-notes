@@ -162,9 +162,9 @@ function fakeCtx(canvas) {
   return ctx;
 }
 
-async function boot({ auth = true, seedStorage = {}, seedSession = {}, watcher = false, editor = false, idb = null, drive: givenDrive = null, beforeApp = null } = {}) {
+async function boot({ auth = true, seedStorage = {}, seedSession = {}, watcher = false, editor = false, idb = null, drive: givenDrive = null, beforeApp = null, url = 'http://localhost:8000/' } = {}) {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-  const dom = new JSDOM(html, { url: 'http://localhost:8000/', runScripts: 'outside-only', pretendToBeVisual: true });
+  const dom = new JSDOM(html, { url, runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
   if (watcher) {
     // Stand-in for Chrome's CloseWatcher: w.__back() is the system back button
@@ -282,6 +282,21 @@ function enterEm(App, w, conteudo, em) {
   const cursor = view.state.selection.main.head;
   const linha = view.state.doc.lineAt(cursor);
   return { text: view.state.doc.toString(), at: `${linha.number - 1}:${cursor - linha.from}` };
+}
+
+/** Puts a record in the arrival box of a phone (an IndexedDB factory, see boot's `idb`), the way sw.js does */
+async function seedArrival(factory, record) {
+  await new Promise((resolve, reject) => {
+    const request = factory.open('drivenotes-arrivals', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('arrivals', { keyPath: 'id' });
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const tx = request.result.transaction('arrivals', 'readwrite');
+      tx.objectStore('arrivals').put(record);
+      tx.oncomplete = () => { request.result.close(); resolve(); };
+      tx.onerror = () => reject(tx.error);
+    };
+  });
 }
 
 (async () => {
@@ -3919,6 +3934,291 @@ function enterEm(App, w, conteudo, em) {
     const scrolled = w.__taScroll.map(Math.round);
     check('recarregado pela faixa em modo edicao: o editor abre no trecho em que a leitura estava',
       App.mode === 'edit' && scrolled.some(v => Math.abs(v - expected) <= 2), [scrolled, expected]);
+  }
+
+  console.log('71. Entradas: o que chega vira um item de lista no formato das notas de captura');
+  {
+    const { App } = await boot();
+    const e = (a) => App.arrivalEntry(a);
+    check('link do Chrome: titulo e endereco', e({ title: 'Uma página', text: 'https://ex.com/a', url: '' }) === '- [Uma página](https://ex.com/a)',
+      e({ title: 'Uma página', text: 'https://ex.com/a', url: '' }));
+    check('link sem titulo', e({ text: 'https://youtu.be/abc' }) === '- https://youtu.be/abc');
+    check('titulo igual ao endereco nao vira titulo', e({ title: 'https://youtu.be/abc', text: 'https://youtu.be/abc' }) === '- https://youtu.be/abc');
+    check('link so no title (o Android as vezes manda assim)', e({ title: 'https://ex.com/b', text: '' }) === '- https://ex.com/b');
+    check('campo url preenchido (fora do Android)', e({ title: 'T', text: '', url: 'https://ex.com/c' }) === '- [T](https://ex.com/c)');
+    check('colchete no titulo e escapado', e({ title: 'a [b] c', text: 'https://ex.com' }) === '- [a \\[b\\] c](https://ex.com)', e({ title: 'a [b] c', text: 'https://ex.com' }));
+    check('texto com endereco no meio: vai como veio', e({ text: 'olha isso https://ex.com/d legal' }) === '- olha isso https://ex.com/d legal');
+    check('texto de varias linhas: as seguintes recuadas no mesmo item', e({ text: 'um\ndois\n\ntres' }) === '- um\n  dois\n\n  tres',
+      JSON.stringify(e({ text: 'um\ndois\n\ntres' })));
+    check('texto e url em campos separados: o endereco vai no fim', e({ text: 'veja', url: 'https://ex.com/e' }) === '- veja https://ex.com/e');
+    check('so foto: nenhum item de texto', e({ title: '', text: '', url: '' }) === '');
+
+    const a = (content, entry) => App.appendEntry(content, entry);
+    check('nota que termina em lista: sem linha em branco', a('- um\n- dois\n', '- tres') === '- um\n- dois\n- tres\n', JSON.stringify(a('- um\n- dois\n', '- tres')));
+    check('nota que termina em paragrafo: linha em branco antes', a('texto\n', '- item') === 'texto\n\n- item\n');
+    check('nota so com propriedades: linha em branco depois do ---', a('---\ncreated: x\n---\n\n', '- item') === '---\ncreated: x\n---\n\n- item\n');
+    check('nota vazia: so o item', a('', '- item') === '- item\n');
+    check('so foto: a linha em branco, pras fotos abrirem paragrafo proprio', a('- um\n', '') === '- um\n\n');
+    check('linhas vazias sobrando no fim nao acumulam', a('- um\n\n\n', '- dois') === '- um\n- dois\n');
+
+    const s = (x) => App.arrivalSummary(x);
+    check('resumo: titulo e link', s({ title: 'T', text: 'https://ex.com' }) === 'T · https://ex.com', s({ title: 'T', text: 'https://ex.com' }));
+    check('resumo: uma foto', s({ photos: [{}] }) === '1 foto');
+    check('resumo: texto e duas fotos', s({ text: 'oi', photos: [{}, {}] }) === 'oi + 2 fotos');
+  }
+
+  console.log('72. Abrir pelo atalho do icone: le o parametro, tira da URL e age');
+  {
+    const TOKEN = { drivenotes_token: 'fake', drivenotes_token_expires: String(Date.now() + 3600e3) };
+    const until = async (cond, limit = 3000) => {
+      const end = Date.now() + limit;
+      while (!(await cond()) && Date.now() < end) await sleep(10);
+    };
+    {
+      const { App, w } = await boot({ url: 'http://localhost:8000/index.html?atalho=nova', seedStorage: TOKEN });
+      await until(() => w.document.body.dataset.view === 'edit');
+      check('atalho nova: nota nova no editor', w.document.body.dataset.view === 'edit' && !!App.currentFile && !App.currentFile.id,
+        [w.document.body.dataset.view, App.currentFile]);
+      check('... e a URL ficou sem o parametro', w.location.search === '' && w.location.pathname === '/index.html', w.location.href);
+    }
+    {
+      const drive = makeDrive();
+      drive.put('R', 'recente.md', 'texto');
+      const { App, w } = await boot({ url: 'http://localhost:8000/index.html?atalho=buscar', drive, seedStorage: TOKEN,
+        seedSession: { drivenotes_reopen: JSON.stringify({ view: { view: 'file', id: 'R', name: 'recente.md' }, mode: 'preview', navStack: [], fwdStack: [] }) } });
+      await until(() => w.document.body.dataset.view === 'browse');
+      await sleep(50);
+      check('atalho buscar: a tela de pastas, com o foco no campo de busca',
+        w.document.body.dataset.view === 'browse' && w.document.activeElement === App.els.browserSearch,
+        [w.document.body.dataset.view, w.document.activeElement?.id]);
+      check('... a nota da recarga nao reabriu por cima, e a marca dela saiu da sessao',
+        App.currentFile === null && w.sessionStorage.getItem('drivenotes_reopen') === null,
+        [App.currentFile, w.sessionStorage.getItem('drivenotes_reopen')]);
+    }
+    {
+      const { w } = await boot({ url: 'http://localhost:8000/index.html?atalho=buscar', auth: false });
+      await until(() => w.document.getElementById('confirm-overlay').classList.contains('visible'));
+      check('atalho buscar sem login: pede o toque antes, sem tentar o login sozinho',
+        w.document.getElementById('confirm-overlay').classList.contains('visible') && w.document.body.dataset.view === 'welcome');
+      const ok = w.document.getElementById('confirm-ok');
+      check('... e o Entrar e o botao de sempre, nao o vermelho de apagar',
+        ok.textContent === 'Entrar' && !ok.classList.contains('btn-danger') && ok.classList.contains('active'), ok.className);
+      // The same dialog asked right after for a delete is red again
+      w.__App.confirmDialog('Apagar nota?', 'x', 'Apagar');
+      check('... e o proximo confirm de apagar volta a ser vermelho', ok.classList.contains('btn-danger') && !ok.classList.contains('active'), ok.className);
+    }
+    {
+      const { w } = await boot({ url: 'http://localhost:8000/index.html?chegada=nao-existe', idb: true, seedStorage: TOKEN });
+      await sleep(100);
+      check('chegada que nao esta na caixa: fica na home, sem erro, URL limpa', w.document.body.dataset.view === 'welcome' && w.location.search === '');
+    }
+    {
+      const idb = new (require('fake-indexeddb').IDBFactory)();
+      await seedArrival(idb, { id: 'x1', at: 5, title: '', text: 'b', url: '', photos: [] });
+      await seedArrival(idb, { id: 'x0', at: 1, title: '', text: 'a', url: '', photos: [] });
+      const { App } = await boot({ idb });
+      const oldest = await App.ArrivalBox.oldest();
+      await App.ArrivalBox.remove('x0');
+      const after = await App.ArrivalBox.oldest();
+      check('a caixa: a mais antiga primeiro, e o apagar tira so ela', oldest?.id === 'x0' && after?.id === 'x1', [oldest?.id, after?.id]);
+    }
+  }
+
+  console.log('73. Guardar em…: o que chegou entra no fim da nota escolhida, sobe na hora e sai da caixa');
+  {
+    const TOKEN = { drivenotes_token: 'fake', drivenotes_token_expires: String(Date.now() + 3600e3) };
+    const { IDBFactory } = require('fake-indexeddb');
+    const until = async (cond, limit = 4000) => {
+      const end = Date.now() + limit;
+      while (!(await cond()) && Date.now() < end) await sleep(10);
+    };
+    const rows = (w) => [...w.document.querySelectorAll('#arrival-ul li')];
+    const inbox = () => {
+      const drive = makeDrive();
+      drive.put('media', '_media', '', [VAULT]); drive.files.get('media').mimeType = FOLDER;
+      drive.put('I1', 'ideias-vault.md', '---\ncreated: 2026-09-20\nupdated: 2026-09-20\n---\n\n## Ideias\n\n- uma\n- duas\n', [INBOX]);
+      drive.put('I2', 'CLAUDE.md', 'regras', [INBOX]);
+      drive.put('I3', 'config-notebook.md', 'texto solto', [INBOX]);
+      drive.put('F', 'subpasta', '', [INBOX]); drive.files.get('F').mimeType = FOLDER;
+      return drive;
+    };
+
+    // Um link, pra uma nota de captura que termina em lista
+    {
+      const drive = inbox();
+      const idb = new IDBFactory();
+      await seedArrival(idb, { id: 'a1', at: 1, title: 'Um vídeo', text: 'https://youtu.be/abc', url: '', photos: [] });
+      const { App, w } = await boot({ url: 'http://localhost:8000/index.html?chegada=a1', drive, idb, editor: true, watcher: true, seedStorage: TOKEN });
+      await until(() => rows(w).length > 0);
+      check('a tela abre, com o que chegou no topo', App.els.arrivalOverlay.classList.contains('visible')
+        && App.els.arrivalTitle.textContent === 'Guardar em…' && App.els.arrivalWhat.textContent === 'Um vídeo · https://youtu.be/abc',
+        App.els.arrivalWhat.textContent);
+      check('a lista: nota nova primeiro, depois o _inbox do mais recente pro mais antigo, sem CLAUDE.md nem pasta',
+        JSON.stringify(rows(w).map((li) => li.textContent.trim())) === JSON.stringify(['+ Nota nova', 'config-notebook', 'ideias-vault']),
+        rows(w).map((li) => li.textContent.trim()));
+      rows(w)[2].click();
+      await until(() => drive.log.includes('PATCH I1'));
+      check('o item entrou no fim da nota, no formato da lista, e subiu na hora',
+        bodyOf(drive.files.get('I1').content) === '## Ideias\n\n- uma\n- duas\n- [Um vídeo](https://youtu.be/abc)\n',
+        JSON.stringify(bodyOf(drive.files.get('I1').content)));
+      const view = App.Editor._impl.view;
+      check('a nota ficou no editor, com o cursor na linha vazia embaixo do item',
+        w.document.body.dataset.view === 'edit' && view.state.selection.main.head === view.state.doc.length
+        && App.getContent().endsWith(')\n'), [w.document.body.dataset.view, view.state.selection.main.head, view.state.doc.length]);
+      await until(async () => (await App.ArrivalBox.get('a1')) === null);
+      check('... e saiu da caixa de chegada', (await App.ArrivalBox.get('a1')) === null);
+      check('a tela fechou', !App.els.arrivalOverlay.classList.contains('visible'));
+    }
+
+    // Voltar com a lista na tela: descarta, sem gravar nada
+    {
+      const drive = inbox();
+      const idb = new IDBFactory();
+      await seedArrival(idb, { id: 'a2', at: 1, title: '', text: 'descartar', url: '', photos: [] });
+      const { App, w } = await boot({ url: 'http://localhost:8000/index.html?chegada=a2', drive, idb, editor: true, watcher: true, seedStorage: TOKEN });
+      await until(() => rows(w).length > 0);
+      const writes = () => drive.log.filter((l) => /^(PATCH|POST)/.test(l)).length;
+      const before = writes();
+      w.__back();
+      await until(async () => (await App.ArrivalBox.get('a2')) === null);
+      check('voltar com a lista na tela: fecha, descarta e nao grava nada',
+        !App.els.arrivalOverlay.classList.contains('visible') && (await App.ArrivalBox.get('a2')) === null && writes() === before
+        && w.document.body.dataset.view === 'welcome');
+    }
+
+    // Nota nova, com texto de duas linhas
+    {
+      const drive = inbox();
+      const idb = new IDBFactory();
+      await seedArrival(idb, { id: 'a3', at: 1, title: '', text: 'uma ideia\nem duas linhas', url: '', photos: [] });
+      const { App, w } = await boot({ url: 'http://localhost:8000/index.html?chegada=a3', drive, idb, editor: true, watcher: true, seedStorage: TOKEN });
+      await until(() => rows(w).length > 0);
+      rows(w)[0].click();
+      await until(() => drive.log.some((l) => l.startsWith('POST')));
+      const born = [...drive.files.values()].find((f) => f.parents?.includes(INBOX) && /^\d{4}-\d{2}-\d{2}-\d{4}\.md$/.test(f.name));
+      check('nota nova: nasce no _inbox, com nome de data e hora e o item dentro',
+        !!born && bodyOf(born.content) === '- uma ideia\n  em duas linhas\n', born && JSON.stringify(bodyOf(born.content)));
+      await until(async () => (await App.ArrivalBox.get('a3')) === null);
+      check('... e saiu da caixa', (await App.ArrivalBox.get('a3')) === null);
+      check('... com uma escrita so, a da criacao, e nada por salvar', drive.count('POST') === 1 && drive.count('PATCH') === 0 && !App.isDirty,
+        [drive.log.filter((l) => /^(POST|PATCH)/.test(l)), App.isDirty]);
+    }
+
+    // Nota nova com o Drive recusando a criacao: o item so sai da caixa depois de estar num rascunho do aparelho
+    {
+      const drive = inbox();
+      const idb = new IDBFactory();
+      await seedArrival(idb, { id: 'a7', at: 1, title: '', text: 'nao pode sumir', url: '', photos: [] });
+      const { App, w } = await boot({ url: 'http://localhost:8000/index.html?chegada=a7', drive, idb, editor: true, watcher: true, seedStorage: TOKEN });
+      await until(() => rows(w).length > 0);
+      drive.failWrites = true;
+      rows(w)[0].click();
+      await until(async () => (await App.ArrivalBox.get('a7')) === null);
+      const draft = App.listDrafts()[0];
+      check('nota nova com o Drive falhando: o item fica num rascunho do aparelho, e so entao sai da caixa',
+        (await App.ArrivalBox.get('a7')) === null && !!draft && bodyOf(draft.content) === '- nao pode sumir\n' && App.isDirty,
+        [draft, App.isDirty]);
+    }
+
+    // So uma foto, pra uma nota que termina em paragrafo
+    {
+      const drive = inbox();
+      const idb = new IDBFactory();
+      const bytes = new TextEncoder().encode('bytes-da-foto').buffer;
+      await seedArrival(idb, { id: 'a4', at: 1, title: '', text: '', url: '', photos: [{ name: 'IMG_1.jpg', type: 'image/jpeg', bytes }] });
+      const { App, w } = await boot({ url: 'http://localhost:8000/index.html?chegada=a4', drive, idb, editor: true, watcher: true, seedStorage: TOKEN });
+      w.URL.createObjectURL = () => 'blob:fake/local';
+      await until(() => rows(w).length > 0);
+      check('o topo diz que chegou uma foto', App.els.arrivalWhat.textContent === '1 foto', App.els.arrivalWhat.textContent);
+      rows(w)[1].click(); // config-notebook
+      await until(() => drive.log.includes('PATCH I3'));
+      const up = [...drive.files.values()].find((f) => f.parents?.includes('media') && /-foto-\d{6}\.jpg$/.test(f.name));
+      check('a foto subiu pro _media, inteira', !!up && up.content === 'bytes-da-foto', up);
+      check('... e entrou no fim da nota, depois de uma linha em branco', !!up && drive.files.get('I3').content.endsWith(`texto solto\n\n![[${up.name}]]\n`),
+        JSON.stringify(drive.files.get('I3').content));
+      await until(async () => (await App.ArrivalBox.get('a4')) === null);
+      check('... e saiu da caixa', (await App.ArrivalBox.get('a4')) === null);
+    }
+
+    // Login vencido: botao Entrar antes da lista; voltar nao descarta
+    {
+      const drive = inbox();
+      const idb = new IDBFactory();
+      await seedArrival(idb, { id: 'a5', at: 1, title: '', text: 'guardar', url: '', photos: [] });
+      const { App, w } = await boot({ url: 'http://localhost:8000/index.html?chegada=a5', drive, idb, editor: true, watcher: true, auth: false });
+      await until(() => !App.els.arrivalLogin.hidden);
+      check('login vencido: o botao Entrar, a mensagem, e nenhuma lista',
+        !App.els.arrivalLogin.hidden && App.els.arrivalMessage.textContent === 'O login do Google venceu.' && rows(w).length === 0
+        && !drive.log.some((l) => l.startsWith('LIST')));
+      w.__back();
+      await sleep(50);
+      check('... voltar fecha, mas o que chegou fica na caixa', !App.els.arrivalOverlay.classList.contains('visible') && (await App.ArrivalBox.get('a5'))?.id === 'a5');
+
+      // Abrir o app de novo (mesmo aparelho, mesma caixa), sem parametro: a tela volta
+      const again = await boot({ drive, idb, editor: true, watcher: true, auth: false });
+      await until(() => again.App.els.arrivalOverlay.classList.contains('visible'));
+      check('abertura normal com algo na caixa: a tela Guardar em… volta', again.App.els.arrivalOverlay.classList.contains('visible')
+        && again.App.els.arrivalWhat.textContent === 'guardar');
+    }
+
+    // A lista nao abre (Drive falhando): mensagem, e o que chegou fica
+    {
+      const drive = inbox();
+      drive.failReads = true;
+      const idb = new IDBFactory();
+      await seedArrival(idb, { id: 'a6', at: 1, title: '', text: 'fica', url: '', photos: [] });
+      const { App, w } = await boot({ url: 'http://localhost:8000/index.html?chegada=a6', drive, idb, editor: true, watcher: true, seedStorage: TOKEN });
+      await until(() => !App.els.arrivalMessage.hidden);
+      check('lista que nao abre: diz que o que chegou fica guardado',
+        App.els.arrivalMessage.textContent === 'Não deu pra abrir a lista do _inbox. O que chegou fica guardado e volta aqui na próxima abertura.',
+        App.els.arrivalMessage.textContent);
+      w.__back();
+      await sleep(50);
+      check('... e voltar nao descarta', (await App.ArrivalBox.get('a6'))?.id === 'a6');
+    }
+
+    // Atalho Anotar em…: a mesma lista, sem nada chegando; a nota abre no fim, sem mudar nada
+    {
+      const drive = inbox();
+      const { App, w } = await boot({ url: 'http://localhost:8000/index.html?atalho=anotar', drive, idb: true, editor: true, watcher: true, seedStorage: TOKEN });
+      await until(() => rows(w).length > 0);
+      check('atalho anotar: titulo Anotar em…, sem o bloco do topo',
+        App.els.arrivalTitle.textContent === 'Anotar em…' && App.els.arrivalWhat.hidden);
+      rows(w)[2].click(); // ideias-vault
+      await until(() => w.document.body.dataset.view === 'edit' && App.currentFile?.id === 'I1');
+      await sleep(50);
+      const view = App.Editor._impl.view;
+      check('... a nota abre no editor, com o cursor no fim, sem gravar nada',
+        view.state.selection.main.head === view.state.doc.length && !App.isDirty && !drive.log.includes('PATCH I1'));
+    }
+  }
+
+  console.log('74. Manifest: compartilhar e atalhos dentro do endereco do app, icones PNG do tamanho declarado');
+  {
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+    const base = 'https://agathagio.github.io/drive-notes/manifest.json';
+    const inside = (u) => new URL(u, base).pathname.startsWith('/drive-notes/');
+    const st = manifest.share_target || {};
+    check('share_target: POST multipart pro ./share-target, com texto, link e fotos',
+      st.action === './share-target' && st.method === 'POST' && st.enctype === 'multipart/form-data'
+      && st.params?.title === 'title' && st.params?.text === 'text' && st.params?.url === 'url'
+      && st.params?.files?.[0]?.name === 'photos' && (st.params.files[0].accept || []).includes('image/*'), st);
+    const shortcuts = manifest.shortcuts || [];
+    check('tres atalhos, na ordem: anotar, nova, buscar',
+      JSON.stringify(shortcuts.map((s) => new URL(s.url, base).searchParams.get('atalho'))) === JSON.stringify(['anotar', 'nova', 'buscar']),
+      shortcuts.map((s) => s.url));
+    check('... todos dentro do endereco do app, e o compartilhar tambem', shortcuts.length === 3 && shortcuts.every((s) => inside(s.url)) && inside(st.action || 'x:'));
+    const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    for (const s of shortcuts) {
+      check(`${s.short_name}: tem icone de 96 e de 192`, ['96x96', '192x192'].every((z) => (s.icons || []).some((i) => i.sizes === z)));
+      for (const icon of s.icons || []) {
+        const file = path.join(ROOT, icon.src);
+        const png = fs.existsSync(file) ? fs.readFileSync(file) : null;
+        const isPng = !!png && png.subarray(0, 8).equals(PNG);
+        const size = isPng ? `${png.readUInt32BE(16)}x${png.readUInt32BE(20)}` : null;
+        check(`${s.short_name}: ${icon.src} e PNG ${icon.sizes}`, isPng && icon.type === 'image/png' && size === icon.sizes, size);
+      }
+    }
   }
 
   done();

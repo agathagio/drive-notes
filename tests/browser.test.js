@@ -1286,6 +1286,30 @@ const FAKE_DRIVE = `
     check('duplo clique no campo seleciona a palavra', inputSelection.trim().startsWith('teste'), inputSelection);
     await js('__App.hideModal(); "ok"');
     await send('Emulation.clearDeviceMetricsOverride');
+
+    console.log('21. Guardar em… em largura de celular: cabe na tela, linha do tamanho de um dedo, o topo em tres linhas');
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    await open(buildPage('guardar', currentApp));
+    // The Google Fonts sheet can hold the app back past open's fixed wait (see drive-notes-aprendizados, Testes)
+    await esperar('window.__App', 15000);
+    await js(`__App.inboxNotes = async () => [
+      { id: 'I1', name: 'ideias-drive-notes.md' }, { id: 'I2', name: 'ideias-vault.md' }, { id: 'I3', name: 'ideias-projetos-genai.md' },
+      { id: 'I4', name: 'config-notebook.md' }, { id: 'I5', name: 'nwn-new-character.md' } ];
+      __App.hasValidToken = () => true;
+      __App.openArrivalSheet({ id: 'z', at: 1, title: 'Um título bem comprido de página que o Chrome manda junto com o link, pra ver o corte',
+        text: 'https://www.youtube.com/watch?v=abcdefghijk&t=120s&list=PLxyz', url: '', photos: [{}, {}] }).then(() => 'ok')`);
+    const sheet = await js(`(() => {
+      const modal = document.querySelector('#arrival-overlay .modal').getBoundingClientRect();
+      const rows = [...document.querySelectorAll('#arrival-ul li')].map((li) => Math.round(li.getBoundingClientRect().height));
+      const what = document.getElementById('arrival-what');
+      const line = parseFloat(getComputedStyle(what).lineHeight);
+      return { left: modal.left, right: modal.right, rows, whatLines: Math.round((what.clientHeight - 16) / line), pageWidth: document.documentElement.scrollWidth };
+    })()`);
+    check('a tela cabe nos 390px, sem rolar de lado', sheet.left >= 0 && sheet.right <= 390 && sheet.pageWidth <= 390, sheet);
+    check('seis linhas (nota nova e cinco notas), cada uma com pelo menos 44px', sheet.rows.length === 6 && sheet.rows.every((h) => h >= 44), sheet.rows);
+    check('o que chegou ocupa no maximo tres linhas', sheet.whatLines <= 3, sheet);
+    await js(`__App.hideArrivalSheet(); 'ok'`);
+    await send('Emulation.clearDeviceMetricsOverride');
   } finally {
     browser.close();
   }

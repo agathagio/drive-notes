@@ -61,6 +61,14 @@
   </div>
 </div>
 
+<h1 style="margin-top: 32px">Ícones dos atalhos</h1>
+<p>
+  Os três atalhos do manifest, que aparecem ao segurar o ícone do app. Mesmo fundo e mesma cor do
+  ícone, com o glifo de traço dos botões (Feather). PNG porque o Android não aceita SVG ali. Salve
+  cada um aqui na pasta do projeto com o nome que está embaixo dele.
+</p>
+<div class="row" id="shortcuts"></div>
+
 <script>
 function drawIcon(canvas, s) {
   const ctx = canvas.getContext('2d');
@@ -94,6 +102,60 @@ function download(size) {
   link.href = document.getElementById('c' + size).toDataURL('image/png');
   link.click();
 }
+
+// Shortcut icons (manifest "shortcuts"): the app icon's background with a Feather stroke glyph, drawn from
+// the same 24-unit paths as the buttons in index.html. Pencil (edit-3), plus, search.
+const SHORTCUT_GLYPHS = {
+  anotar: ['M12 20h9', 'M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z'],
+  nova: ['M12 5v14', 'M5 12h14'],
+  buscar: ['M19 11a8 8 0 1 1-16 0a8 8 0 1 1 16 0z', 'M21 21l-4.35-4.35'],
+};
+
+function drawShortcut(canvas, s, glyph) {
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#242229';
+  ctx.fillRect(0, 0, s, s);
+  // The glyph takes half the side, centred: well inside the launcher's mask
+  ctx.save();
+  ctx.translate(s * 0.25, s * 0.25);
+  ctx.scale((s * 0.5) / 24, (s * 0.5) / 24);
+  ctx.strokeStyle = '#a68dff';
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (const d of SHORTCUT_GLYPHS[glyph]) ctx.stroke(new Path2D(d));
+  ctx.restore();
+}
+
+function drawShortcuts() {
+  const row = document.getElementById('shortcuts');
+  row.innerHTML = '';
+  for (const glyph of Object.keys(SHORTCUT_GLYPHS)) {
+    for (const s of [96, 192]) {
+      const name = `shortcut-${glyph}-${s}.png`;
+      const item = document.createElement('div');
+      item.className = 'item';
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = s;
+      canvas.id = `s-${glyph}-${s}`;
+      drawShortcut(canvas, s, glyph);
+      const label = document.createElement('span');
+      label.className = 'label';
+      label.textContent = name;
+      const button = document.createElement('button');
+      button.textContent = 'Baixar';
+      button.onclick = () => {
+        const link = document.createElement('a');
+        link.download = name;
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+      };
+      item.append(canvas, label, button);
+      row.appendChild(item);
+    }
+  }
+}
+drawShortcuts();
 </script>
 </body>
 </html>

@@ -146,6 +146,12 @@ const SETUP = `
     await js(`document.getElementById('confirm-cancel').click(); __App.newFile(); 'ok'`);
     await send('Input.insertText', { text: 'Ideia anotada na rua' });
     await shot('9-nota-nova');
+    await js(`__App.inboxNotes = async () => [
+      { id: 'I1', name: 'ideias-drive-notes.md' }, { id: 'I2', name: 'ideias-vault.md' }, { id: 'I3', name: 'config-notebook.md' } ];
+      __App.hasValidToken = () => true;
+      __App.openArrivalSheet({ id: 'z', at: 1, title: 'Como organizar um vault', text: 'https://www.youtube.com/watch?v=abc', url: '', photos: [] }).then(() => 'ok')`);
+    await shot('10-guardar-em');
+    await js(`__App.hideArrivalSheet(); 'ok'`);
     console.log(`\nem ${out}`);
   } finally {
     browser.close();
