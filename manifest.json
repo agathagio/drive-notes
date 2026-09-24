@@ -16,7 +16,8 @@
       "text": "text",
       "url": "url",
       "files": [
-        { "name": "photos", "accept": ["image/*"] }
+        { "name": "photos", "accept": ["image/*"] },
+        { "name": "texts", "accept": ["text/plain", ".txt"] }
       ]
     }
   },

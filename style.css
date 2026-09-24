@@ -940,10 +940,13 @@ body.has-selection .toolbar-btn.toolbar-extract {
 
 /* ── Guardar em… / Anotar em… (App.openArrivalSheet) ── */
 
-/* What arrived, at the top: three lines at most, the rest cut */
+/* What arrived, at the top: three lines at most, the rest cut. The space above and below is a border in
+   the box's own color, not padding: overflow cuts at the padding's outer edge, and a long text showed
+   half of its fourth line in the padding under the ellipsis. */
 .arrival-what {
   margin: 0 0 12px;
-  padding: 8px 10px;
+  padding: 0 10px;
+  border-block: 8px solid var(--bg-editor);
   font-size: 13px;
   line-height: 1.4;
   color: var(--text-secondary);

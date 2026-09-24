@@ -1,5 +1,5 @@
 // Drive Notes: Service Worker
-const CACHE_NAME = 'drivenotes-v56';
+const CACHE_NAME = 'drivenotes-v57';
 
 // Renderer and sanitizer come from CDNs; without them offline the reading view falls back to
 // plain text. Must match the script tags in index.html, hash included (scenario 0 of
@@ -100,6 +100,13 @@ function keepArrival(record) {
   });
 }
 
+/** The words of a shared .txt: UTF-8, unless a byte order mark says UTF-16. TextDecoder drops the mark. */
+function readText(bytes) {
+  const [a, b] = new Uint8Array(bytes, 0, Math.min(2, bytes.byteLength));
+  const encoding = a === 0xff && b === 0xfe ? 'utf-16le' : a === 0xfe && b === 0xff ? 'utf-16be' : 'utf-8';
+  return new TextDecoder(encoding).decode(bytes);
+}
+
 async function receiveShare(request) {
   const form = await request.formData();
   // What Chrome sent, every entry and without content (the app's diagnostic log shows it): tells a photo
@@ -118,8 +125,15 @@ async function receiveShare(request) {
     const value = form.get(name);
     return typeof value === 'string' ? value : '';
   };
+  // A .txt file (the transcript a voice recorder shares) arrives as text, like text shared as such.
+  // Several files, or a file plus text, are joined by a blank line; the same words twice go in once.
+  const texts = [text('text')];
+  for (const file of form.getAll('texts')) {
+    if (file && typeof file === 'object' && file.size) texts.push(readText(await file.arrayBuffer()));
+  }
+  const shared = [...new Set(texts.map((s) => s.trim()).filter(Boolean))].join('\n\n');
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  await keepArrival({ id, at: Date.now(), title: text('title'), text: text('text'), url: text('url'), photos, got });
+  await keepArrival({ id, at: Date.now(), title: text('title'), text: shared, url: text('url'), photos, got });
   return Response.redirect(`./index.html?chegada=${encodeURIComponent(id)}`, 303);
 }
 

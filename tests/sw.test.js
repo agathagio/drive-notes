@@ -302,6 +302,47 @@ const EVERY_DOCUMENT = `(() => {
       check('sem rede, o atalho abriu o app numa nota nova', opened === true, s);
       check('... com a URL limpa, e nenhuma copia da pagina com parametro no cache', s.search === '' && s.withQuery.length === 0, s);
     }
+
+    console.log('8. Transcricao do gravador (.txt): o service worker le o arquivo e guarda como texto');
+    {
+      await send('Page.navigate', { url: `${ORIGIN}/index.html` });
+      await esperar(`navigator.serviceWorker.controller && window.App`, 15000);
+      // Two files in one share: UTF-8 with its byte order mark, and UTF-16LE with its own. The recorder's
+      // encoding is unknown until the phone says; both must come out as the same letters.
+      await js(`(() => {
+        const form = document.createElement('form');
+        form.method = 'POST'; form.enctype = 'multipart/form-data'; form.action = './share-target';
+        const field = (name, value) => { const i = document.createElement('input'); i.type = 'hidden'; i.name = name; i.value = value; form.appendChild(i); };
+        field('title', ''); field('text', ''); field('url', '');
+        const utf8 = new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('Ideia andando.' + String.fromCharCode(10) + 'Segunda linha, com acentuação.' + String.fromCharCode(10))]);
+        const words = 'Outra gravação';
+        const utf16 = new Uint8Array(2 + words.length * 2);
+        utf16[0] = 0xff; utf16[1] = 0xfe;
+        for (let i = 0; i < words.length; i++) { utf16[2 + i * 2] = words.charCodeAt(i) & 0xff; utf16[3 + i * 2] = words.charCodeAt(i) >> 8; }
+        const input = document.createElement('input'); input.type = 'file'; input.name = 'texts';
+        const dt = new DataTransfer();
+        dt.items.add(new File([utf8], 'Gravação 001.txt', { type: 'text/plain' }));
+        dt.items.add(new File([utf16], 'Gravação 002.txt', { type: 'text/plain' }));
+        input.files = dt.files; form.appendChild(input);
+        document.body.appendChild(form); form.submit(); return 'ok';
+      })()`, false);
+      const opened = await esperar(`document.getElementById('arrival-overlay')?.classList.contains('visible')`, 15000);
+      const s = await js(`(async () => {
+        const db = await new Promise((ok, no) => { const r = indexedDB.open('drivenotes-arrivals', 1); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); });
+        const all = await new Promise((ok) => { const r = db.transaction('arrivals').objectStore('arrivals').getAll(); r.onsuccess = () => ok(r.result); });
+        db.close();
+        return { what: document.getElementById('arrival-what').textContent,
+          kept: all.map((a) => ({ text: a.text, photos: a.photos.length })), got: all.map((a) => a.got) };
+      })()`, false);
+      check('o app abriu na tela Guardar em…', opened === true, s);
+      check('... e a caixa tem o texto dos dois arquivos, sem a marca do inicio, separados por uma linha em branco',
+        JSON.stringify(s.kept) === JSON.stringify([{ text: 'Ideia andando.\nSegunda linha, com acentuação.\n\nOutra gravação', photos: 0 }]), s.kept);
+      check('... mostrando o texto no topo da tela', s.what.startsWith('Ideia andando.'), s.what);
+      check('... e o registro diz que chegaram dois arquivos de texto',
+        (s.got[0] || []).filter((g) => g.startsWith('texts:file(text/plain,')).length === 2, s.got);
+      await js(`document.getElementById('arrival-cancel').click(); 'ok'`, false);
+      await sleep(300);
+    }
   } finally {
     browser.close();
     server.close();

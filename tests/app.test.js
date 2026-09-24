@@ -4205,6 +4205,9 @@ async function seedArrival(factory, record) {
       st.action === './share-target' && st.method === 'POST' && st.enctype === 'multipart/form-data'
       && st.params?.title === 'title' && st.params?.text === 'text' && st.params?.url === 'url'
       && st.params?.files?.[0]?.name === 'photos' && (st.params.files[0].accept || []).includes('image/*'), st);
+    // The transcript a voice recorder shares is a .txt file, not text: without its own entry Chrome drops it
+    const texts = (st.params?.files || []).find((f) => f.name === 'texts');
+    check('... e arquivo de texto (.txt), num campo proprio', ['text/plain', '.txt'].every((a) => (texts?.accept || []).includes(a)), st.params?.files);
     const shortcuts = manifest.shortcuts || [];
     check('tres atalhos, na ordem: anotar, nova, buscar',
       JSON.stringify(shortcuts.map((s) => new URL(s.url, base).searchParams.get('atalho'))) === JSON.stringify(['anotar', 'nova', 'buscar']),
