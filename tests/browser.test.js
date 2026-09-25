@@ -43,54 +43,54 @@ const FAKE_DRIVE = `
 
 (async () => {
   const browser = await launch(9334);
-  const { send, js, open, esperar } = browser;
+  const { send, js, open, waitFor } = browser;
   try {
     const currentApp = appSource();
     // The index.html of an old commit, for a control that runs that commit's app: buildPage needs it
     // to find the app.js tag of the time (the working tree's index.html loads app/*.js instead)
     const indexAt = (commit) => execSync(`git -C "${ROOT}" show ${commit}:index.html`, { encoding: 'utf8', maxBuffer: 1e7, stdio: ['ignore', 'pipe', 'ignore'] });
 
-    // O elemento editavel do CodeMirror, o que o TinyMDE chamava de `editor.e`
-    const CONTEUDO = `document.querySelector('.cm-content')`;
+    // CodeMirror's editable element, what TinyMDE called `editor.e`
+    const CONTENT = `document.querySelector('.cm-content')`;
 
-    // Posicao no CM6 e um numero so, mas a suite continua falando {row, col} como sempre falou:
-    // a conta mora aqui, e nao repetida em oito lugares. Cuidado: a linha do CM6 conta a partir
-    // de 1, a do TinyMDE contava a partir de 0, e e dai que vem o `+ 1`.
+    // A position in CM6 is a single number, but the suite keeps speaking {row, col} as it always did:
+    // the math lives here, and is not repeated in eight places. Careful: CM6's line counts from
+    // 1, TinyMDE's counted from 0, and that is where the `+ 1` comes from.
     //
-    // E um pedaco de codigo, e nao uma chamada pronta, pra quem chama poder emendar o que vem
-    // depois no mesmo `js()`. Assim mover o cursor e formatar continuam sendo uma viagem so ao
-    // navegador, como eram quando o `setSelection` do TinyMDE cabia na mesma linha.
-    const SELECIONAR = (foco, ancora) => `(() => {
+    // It is a piece of code, and not a ready call, so the caller can chain what comes
+    // after in the same `js()`. That way moving the cursor and formatting are still a single trip to the
+    // browser, as they were when TinyMDE's `setSelection` fit on the same line.
+    const SELECT = (focus, anchor) => `(() => {
       const view = __App.Editor._impl.view;
       const pos = ({ row, col }) => view.state.doc.line(row + 1).from + col;
-      view.dispatch({ selection: { anchor: pos(${JSON.stringify(ancora || foco)}), head: pos(${JSON.stringify(foco)}) } });
+      view.dispatch({ selection: { anchor: pos(${JSON.stringify(anchor || focus)}), head: pos(${JSON.stringify(focus)}) } });
     })();`;
-    const selecionar = (foco, ancora) => js(`${SELECIONAR(foco, ancora)} 'ok'`);
+    const select = (focus, anchor) => js(`${SELECT(focus, anchor)} 'ok'`);
 
     const editNote = (content, row, col) => js(`__App.currentFile = { id: null, name: 't.md', draftKey: 'drivenotes_draft_t' };
       __App.setContent(${JSON.stringify(content)}); __App.showEditor(); __App.isDirty = false; __App.Editor.focus();
-      ${SELECIONAR({ row, col })} 'ok'`);
+      ${SELECT({ row, col })} 'ok'`);
 
-    // O mesmo helper falando TinyMDE. So o controle historico do cenario 1 usa isto: ele roda o
-    // app de um commit anterior a troca de editor, e naquele app a instancia do TinyMDE e a API.
+    // The same helper speaking TinyMDE. Only the historical control of scenario 1 uses this: it runs the
+    // app of a commit from before the editor swap, and in that app the TinyMDE instance is the API.
     const editNoteTinyMDE = (content, row, col) => js(`__App.currentFile = { id: null, name: 't.md', draftKey: 'drivenotes_draft_t' };
       __App.setContent(${JSON.stringify(content)}); __App.showEditor(); __App.isDirty = false; __App.editor.e.focus();
       __App.editor.setSelection({ row: ${row}, col: ${col} }); 'ok'`);
 
     // ── 1. Voice typing: growing partial results inside one composition, then the final commit ──
     console.log('1. Ditado (composicao de IME) no CodeMirror');
-    // `legado` roda a metade do controle historico, no app de antes da troca de editor
-    const dictate = async (url, legado) => {
+    // `legacy` runs the historical control's half, on the app from before the editor swap
+    const dictate = async (url, legacy) => {
       await open(url);
-      await (legado ? editNoteTinyMDE : editNote)('linha um\n', 1, 0);
+      await (legacy ? editNoteTinyMDE : editNote)('linha um\n', 1, 0);
       for (const partial of ['Não', 'Não consigo', 'Não consigo ditar', 'Não consigo ditar minhas']) {
         await send('Input.imeSetComposition', { text: partial, selectionStart: partial.length, selectionEnd: partial.length });
         await sleep(60);
       }
       await send('Input.insertText', { text: 'Não consigo ditar minhas notas' });
       await sleep(150);
-      const naTela = legado ? '__App.editor.e' : CONTEUDO;
-      return JSON.parse(await js(`JSON.stringify({ content: __App.getContent(), dom: ${naTela}.innerText, dirty: __App.isDirty })`));
+      const onScreen = legacy ? '__App.editor.e' : CONTENT;
+      return JSON.parse(await js(`JSON.stringify({ content: __App.getContent(), dom: ${onScreen}.innerText, dirty: __App.isDirty })`));
     };
     const expected = 'linha um\nNão consigo ditar minhas notas';
 
@@ -100,10 +100,10 @@ const FAKE_DRIVE = `
       buggyApp = execSync(`git -C "${ROOT}" show ${COMMIT_WITH_DICTATION_BUG}:app.js`, { encoding: 'utf8', maxBuffer: 1e7, stdio: ['ignore', 'pipe', 'ignore'] });
       buggyHtml = indexAt(COMMIT_WITH_DICTATION_BUG);
     } catch { /* shallow clone or no git: the control is skipped */ }
-    // O app antigo e TinyMDE puro: sem a biblioteca ele cai no textarea de reserva e o helper
-    // legado estoura, derrubando o cenario e a suite junto. Pulado e melhor que vermelho falso.
-    const temTinyMDE = fs.existsSync(LIBS.tinymde);
-    if (buggyApp && temTinyMDE) {
+    // The old app is pure TinyMDE: without the library it falls back to the textarea and the legacy
+    // helper throws, taking down the scenario and the suite with it. Skipped is better than a false red.
+    const hasTinyMDE = fs.existsSync(LIBS.tinymde);
+    if (buggyApp && hasTinyMDE) {
       const before = await dictate(buildPage('dictation-before', buggyApp, { tinymde: true, html: buggyHtml }), true);
       console.log('     versao com o bug:', JSON.stringify(before.content));
       check('controle: o bug se reproduz na versao antiga (texto duplicado)', before.content !== expected);
@@ -120,19 +120,19 @@ const FAKE_DRIVE = `
     await send('Input.imeSetComposition', { text: '# Titu', selectionStart: 6, selectionEnd: 6 });
     await send('Input.insertText', { text: '# Titulo ' });
     await sleep(150);
-    // O CM6 nao deixa classe estavel no realce: o nome sai do gerador de CSS dele (ͼo, ͼy) e muda
-    // a cada build. O que prova o realce e o tamanho que de fato chegou na tela, o 1.5em do
-    // heading1 sobre os 15px do editor, num <span> que o parser de markdown criou dentro da linha.
-    const realceDeTitulo = `[...${CONTEUDO}.querySelectorAll('span')]
+    // CM6 leaves no stable class on the highlighting: the name comes out of its CSS generator (ͼo, ͼy) and changes
+    // with every build. What proves the highlighting is the size that actually reached the screen, heading1's 1.5em
+    // over the editor's 15px, in a <span> the markdown parser created inside the line.
+    const headingHighlight = `[...${CONTENT}.querySelectorAll('span')]
       .some(s => s.textContent.includes('Titulo') && parseFloat(getComputedStyle(s).fontSize) > 20)`;
-    check('a formatacao do editor volta a rodar no fim da composicao', await js(realceDeTitulo), await js(`${CONTEUDO}.innerHTML`));
+    check('a formatacao do editor volta a rodar no fim da composicao', await js(headingHighlight), await js(`${CONTENT}.innerHTML`));
 
     // ── 2. Formatting toolbar on the real CodeMirror ──
     console.log('2. Barra de formatacao no CodeMirror');
     await open(buildPage('current', currentApp));
     await editNote('primeira linha\nsegunda linha\nterceira', 1, 5);
     const format = async (name, focus, anchor) => {
-      await js(`${SELECIONAR(focus, anchor)} __App.applyFormat('${name}'); 'ok'`);
+      await js(`${SELECT(focus, anchor)} __App.applyFormat('${name}'); 'ok'`);
       return js('__App.getContent()');
     };
     const end = (row) => js(`__App.Editor._impl.view.state.doc.line(${row} + 1).text.length`);
@@ -148,8 +148,8 @@ const FAKE_DRIVE = `
     check('negrito na selecao', await format('bold', { row: 0, col: 8 }, { row: 0, col: 0 }) === '**primeira** linha\nsegunda linha\n- terceira');
     check('italico na selecao', await format('italic', { row: 1, col: 7 }, { row: 1, col: 0 }) === '**primeira** linha\n*segunda* linha\n- terceira');
     check('codigo na selecao', await format('code', { row: 2, col: 10 }, { row: 2, col: 2 }) === '**primeira** linha\n*segunda* linha\n- `terceira`');
-    // Sem selecao o link nasce com o rascunho "texto" ja selecionado, de proposito (tarefa 6): no
-    // celular e a pista visual do que preencher, e quem digitar em seguida sobrescreve o rascunho
+    // With no selection the link is born with the placeholder "texto" already selected, on purpose (task 6): on the
+    // phone it is the visual hint of what to fill in, and whoever types next overwrites the placeholder
     check('link com selecao vazia poe o rascunho "texto"', await format('link', { row: 1, col: await end(1) }) === '**primeira** linha\n*segunda* linha[texto](url)\n- `terceira`');
 
     // ── 3. The real CloseWatcher: on desktop the Esc key is its "back button" ──
@@ -204,7 +204,7 @@ const FAKE_DRIVE = `
 
       // What the button does, then the picker taking the focus away
       __App._photoAt = __App.Editor.markCaret();
-      ${CONTEUDO}.blur(); getSelection().removeAllRanges();
+      ${CONTENT}.blur(); getSelection().removeAllRanges();
       await __App.insertPhoto(file);
       return JSON.stringify({
         original: file.size, sent: posts[0]?.size, type: small.type, width: dims.width, height: dims.height,
@@ -231,8 +231,8 @@ const FAKE_DRIVE = `
         const u = new URL(url);
         if (u.pathname.endsWith('/WIDE')) return { ok: true, status: 200, blob: async () => new Blob([svg(400, 100)], { type: 'image/svg+xml' }) };
         if (u.pathname.endsWith('/TALL')) return { ok: true, status: 200, blob: async () => new Blob([svg(900, 2000)], { type: 'image/svg+xml' }) };
-        // Mais larga que o editor de proposito: e a unica que obriga o app a medir a largura
-        // disponivel, em vez de cair no tamanho da propria imagem
+        // Wider than the editor on purpose: it is the only one that forces the app to measure the available
+        // width, instead of falling back to the image's own size
         if (u.pathname.endsWith('/HUGE')) return { ok: true, status: 200, blob: async () => new Blob([svg(4000, 1000)], { type: 'image/svg+xml' }) };
         window.__searches++;
         const q = u.searchParams.get('q') || '';
@@ -256,14 +256,14 @@ const FAKE_DRIVE = `
     check('o texto da nota nao muda e a nota nao fica suja', await js('__App.getContent()') === NOTE && await js('__App.isDirty') === false);
 
     const searches = Number(await js('window.__searches'));
-    await selecionar({ row: 5, col: 3 });
+    await select({ row: 5, col: 3 });
     await send('Input.insertText', { text: ' da nota' });
     await sleep(400);
     l = await lines();
     check('digitar em outra linha: imagens seguem la, texto certo', l[1].on && l[3].on && (await js('__App.getContent()')).endsWith('fim da nota'));
     check('... sem procurar de novo no Drive (nem a que sumiu)', Number(await js('window.__searches')) === searches, [searches, await js('window.__searches')]);
 
-    await selecionar({ row: 1, col: 0 });
+    await select({ row: 1, col: 0 });
     await send('Input.insertText', { text: 'x ' });
     await sleep(400);
     l = await lines();
@@ -274,22 +274,22 @@ const FAKE_DRIVE = `
     l = await lines();
     check('ir pro modo leitura e voltar mantem a imagem', l[3].on && l[3].bg, l[3]);
 
-    // Foto mais larga que o editor: ela e desenhada com a largura que sobra na linha. O fundo
-    // entra com `auto var(--embed-h)`, entao a largura desenhada e a altura vezes a proporcao da
-    // imagem (4000x1000 = 4:1). Regressao: medindo o clientWidth do .cm-content, que inclui os
-    // 16px de recuo de cada lado, a conta dava 32px a mais que a linha e a foto saia cortada na
-    // direita (num celular de 390px, uns 34px). So esta suite tem layout de verdade pra ver isso.
+    // A photo wider than the editor: it is drawn at the width left on the line. The background
+    // goes in with `auto var(--embed-h)`, so the drawn width is the height times the image's
+    // ratio (4000x1000 = 4:1). Regression: measuring the clientWidth of .cm-content, which includes the
+    // 16px inset on each side, the math came out 32px wider than the line and the photo came out cut on the
+    // right (on a 390px phone, about 34px). Only this suite has real layout to see that.
     await editNote('![[gigante.png]]', 0, 0);
     await sleep(600);
-    const desenho = JSON.parse(await js(`(() => {
+    const drawing = JSON.parse(await js(`(() => {
       const el = document.querySelectorAll('.cm-line')[0];
-      const altura = parseFloat(getComputedStyle(el).getPropertyValue('--embed-h'));
+      const height = parseFloat(getComputedStyle(el).getPropertyValue('--embed-h'));
       const scroller = el.closest('.cm-scroller');
-      return JSON.stringify({ embed: el.classList.contains('embed-line'), desenhada: altura * 4, linha: el.clientWidth,
-        barra: scroller.offsetWidth - scroller.clientWidth, rola: scroller.scrollHeight > scroller.clientHeight });
+      return JSON.stringify({ embed: el.classList.contains('embed-line'), drawn: height * 4, line: el.clientWidth,
+        bar: scroller.offsetWidth - scroller.clientWidth, scrolls: scroller.scrollHeight > scroller.clientHeight });
     })()`));
     check('a foto desenhada cabe na largura real da linha, sem corte',
-      desenho.embed && desenho.desenhada <= desenho.linha + 1 && desenho.desenhada >= desenho.linha - 4, desenho);
+      drawing.embed && drawing.drawn <= drawing.line + 1 && drawing.drawn >= drawing.line - 4, drawing);
 
     // ── 6. Dates: the caret of a new note in the editor, and the editor catching up out of sight ──
     console.log('6. created e updated no CodeMirror');
@@ -316,15 +316,15 @@ const FAKE_DRIVE = `
     check('nota nova: o que se digita cai embaixo das propriedades', await js('__App.getContent()') === `---\ncreated: ${today}\nupdated: ${today}\n---\n\nideia`, await js('__App.getContent()'));
 
     await js(`__App.isDirty = false; __App.openFile('OLD', 'velha.md').then(() => 'ok')`);
-    await js(`__App.setMode('edit'); __App.Editor.focus(); ${SELECIONAR({ row: 5, col: 5 })} 'ok'`);
+    await js(`__App.setMode('edit'); __App.Editor.focus(); ${SELECT({ row: 5, col: 5 })} 'ok'`);
     await send('Input.insertText', { text: ' novo' });
     await sleep(200);
     await js(`__App.save().then(() => 'ok')`);
     const dated = `---\ncreated: 2026-01-02\nupdated: ${today}\n---\n\ntexto novo`;
-    // Onde o cursor esta, em linha:coluna, que e como o TinyMDE respondia e como o cenario fala
+    // Where the cursor is, as line:column, which is how TinyMDE answered and how the scenario speaks
     const cursor = () => js(`(() => { const view = __App.Editor._impl.view;
-      const cabeca = view.state.selection.main.head; const linha = view.state.doc.lineAt(cabeca);
-      return (linha.number - 1) + ':' + (cabeca - linha.from); })()`);
+      const head = view.state.selection.main.head; const line = view.state.doc.lineAt(head);
+      return (line.number - 1) + ':' + (head - line.from); })()`);
     check('o Drive recebe o updated de hoje', JSON.parse(await js('JSON.stringify(window.__written)'))[0] === dated, await js('JSON.stringify(window.__written)'));
     check('com o teclado aberto o editor fica como esta, cursor no lugar', await js('__App.getContent()') === dated.replace(today, '2026-01-03') && await cursor() === '5:10', await cursor());
     const saveShown = () => js(`getComputedStyle(document.getElementById('btn-save')).display !== 'none'`);
@@ -335,7 +335,7 @@ const FAKE_DRIVE = `
     await js(`__App.save().then(() => 'ok')`);
     check('sem escrita extra', Number(await js('window.__written.length')) === 1);
 
-    await js(`__App.setMode('edit'); __App.Editor.focus(); ${SELECIONAR({ row: 5, col: 10 })} 'ok'`);
+    await js(`__App.setMode('edit'); __App.Editor.focus(); ${SELECT({ row: 5, col: 10 })} 'ok'`);
     await send('Input.insertText', { text: '!' });
     await sleep(200);
     await js(`__App.setMode('preview'); 'ok'`);
@@ -344,7 +344,7 @@ const FAKE_DRIVE = `
     await sleep(300);
     check('... salva dali mesmo e some de novo', Number(await js('window.__written.length')) === 2 && await saveShown() === false, await js('window.__written.length'));
 
-    // ── Desenho: canvas de verdade, com dpr, ponta redonda, borracha e recorte ──
+    // ── Drawing: a real canvas, with dpr, round tip, eraser and crop ──
     console.log('7. Desenho no canvas de verdade');
     await open(buildPage('sketch', currentApp));
     await js(FAKE_DRIVE);
@@ -396,12 +396,12 @@ const FAKE_DRIVE = `
     check('o PNG sai no tamanho do recorte vezes o dpr', sketch.out[0] === sketch.expected[0] && sketch.out[1] === sketch.expected[1], sketch);
     check('e e um PNG de verdade', sketch.type === 'image/png' && sketch.png.slice(0, 4).join() === '137,80,78,71', sketch);
 
-    // ── O dialogo de descartar precisa receber o dedo, nao so ficar "visible" ──
+    // ── The discard dialog has to take the finger, not only be "visible" ──
     console.log('8. Desenho: o dialogo de descartar e alcancavel pelo dedo');
     await open(buildPage('sketch-dialogo', currentApp));
     await js(FAKE_DRIVE);
     await editNote('linha um\n', 0, 8);
-    const dialogo = JSON.parse(await js(`(() => {
+    const dialog = JSON.parse(await js(`(() => {
       __App.setMode('edit');
       document.querySelector('.toolbar-btn[data-sketch]').click();
       const c = __App.sketch.canvas;
@@ -411,7 +411,7 @@ const FAKE_DRIVE = `
       }
       document.getElementById('sketch-cancel').click();
 
-      // elementFromPoint responde o que o dedo acertaria de verdade, e nao o que a classe diz
+      // elementFromPoint answers what the finger would really hit, and not what the class says
       const hit = (el) => {
         const b = el.getBoundingClientRect();
         const top = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
@@ -420,17 +420,17 @@ const FAKE_DRIVE = `
       const ok = document.getElementById('confirm-ok');
       const cancel = document.getElementById('confirm-cancel');
       return JSON.stringify({
-        visivel: document.getElementById('confirm-overlay').classList.contains('visible'),
-        okAlcancavel: hit(ok),
-        cancelarAlcancavel: hit(cancel),
-        porCimaDoOk: (() => { const b = ok.getBoundingClientRect(); const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); return t ? (t.id || t.className || t.tagName) : null; })(),
+        visible: document.getElementById('confirm-overlay').classList.contains('visible'),
+        okReachable: hit(ok),
+        cancelReachable: hit(cancel),
+        overOk: (() => { const b = ok.getBoundingClientRect(); const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); return t ? (t.id || t.className || t.tagName) : null; })(),
       });
     })()`));
-    check('o dialogo abre', dialogo.visivel, dialogo);
-    check('o dedo alcanca o "Descartar"', dialogo.okAlcancavel, dialogo);
-    check('o dedo alcanca o "Cancelar"', dialogo.cancelarAlcancavel, dialogo);
+    check('o dialogo abre', dialog.visible, dialog);
+    check('o dedo alcanca o "Descartar"', dialog.okReachable, dialog);
+    check('o dedo alcanca o "Cancelar"', dialog.cancelReachable, dialog);
 
-    // ── Tarefa: um clique de verdade na caixa, com o CodeMirror guardando o texto ──
+    // ── Task: a real click on the box, with CodeMirror keeping the text ──
     console.log('9. Tarefa marcada no modo leitura, com o CodeMirror');
     await open(buildPage('tarefa', currentApp));
     await js(FAKE_DRIVE);
@@ -449,9 +449,9 @@ const FAKE_DRIVE = `
     check('a caixa fica marcada na tela e a nota tem o que salvar', await js(`document.querySelectorAll('#preview-container input[type="checkbox"]')[1].checked && __App.isDirty`) === true);
     await js(`__App.setMode('edit'); 'ok'`);
     await sleep(200);
-    check('na edicao o editor mostra o [x]', (await js(`${CONTEUDO}.textContent`)).includes('- [x] Banguela'), await js(`${CONTEUDO}.textContent`));
+    check('na edicao o editor mostra o [x]', (await js(`${CONTENT}.textContent`)).includes('- [x] Banguela'), await js(`${CONTENT}.textContent`));
 
-    // ── Deslizar da borda: toque de verdade, numa tela de celular, com o CloseWatcher real ──
+    // ── Edge swipe: a real touch, on a phone screen, with the real CloseWatcher ──
     console.log('10. Deslizar da borda com toque de verdade');
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
     await send('Emulation.setTouchEmulationEnabled', { enabled: true });
@@ -459,42 +459,42 @@ const FAKE_DRIVE = `
     await js(FAKE_DRIVE);
     await js(`__App.browseVault().then(() => 'ok')`);
     await js(`[...document.querySelectorAll('.browser-item')].find(li => li.textContent.includes('com link')).click(); 'ok'`);
-    await esperar(`__App.currentFile && __App.currentFile.id === 'N1'`);
+    await waitFor(`__App.currentFile && __App.currentFile.id === 'N1'`);
     await js(`document.querySelector('#preview-container a.wikilink').click(); 'ok'`);
-    await esperar(`__App.currentFile && __App.currentFile.id === 'N2' && __App.navStack.length === 3`);
-    // Este cenario era o unico que lia o estado no relogio (`sleep(400)` depois de soltar), e era
-    // o unico intermitente. Duas coisas separam o toque injetado do que o app viu:
+    await waitFor(`__App.currentFile && __App.currentFile.id === 'N2' && __App.navStack.length === 3`);
+    // This scenario was the only one that read the state by the clock (`sleep(400)` after letting go), and it was
+    // the only flaky one. Two things separate the injected touch from what the app saw:
     //
-    // 1. `Input.dispatchTouchEvent` entra por uma fila do navegador que NAO e a do
-    //    `Runtime.evaluate`. Com o renderizador headless engasgado (medido: cinco segundos entre o
-    //    toque e o app reagir), a leitura marcada no relogio chega antes de o app ver o gesto.
-    //    Por isso cada etapa agora espera o app dizer que viu, com `esperar`.
-    // 2. O navegador as vezes manda `touchcancel` no meio da sequencia injetada, e o app faz o
-    //    certo: abandona o gesto (`endSwipe`, sem agir). Isso e artefato da injecao, nao do app,
-    //    entao o arrasto e refeito, ate tres vezes, e so o que sobrar vira checagem.
+    // 1. `Input.dispatchTouchEvent` comes in through a browser queue that is NOT the one of
+    //    `Runtime.evaluate`. With the headless renderer stalled (measured: five seconds between the
+    //    touch and the app reacting), the read timed by the clock arrives before the app sees the gesture.
+    //    That is why each step now waits for the app to say it saw, with `waitFor`.
+    // 2. The browser sometimes sends `touchcancel` in the middle of the injected sequence, and the app does the
+    //    right thing: it abandons the gesture (`endSwipe`, without acting). That is an artifact of the injection, not of the app,
+    //    so the drag is redone, up to three times, and only what is left becomes a check.
     //
-    // O sinal esperado e sempre ANTERIOR ao que as checagens olham (elas olham classe, retangulo
-    // e cor da seta, e o par arquivo/pilha depois do gesto): espera-se o `_swipe.armed` do app e a
-    // pilha mudar. Se a seta parar de ser pintada ou o gesto parar de navegar, fica vermelho.
-    await js(`window.__cancelados = 0; document.addEventListener('touchcancel', () => window.__cancelados++, true); 'ok'`);
-    const LIMITE_DO_GESTO = 4000;
+    // The signal waited for is always EARLIER than what the checks look at (they look at the arrow's class, rectangle
+    // and color, and the file/stack pair after the gesture): the wait is for the app's `_swipe.armed` and for the
+    // stack to change. If the arrow stops being painted or the gesture stops navigating, it goes red.
+    await js(`window.__cancelled = 0; document.addEventListener('touchcancel', () => window.__cancelled++, true); 'ok'`);
+    const GESTURE_LIMIT = 4000;
     const drag = async (x0, x1, y, shot) => {
       let hint = null;
-      for (let tentativa = 1; tentativa <= 3; tentativa++) {
-        const pilhaAntes = Number(await js('__App.navStack.length'));
-        await js('window.__cancelados = 0; "ok"');
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const stackBefore = Number(await js('__App.navStack.length'));
+        await js('window.__cancelled = 0; "ok"');
         await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y }] });
         for (let i = 1; i <= 8; i++) {
           await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x0 + (x1 - x0) * i / 8, y }] });
           await sleep(16);
         }
-        // `armed` e nao a puxada cheia: o navegador junta movimentos do mesmo quadro e o ultimo as
-        // vezes nao chega (medido: `pull` parando em 119 dos 136 arrastados). O que decide o gesto,
-        // na hora de soltar, e ter passado do gatilho, e e isso que o app anota aqui.
-        const armado = await esperar(`__App._swipe && __App._swipe.armed === true`, LIMITE_DO_GESTO);
-        // O print do meio do gesto so na primeira tentativa: capturar quadro com o dedo na tela e
-        // um dos jeitos de provocar o `touchcancel` que faz a tentativa ser refeita
-        if (shot && tentativa === 1) {
+        // `armed` and not the full pull: the browser merges moves from the same frame and the last one
+        // sometimes does not arrive (measured: `pull` stopping at 119 of the 136 dragged). What decides the gesture,
+        // at the moment of letting go, is having passed the trigger, and that is what the app notes here.
+        const armed = await waitFor(`__App._swipe && __App._swipe.armed === true`, GESTURE_LIMIT);
+        // The mid-gesture screenshot only on the first attempt: capturing a frame with the finger on the screen is
+        // one of the ways of provoking the `touchcancel` that makes the attempt be redone
+        if (shot && attempt === 1) {
           const { data } = (await send('Page.captureScreenshot', { format: 'png' })).result;
           fs.mkdirSync(path.join(ROOT, 'tests', '.tmp'), { recursive: true });
           fs.writeFileSync(path.join(ROOT, 'tests', '.tmp', shot), Buffer.from(data, 'base64'));
@@ -502,22 +502,22 @@ const FAKE_DRIVE = `
         hint = JSON.parse(await js(`(() => { const h = document.getElementById('swipe-hint'); const b = h.getBoundingClientRect();
           return JSON.stringify({ visible: h.classList.contains('visible'), armed: h.classList.contains('armed'), left: b.left, right: b.right, bg: getComputedStyle(h).backgroundColor }); })()`));
         await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-        let navegou = await esperar(`__App._swipe === null && __App.navStack.length !== ${pilhaAntes}`, LIMITE_DO_GESTO);
-        // Uma ultima leitura direta: o limite pode ter estourado justamente na virada
-        if (!navegou) navegou = Number(await js('__App.navStack.length')) !== pilhaAntes;
-        if (armado && navegou) return hint;
-        console.log(`     (tentativa ${tentativa} do gesto perdida: armado=${armado} navegou=${navegou}`
-          + ` touchcancel=${await js('window.__cancelados')})`);
+        let navigated = await waitFor(`__App._swipe === null && __App.navStack.length !== ${stackBefore}`, GESTURE_LIMIT);
+        // One last direct read: the limit may have run out right at the turn
+        if (!navigated) navigated = Number(await js('__App.navStack.length')) !== stackBefore;
+        if (armed && navigated) return hint;
+        console.log(`     (tentativa ${attempt} do gesto perdida: armado=${armed} navegou=${navigated}`
+          + ` touchcancel=${await js('window.__cancelled')})`);
       }
       return hint;
     };
-    let seta = await drag(4, 140, 400, 'swipe-voltar.png');
+    let arrow = await drag(4, 140, 400, 'swipe-voltar.png');
     v = await view();
-    check('a seta sai da borda esquerda, inteira na tela e roxa', seta.visible && seta.armed && seta.left >= 0 && seta.bg === 'rgb(139, 108, 239)', seta);
+    check('a seta sai da borda esquerda, inteira na tela e roxa', arrow.visible && arrow.armed && arrow.left >= 0 && arrow.bg === 'rgb(139, 108, 239)', arrow);
     check('soltar volta pra nota anterior', v.file === 'N1' && v.stack === 2, v);
-    seta = await drag(386, 250, 400, 'swipe-avancar.png');
+    arrow = await drag(386, 250, 400, 'swipe-avancar.png');
     v = await view();
-    check('a seta sai da borda direita', seta.visible && seta.armed && seta.right <= 390, seta);
+    check('a seta sai da borda direita', arrow.visible && arrow.armed && arrow.right <= 390, arrow);
     check('soltar avanca pra nota do link', v.file === 'N2' && v.stack === 3, v);
     await drag(4, 140, 400);
     await drag(4, 140, 400);
@@ -526,239 +526,239 @@ const FAKE_DRIVE = `
     await send('Emulation.setTouchEmulationEnabled', { enabled: false });
     await send('Emulation.clearDeviceMetricsOverride');
 
-    // ── A barra de formatacao rola de lado de verdade ──
+    // ── The formatting toolbar really scrolls sideways ──
     console.log('11. A barra de formatacao rola de lado de verdade');
-    // Largura de celular: o Edge headless nao abre janela pequena, entao e override de metricas
+    // Phone width: headless Edge does not open a small window, so it is a metrics override
     await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 740, deviceScaleFactor: 2, mobile: true });
     await open(buildPage('toolbar-scroll', currentApp));
-    // A barra so existe no CSS com body[data-view="edit"]; numa pagina recem aberta (tela de
-    // boas-vindas) ela fica display:none e a medida sai toda zerada, o que foi medido na primeira
-    // rodada (RED) e nao e o "os botoes encolhem" que o brief esperava
+    // The bar only exists in the CSS with body[data-view="edit"]; on a freshly opened page (welcome
+    // screen) it is display:none and the measure comes out all zeros, which was measured on the first
+    // run (RED) and is not the "the buttons shrink" the brief expected
     await editNote('linha um\nlinha dois', 0, 0);
-    const medida = await js(`(() => {
-      const barra = document.querySelector('.toolbar');
-      const botao = barra.querySelector('.toolbar-btn');
+    const measure = await js(`(() => {
+      const bar = document.querySelector('.toolbar');
+      const button = bar.querySelector('.toolbar-btn');
       return {
-        conteudo: barra.scrollWidth,
-        visivel: barra.clientWidth,
-        larguraBotao: Math.round(botao.getBoundingClientRect().width),
-        alturaBotao: Math.round(botao.getBoundingClientRect().height),
+        content: bar.scrollWidth,
+        visible: bar.clientWidth,
+        buttonWidth: Math.round(button.getBoundingClientRect().width),
+        buttonHeight: Math.round(button.getBoundingClientRect().height),
       };
     })()`);
     check('o conteudo da barra e mais largo que a tela, entao ela rola',
-      medida.conteudo > medida.visivel, medida);
-    check('o alvo de dedo tem pelo menos 44px', medida.larguraBotao >= 44, medida);
+      measure.content > measure.visible, measure);
+    check('o alvo de dedo tem pelo menos 44px', measure.buttonWidth >= 44, measure);
 
-    // ── Arrastar o dedo EM CIMA de um botao rola a barra ──
-    // O app cancelava o comeco do toque nos botoes (pra nao roubar o foco do editor e fechar o
-    // teclado) e com isso matava o pan: sobrava a fresta de 6px entre os botoes e a borda da
-    // barra, que e o "algo muito fino" do relato. So aqui da pra provar o contrario, porque quem
-    // rola e o navegador, e o jsdom nao rola nada.
+    // ── Dragging the finger ON TOP of a button scrolls the bar ──
+    // The app cancelled the start of the touch on the buttons (so as not to steal the editor's focus and close the
+    // keyboard) and with that killed the pan: what was left was the 6px gap between the buttons and the edge of the
+    // bar, which is the "something very thin" of the report. Only here can the opposite be proven, because what
+    // scrolls is the browser, and jsdom scrolls nothing.
     await send('Emulation.setTouchEmulationEnabled', { enabled: true });
-    const alvo = await js(`(() => {
+    const target = await js(`(() => {
       // The target has to be on the 360px screen before the bar scrolls: the quote button was, with 11
       // buttons; with 18 it sits past the edge and a touch out there lands on nothing (v37)
       const b = document.querySelector('.toolbar-btn[data-format="wikilink"]').getBoundingClientRect();
       return { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2), right: Math.round(b.right) };
     })()`);
-    const textoAntes = await js('__App.Editor.getText()');
-    let rolou = false;
-    // Toque injetado entra numa fila diferente da leitura, e o navegador as vezes desiste do
-    // gesto no meio (o touchcancel do cenario 10): o arrasto e refeito ate tres vezes
-    for (let tentativa = 1; tentativa <= 3 && !rolou; tentativa++) {
+    const textBefore = await js('__App.Editor.getText()');
+    let scrolled = false;
+    // An injected touch comes in through a queue different from the read, and the browser sometimes gives up on the
+    // gesture halfway (the touchcancel of scenario 10): the drag is redone up to three times
+    for (let attempt = 1; attempt <= 3 && !scrolled; attempt++) {
       await js('document.querySelector(".toolbar").scrollLeft = 0; "ok"');
-      await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: alvo.x, y: alvo.y }] });
+      await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: target.x, y: target.y }] });
       for (let i = 1; i <= 8; i++) {
-        await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: alvo.x - i * 12, y: alvo.y }] });
+        await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: target.x - i * 12, y: target.y }] });
         await sleep(16);
       }
-      rolou = await esperar('document.querySelector(".toolbar").scrollLeft > 20', 3000);
+      scrolled = await waitFor('document.querySelector(".toolbar").scrollLeft > 20', 3000);
       await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-      if (!rolou) console.log(`     (tentativa ${tentativa} de rolar a barra perdida)`);
+      if (!scrolled) console.log(`     (tentativa ${attempt} de rolar a barra perdida)`);
     }
-    check('o botao alvo do arrasto esta na tela (senao o toque cai no nada)', alvo.right <= 360, alvo);
-    check('o dedo arrastado em cima de um botao rola a barra', rolou,
+    check('o botao alvo do arrasto esta na tela (senao o toque cai no nada)', target.right <= 360, target);
+    check('o dedo arrastado em cima de um botao rola a barra', scrolled,
       await js('document.querySelector(".toolbar").scrollLeft'));
     check('e o arrasto nao formatou nada: rolar nao e tocar',
-      await js('__App.Editor.getText()') === textoAntes, await js('__App.Editor.getText()'));
+      await js('__App.Editor.getText()') === textBefore, await js('__App.Editor.getText()'));
     await send('Emulation.setTouchEmulationEnabled', { enabled: false });
     await send('Emulation.clearDeviceMetricsOverride');
 
-    // ── O bloco de propriedades e os colchetes que nao sao link saem como texto comum ──
+    // ── The properties block and the brackets that are not links come out as plain text ──
     console.log('12. Propriedades e colchetes como texto comum');
-    // So aqui da pra provar: a asserção e de estilo computado (tamanho, peso, cor e sublinhado que
-    // de fato chegaram na tela), e isso precisa de layout. O CM6 nao deixa classe estavel no
-    // realce (o nome sai do gerador de CSS dele e muda a cada build), entao nao ha classe pra
-    // procurar: o que vale e o pixel.
+    // Only here can it be proven: the assertion is about computed style (size, weight, color and underline that
+    // actually reached the screen), and that needs layout. CM6 leaves no stable class on the
+    // highlighting (the name comes out of its CSS generator and changes with every build), so there is no class to
+    // look for: what counts is the pixel.
     await open(buildPage('texto-comum', currentApp));
-    const NOTA_PROPS = '---\ncreated: 2026-09-21\nupdated: 2026-09-21\ntags: [casa, obra]\n---\n\n'
+    const PROPS_NOTE = '---\ncreated: 2026-09-21\nupdated: 2026-09-21\ntags: [casa, obra]\n---\n\n'
       + '# Titulo grande\n\nvai [[destino]] e [link](http://x)\n\n> [!note] aviso e mais texto';
-    await editNote(NOTA_PROPS, 8, 0);
-    const ROXO = 'rgb(166, 141, 255)';   // --accent-hover, o roxo que escreve
+    await editNote(PROPS_NOTE, 8, 0);
+    const PURPLE = 'rgb(166, 141, 255)';   // --accent-hover, the purple that writes
 
-    // A linha e cada <span> que o realce criou dentro dela
-    const estilos = (i) => js(`(() => {
+    // The line and each <span> the highlighting created inside it
+    const styles = (i) => js(`(() => {
       const el = [...document.querySelectorAll('.cm-line')][${i}];
       return JSON.stringify([el, ...el.querySelectorAll('span')].map(a => {
         const s = getComputedStyle(a);
-        return { txt: a.textContent, px: Math.round(parseFloat(s.fontSize)), peso: Number(s.fontWeight),
-          cor: s.color, risco: s.textDecorationLine };
+        return { txt: a.textContent, px: Math.round(parseFloat(s.fontSize)), weight: Number(s.fontWeight),
+          color: s.color, decoration: s.textDecorationLine };
       }));
     })()`).then(JSON.parse);
 
-    // O texto comum da nota, medido e nao chutado: e com ele que o bloco tem que se parecer
-    const comum = (await estilos(8))[0];
-    const igualAoComum = (p) => p.px === comum.px && p.peso === comum.peso && p.cor === comum.cor && p.risco === 'none';
-    const bloco = [].concat(...await Promise.all([0, 1, 2, 3, 4].map(estilos)));
+    // The note's plain text, measured and not guessed: it is what the block has to look like
+    const plain = (await styles(8))[0];
+    const sameAsPlain = (p) => p.px === plain.px && p.weight === plain.weight && p.color === plain.color && p.decoration === 'none';
+    const block = [].concat(...await Promise.all([0, 1, 2, 3, 4].map(styles)));
     check('o bloco de propriedades inteiro sai do tamanho, do peso e da cor do texto comum',
-      bloco.length >= 6 && bloco.every(igualAoComum), bloco.filter(p => !igualAoComum(p)));
+      block.length >= 6 && block.every(sameAsPlain), block.filter(p => !sameAsPlain(p)));
 
-    // Controle: se a regra tivesse vazado pra fora do bloco, o titulo de verdade tambem apagaria
-    const titulo = await estilos(6);
+    // Control: if the rule had leaked out of the block, the real heading would fade too
+    const heading = await styles(6);
     check('titulo de verdade fora do bloco continua grande, negrito e roxo',
-      titulo.some(p => p.px > comum.px && p.peso > comum.peso && p.cor === ROXO), titulo);
+      heading.some(p => p.px > plain.px && p.weight > plain.weight && p.color === PURPLE), heading);
 
-    // `[[wikilink]]`, `[!note]` e `tags: [a, b]`: o parser le os tres como link de referencia sem
-    // destino. A checagem olha o conjunto todo (o span da decoracao e os do realce dentro dele),
-    // porque e no de dentro que moram a cor e o sublinhado
-    const colchete = (trecho) => js(`(() => {
-      const marca = [...document.querySelectorAll('.cm-content .plain-brackets')]
-        .find(s => s.textContent === ${JSON.stringify(trecho)});
-      if (!marca) return JSON.stringify({ achou: false });
-      const dentro = [marca, ...marca.querySelectorAll('span')].map(e => getComputedStyle(e));
-      const vizinho = [...marca.closest('.cm-line').querySelectorAll('span')]
+    // `[[wikilink]]`, `[!note]` and `tags: [a, b]`: the parser reads all three as a reference link with no
+    // destination. The check looks at the whole set (the decoration span and the highlighting ones inside it),
+    // because it is in the inner ones that the color and the underline live
+    const bracket = (stretch) => js(`(() => {
+      const mark = [...document.querySelectorAll('.cm-content .plain-brackets')]
+        .find(s => s.textContent === ${JSON.stringify(stretch)});
+      if (!mark) return JSON.stringify({ found: false });
+      const inside = [mark, ...mark.querySelectorAll('span')].map(e => getComputedStyle(e));
+      const neighbor = [...mark.closest('.cm-line').querySelectorAll('span')]
         .find(s => s.textContent.includes('aviso'));
       return JSON.stringify({
-        achou: true,
-        cores: [...new Set(dentro.map(s => s.color))],
-        riscos: [...new Set(dentro.map(s => s.textDecorationLine))],
-        corDaLinha: getComputedStyle(marca.closest('.cm-line')).color,
-        corDoVizinho: vizinho ? getComputedStyle(vizinho).color : null,
+        found: true,
+        colors: [...new Set(inside.map(s => s.color))],
+        decorations: [...new Set(inside.map(s => s.textDecorationLine))],
+        lineColor: getComputedStyle(mark.closest('.cm-line')).color,
+        neighborColor: neighbor ? getComputedStyle(neighbor).color : null,
       });
     })()`).then(JSON.parse);
 
-    const wiki = await colchete('[destino]');
+    const wiki = await bracket('[destino]');
     check('[[wikilink]]: uma cor so, a do texto em volta, e sem sublinhado',
-      wiki.achou && wiki.cores.length === 1 && wiki.cores[0] === wiki.corDaLinha
-      && wiki.cores[0] !== ROXO && wiki.riscos.every(r => r === 'none'), wiki);
+      wiki.found && wiki.colors.length === 1 && wiki.colors[0] === wiki.lineColor
+      && wiki.colors[0] !== PURPLE && wiki.decorations.every(r => r === 'none'), wiki);
 
-    const tags = await colchete('[casa, obra]');
+    const tags = await bracket('[casa, obra]');
     check('tags: [a, b] no bloco de propriedades: sem roxo e sem sublinhado',
-      tags.achou && tags.cores.length === 1 && tags.cores[0] !== ROXO && tags.riscos.every(r => r === 'none'), tags);
+      tags.found && tags.colors.length === 1 && tags.colors[0] !== PURPLE && tags.decorations.every(r => r === 'none'), tags);
 
-    // Dentro de uma citacao o realce pinta cada pedaco da linha num span irmao, entao o `[!note]`
-    // sai na cor do texto comum e nao na cor apagada da citacao em volta (medido, e anotado no
-    // style.css): e texto comum, so um tom mais claro que a citacao. O que nao pode e o roxo
-    // sublinhado de antes
-    const callout = await colchete('[!note]');
+    // Inside a quote the highlighting paints each piece of the line in a sibling span, so the `[!note]`
+    // comes out in the plain text color and not in the faded color of the quote around it (measured, and noted in
+    // style.css): it is plain text, just a shade lighter than the quote. What must not happen is the underlined
+    // purple from before
+    const callout = await bracket('[!note]');
     check('[!note] dentro da citacao sai como texto comum, sem roxo e sem sublinhado',
-      callout.achou && callout.cores.length === 1 && callout.cores[0] === comum.cor
-      && callout.cores[0] !== ROXO && callout.corDoVizinho !== ROXO
-      && callout.riscos.every(r => r === 'none'), callout);
+      callout.found && callout.colors.length === 1 && callout.colors[0] === plain.color
+      && callout.colors[0] !== PURPLE && callout.neighborColor !== PURPLE
+      && callout.decorations.every(r => r === 'none'), callout);
 
-    // Controle do controle: link de verdade nao foi apagado junto
+    // The control's control: a real link was not faded along with them
     const link = JSON.parse(await js(`(() => {
       const spans = [...document.querySelectorAll('.cm-content span')].filter(s => s.textContent === 'link');
       const s = getComputedStyle(spans[spans.length - 1]);
-      return JSON.stringify({ cor: s.color, risco: s.textDecorationLine });
+      return JSON.stringify({ color: s.color, decoration: s.textDecorationLine });
     })()`));
     check('[texto](url), que e link de verdade, continua roxo e sublinhado',
-      link.cor === ROXO && link.risco === 'underline', link);
+      link.color === PURPLE && link.decoration === 'underline', link);
 
     console.log('13. A lista de notas do [[ na tela, e o toque num item');
-    // So aqui da pra provar: no jsdom o tooltip do CM6 existe no estado, mas nao tem posicao nem
-    // recebe toque (getBoundingClientRect devolve zeros). O que importa neste cenario e o que o
-    // dedo ve e o que o dedo faz: a lista desenhada, e o item tocado escrevendo o link SEM tirar o
-    // foco do editor, que no celular e o que decide se o teclado fecha (ver drive-notes-aprendizados).
+    // Only here can it be proven: in jsdom CM6's tooltip exists in the state, but it has no position and
+    // takes no touch (getBoundingClientRect returns zeros). What matters in this scenario is what the
+    // finger sees and what the finger does: the list drawn, and the tapped item writing the link WITHOUT taking the
+    // focus from the editor, which on the phone is what decides whether the keyboard closes (see drive-notes-aprendizados).
     await open(buildPage('link-list', currentApp));
     await js(FAKE_DRIVE);
-    // Com nada digitado depois do [[ a lista mostra as recentes: sem elas nao haveria o que desenhar
+    // With nothing typed after the [[ the list shows the recents: without them there would be nothing to draw
     await js(`__App.saveToRecents('N1', 'com link.md'); __App.saveToRecents('N2', 'destino.md'); 'ok'`);
     await editNote('vai ', 0, 4);
-    // Pelo caminho do teclado, e nao por dispatch no estado: e o `input` do navegador que aciona o
-    // activateOnTyping da lista, e e esse caminho que o celular usa
+    // Through the keyboard path, and not through a dispatch on the state: it is the browser's `input` that triggers the
+    // list's activateOnTyping, and that is the path the phone uses
     await send('Input.insertText', { text: '[[' });
-    const itens = `[...document.querySelectorAll('.cm-tooltip-autocomplete li')]`;
-    const apareceu = await esperar(`${itens}.length >= 2`);
-    check('digitar [[ desenha a lista na tela, com as recentes', apareceu === true,
-      await js(`JSON.stringify(${itens}.map(li => li.textContent))`));
+    const items = `[...document.querySelectorAll('.cm-tooltip-autocomplete li')]`;
+    const appeared = await waitFor(`${items}.length >= 2`);
+    check('digitar [[ desenha a lista na tela, com as recentes', appeared === true,
+      await js(`JSON.stringify(${items}.map(li => li.textContent))`));
 
     await send('Input.insertText', { text: 'de' });
-    const filtrou = await esperar(`${itens}.length === 1 && ${itens}[0].textContent.includes('destino')`);
-    check('digitar filtra ate sobrar destino', filtrou === true, await js(`JSON.stringify(${itens}.map(li => li.textContent))`));
+    const filtered = await waitFor(`${items}.length === 1 && ${items}[0].textContent.includes('destino')`);
+    check('digitar filtra ate sobrar destino', filtered === true, await js(`JSON.stringify(${items}.map(li => li.textContent))`));
 
-    // O cromo do app em cima do da biblioteca: o tema do @codemirror/autocomplete manda
-    // `font-family: monospace` na lista (e o mesmo seletor que o style.css usa, entao quem ganha
-    // e quem vem depois). Se o CSS do app nao pegar, a lista sai branca e em fonte de codigo.
-    const cromo = JSON.parse(await js(`(() => {
-      const caixa = document.querySelector('.cm-tooltip-autocomplete');
-      const ul = caixa.querySelector('ul'); const li = ul.querySelector('li');
-      return JSON.stringify({ fonte: getComputedStyle(ul).fontFamily, fundo: getComputedStyle(caixa).backgroundColor,
-        altura: Math.round(li.getBoundingClientRect().height), recuo: getComputedStyle(li).paddingLeft,
-        detalhe: getComputedStyle(li.querySelector('.cm-completionDetail')).fontSize });
+    // The app's chrome over the library's: the @codemirror/autocomplete theme sets
+    // `font-family: monospace` on the list (it is the same selector style.css uses, so whichever comes
+    // later wins). If the app's CSS does not apply, the list comes out white and in a code font.
+    const listChrome = JSON.parse(await js(`(() => {
+      const box = document.querySelector('.cm-tooltip-autocomplete');
+      const ul = box.querySelector('ul'); const li = ul.querySelector('li');
+      return JSON.stringify({ font: getComputedStyle(ul).fontFamily, background: getComputedStyle(box).backgroundColor,
+        height: Math.round(li.getBoundingClientRect().height), padding: getComputedStyle(li).paddingLeft,
+        detail: getComputedStyle(li.querySelector('.cm-completionDetail')).fontSize });
     })()`));
     check('a lista veste o cromo do app: fonte de interface, fundo escuro, item de 44px e a pasta em letra menor',
-      cromo.fonte.includes('Figtree') && !cromo.fonte.includes('monospace')
-      && cromo.fundo === 'rgb(36, 34, 41)' && cromo.altura >= 44 && cromo.recuo === '14px'
-      && cromo.detalhe === '12px', cromo);
+      listChrome.font.includes('Figtree') && !listChrome.font.includes('monospace')
+      && listChrome.background === 'rgb(36, 34, 41)' && listChrome.height >= 44 && listChrome.padding === '14px'
+      && listChrome.detail === '12px', listChrome);
 
-    // O print do meio: a lista aberta, com o cromo do app
+    // The screenshot in the middle: the list open, with the app's chrome
     {
       const { data } = (await send('Page.captureScreenshot', { format: 'png' })).result;
       fs.mkdirSync(path.join(ROOT, 'tests', '.tmp'), { recursive: true });
       fs.writeFileSync(path.join(ROOT, 'tests', '.tmp', 'link-list-aberta.png'), Buffer.from(data, 'base64'));
     }
 
-    const item = JSON.parse(await js(`(() => { const b = ${itens}[0].getBoundingClientRect();
+    const item = JSON.parse(await js(`(() => { const b = ${items}[0].getBoundingClientRect();
       return JSON.stringify({ x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) }); })()`));
     for (const type of ['mousePressed', 'mouseReleased']) {
       await send('Input.dispatchMouseEvent', { type, x: item.x, y: item.y, button: 'left', clickCount: 1 });
     }
-    const escolheu = await esperar(`__App.getContent() === 'vai [[destino]]'`);
+    const picked = await waitFor(`__App.getContent() === 'vai [[destino]]'`);
     check('tocar no item escreve o link e fecha a lista',
-      escolheu === true && await js(`!document.querySelector('.cm-tooltip-autocomplete')`) === true,
+      picked === true && await js(`!document.querySelector('.cm-tooltip-autocomplete')`) === true,
       await js('__App.getContent()'));
     check('o foco continua no editor: no celular, o teclado nao fecharia',
       await js(`document.activeElement === document.querySelector('.cm-content')`) === true,
       await js(`document.activeElement ? document.activeElement.className : null`));
 
     console.log('14. O botao de extrair: gruda na ponta direita da barra e recebe o toque');
-    // So aqui da pra provar: o sticky, a cor e o alvo do dedo precisam de layout. "Esta visivel" e
-    // "da pra tocar" sao perguntas diferentes, e quem responde a segunda e o elementFromPoint
+    // Only here can it be proven: the sticky, the color and the finger target need layout. "It is visible" and
+    // "it can be tapped" are different questions, and the one that answers the second is elementFromPoint
     await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 740, deviceScaleFactor: 2, mobile: true });
     await open(buildPage('extract-button', currentApp));
     await js(FAKE_DRIVE);
     await editNote('uma linha\noutra linha', 0, 0);
-    await selecionar({ row: 0, col: 9 }, { row: 0, col: 0 });
-    const acendeu = await esperar(`document.body.classList.contains('has-selection')`);
-    check('texto selecionado acende o botao', acendeu === true);
-    const medirExtrair = () => js(`(() => {
+    await select({ row: 0, col: 9 }, { row: 0, col: 0 });
+    const extractLit = await waitFor(`document.body.classList.contains('has-selection')`);
+    check('texto selecionado acende o botao', extractLit === true);
+    const measureExtract = () => js(`(() => {
       const b = document.querySelector('.toolbar-btn[data-extract]').getBoundingClientRect();
       const t = document.querySelector('.toolbar-btn[data-format="checklist"]').getBoundingClientRect();
       const x = Math.round(b.left + b.width / 2), y = Math.round(b.top + b.height / 2);
-      const noPonto = document.elementFromPoint(x, y);
-      return JSON.stringify({ x, y, left: Math.round(b.left), right: Math.round(b.right), largura: Math.round(b.width),
-        recebe: !!noPonto && !!noPonto.closest('[data-extract]'), tarefaLeft: Math.round(t.left), tarefaRight: Math.round(t.right) });
+      const atPoint = document.elementFromPoint(x, y);
+      return JSON.stringify({ x, y, left: Math.round(b.left), right: Math.round(b.right), width: Math.round(b.width),
+        receives: !!atPoint && !!atPoint.closest('[data-extract]'), taskLeft: Math.round(t.left), taskRight: Math.round(t.right) });
     })()`).then(JSON.parse);
 
     await js('document.querySelector(".toolbar").scrollLeft = 0; "ok"');
-    const noComeco = await medirExtrair();
+    const atStart = await measureExtract();
     check('barra no comeco: o botao esta na tela, com 44px, e o toque cai nele',
-      noComeco.largura >= 44 && noComeco.right <= 360 && noComeco.recebe, noComeco);
+      atStart.width >= 44 && atStart.right <= 360 && atStart.receives, atStart);
     await js('document.querySelector(".toolbar").scrollLeft = 1e6; "ok"');
     await sleep(100);
-    const noFim = await medirExtrair();
+    const atEnd = await measureExtract();
     check('barra rolada ate o fim: continua na tela e recebendo o toque',
-      noFim.largura >= 44 && noFim.right <= 360 && noFim.recebe, noFim);
+      atEnd.width >= 44 && atEnd.right <= 360 && atEnd.receives, atEnd);
     check('... e a tarefa, ultima da fila, aparece inteira antes dele',
-      noFim.tarefaLeft >= 0 && noFim.tarefaRight <= noFim.left, noFim);
+      atEnd.taskLeft >= 0 && atEnd.taskRight <= atEnd.left, atEnd);
 
-    // O unico botao cheio da barra: --accent #8b6cef preenche, --bg-primary #1c1b1f por cima
-    // (identidade-visual: sobre preenchimento colorido, o que esta em cima e escuro)
-    const cor = JSON.parse(await js(`(() => { const s = getComputedStyle(document.querySelector('.toolbar-btn[data-extract]'));
-      return JSON.stringify({ fundo: s.backgroundColor, tinta: s.color }); })()`));
+    // The bar's only filled button: --accent #8b6cef fills, --bg-primary #1c1b1f on top
+    // (identidade-visual: on a colored fill, what sits on top is dark)
+    const extractColors = JSON.parse(await js(`(() => { const s = getComputedStyle(document.querySelector('.toolbar-btn[data-extract]'));
+      return JSON.stringify({ background: s.backgroundColor, ink: s.color }); })()`));
     check('o botao cheio: fundo --accent e icone --bg-primary',
-      cor.fundo === 'rgb(139, 108, 239)' && cor.tinta === 'rgb(28, 27, 31)', cor);
+      extractColors.background === 'rgb(139, 108, 239)' && extractColors.ink === 'rgb(28, 27, 31)', extractColors);
     {
       const { data } = (await send('Page.captureScreenshot', { format: 'png' })).result;
       fs.mkdirSync(path.join(ROOT, 'tests', '.tmp'), { recursive: true });
@@ -766,76 +766,76 @@ const FAKE_DRIVE = `
     }
 
     await js('document.querySelector(".toolbar").scrollLeft = 0; "ok"');
-    const alvoExtrair = await medirExtrair();
+    const extractTarget = await measureExtract();
     for (const type of ['mousePressed', 'mouseReleased']) {
-      await send('Input.dispatchMouseEvent', { type, x: alvoExtrair.x, y: alvoExtrair.y, button: 'left', clickCount: 1 });
+      await send('Input.dispatchMouseEvent', { type, x: extractTarget.x, y: extractTarget.y, button: 'left', clickCount: 1 });
     }
-    const abriu = await esperar(`document.getElementById('modal-overlay').classList.contains('visible')
+    const opened = await waitFor(`document.getElementById('modal-overlay').classList.contains('visible')
       && document.getElementById('modal-input').value === 'uma-linha'`);
-    check('o toque abre a caixa com o nome sugerido', abriu === true, await js(`document.getElementById('modal-input').value`));
+    check('o toque abre a caixa com o nome sugerido', opened === true, await js(`document.getElementById('modal-input').value`));
     await js('__App.hideModal(); "ok"');
     await send('Emulation.clearDeviceMetricsOverride');
 
     console.log('15. Nota guardada no aparelho: reabre na hora com a pagina recarregada, e troca sem perder a rolagem');
-    // So aqui: o IndexedDB de verdade (o jsdom usa o fake-indexeddb), a pagina recarregada como o app
-    // que o Android matou, e a rolagem, que precisa de layout
-    const DRIVE_DA_NOTA = `
+    // Only here: the real IndexedDB (jsdom uses fake-indexeddb), the page reloaded like the app
+    // Android killed, and the scrolling, which needs layout
+    const NOTE_DRIVE = `
       localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
       __App.accessToken = 'fake';
-      window.__drive = { lento: 0, mt: 't1', texto: null,
-        longa: '# Destino\\n\\n' + Array.from({ length: 150 }, (_, i) => 'linha ' + i).join('\\n\\n') };
+      window.__drive = { delay: 0, mt: 't1', text: null,
+        longNote: '# Destino\\n\\n' + Array.from({ length: 150 }, (_, i) => 'linha ' + i).join('\\n\\n') };
       window.fetch = async (url) => {
         const u = new URL(url);
         const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
-        await new Promise(r => setTimeout(r, window.__drive.lento));
-        if (u.searchParams.get('alt') === 'media') return ok(window.__drive.texto || window.__drive.longa);
+        await new Promise(r => setTimeout(r, window.__drive.delay));
+        if (u.searchParams.get('alt') === 'media') return ok(window.__drive.text || window.__drive.longNote);
         if (/files\\/N2$/.test(u.pathname)) return ok({ id: 'N2', name: 'destino.md', parents: ['F1'], modifiedTime: window.__drive.mt });
         return ok({ files: [] });
       };
       'ok'`;
-    const APAGAR_BANCO = `new Promise(r => { const q = indexedDB.deleteDatabase('drivenotes'); q.onsuccess = q.onerror = q.onblocked = () => r('ok'); })`;
+    const WIPE_DB = `new Promise(r => { const q = indexedDB.deleteDatabase('drivenotes'); q.onsuccess = q.onerror = q.onblocked = () => r('ok'); })`;
 
     await open(buildPage('nota-guardada', currentApp));
-    await js(APAGAR_BANCO);
-    await js(DRIVE_DA_NOTA);
+    await js(WIPE_DB);
+    await js(NOTE_DRIVE);
     await js(`__App.openFile('N2', 'destino.md').then(() => 'ok')`);
     await sleep(300);
-    const guardou = await js(`__App.NoteStore.get('N2').then(e => !!e && e.content.includes('linha 149'))`);
-    check('abrir do Drive guardou a nota no IndexedDB de verdade (em file://)', guardou === true);
+    const kept = await js(`__App.NoteStore.get('N2').then(e => !!e && e.content.includes('linha 149'))`);
+    check('abrir do Drive guardou a nota no IndexedDB de verdade (em file://)', kept === true);
 
-    // A pagina recarregada e o app que o Android matou: memoria zerada, o aparelho com o que guardou
+    // The reloaded page is the app Android killed: memory wiped, the device with what it kept
     await open(buildPage('nota-guardada', currentApp));
-    await js(DRIVE_DA_NOTA);
-    await js(`window.__drive.lento = 1500; 'ok'`);
+    await js(NOTE_DRIVE);
+    await js(`window.__drive.delay = 1500; 'ok'`);
     await js(`__App.openFile('N2', 'destino.md'); 'ok'`);
-    // Nome proprio: `apareceu` ja e do cenario 13, no mesmo escopo
-    const apareceuGuardada = await esperar(`document.getElementById('preview-container').textContent.includes('linha 149')`, 1000);
-    check('recarregada a pagina, a nota aparece com o Drive ainda calado', apareceuGuardada === true);
-    const linhaDoLog = await js(`__App._log.find(l => l.includes('cached destino.md')) || ''`);
-    const ms = Number(/cached destino\.md (\d+)ms/.exec(linhaDoLog)?.[1]);
-    console.log('     medida do app:', linhaDoLog.split(' | ')[0]);
-    check('... em menos de 200ms, pela medida do proprio app', ms < 200, linhaDoLog);
-    await sleep(1800); // a conferencia desta abertura termina ("same")
+    // A name of its own: `appeared` already belongs to scenario 13, in the same scope
+    const appearedKept = await waitFor(`document.getElementById('preview-container').textContent.includes('linha 149')`, 1000);
+    check('recarregada a pagina, a nota aparece com o Drive ainda calado', appearedKept === true);
+    const logLine = await js(`__App._log.find(l => l.includes('cached destino.md')) || ''`);
+    const ms = Number(/cached destino\.md (\d+)ms/.exec(logLine)?.[1]);
+    console.log('     medida do app:', logLine.split(' | ')[0]);
+    check('... em menos de 200ms, pela medida do proprio app', ms < 200, logLine);
+    await sleep(1800); // this opening's check finishes ("same")
 
-    // Mudou no Drive: a guardada aparece, rola, e a nova chega sem mexer na rolagem
-    await js(`window.__drive.lento = 400; window.__drive.mt = 't2';
-      window.__drive.texto = window.__drive.longa + '\\n\\nlinha nova do PC'; 'ok'`);
+    // Changed on the Drive: the stored one shows up, scrolls, and the new one arrives without touching the scroll
+    await js(`window.__drive.delay = 400; window.__drive.mt = 't2';
+      window.__drive.text = window.__drive.longNote + '\\n\\nlinha nova do PC'; 'ok'`);
     await js(`__App.openFile('N2', 'destino.md'); 'ok'`);
     await sleep(100);
     await js(`document.getElementById('preview-container').scrollTop = 1500; 'ok'`);
-    const antes = await js(`document.getElementById('preview-container').scrollTop`);
-    const trocou = await esperar(`document.getElementById('preview-container').textContent.includes('linha nova do PC')`, 3000);
-    const depois = await js(`document.getElementById('preview-container').scrollTop`);
-    console.log(`     rolagem antes da troca ${antes}, depois ${depois}`);
+    const topBefore = await js(`document.getElementById('preview-container').scrollTop`);
+    const swapped = await waitFor(`document.getElementById('preview-container').textContent.includes('linha nova do PC')`, 3000);
+    const topAfter = await js(`document.getElementById('preview-container').scrollTop`);
+    console.log(`     rolagem antes da troca ${topBefore}, depois ${topAfter}`);
     check('mudou no Drive: trocou sozinha, com o aviso',
-      trocou === true && await js(`document.getElementById('save-status').textContent`) === 'Atualizada do Drive');
-    check('... sem perder a rolagem', antes > 0 && Math.abs(depois - antes) <= 2, { antes, depois });
-    await js(APAGAR_BANCO);
+      swapped === true && await js(`document.getElementById('save-status').textContent`) === 'Atualizada do Drive');
+    check('... sem perder a rolagem', topBefore > 0 && Math.abs(topAfter - topBefore) <= 2, { topBefore, topAfter });
+    await js(WIPE_DB);
 
     console.log('16. Leitura: lista que vem depois de outra lista abre o mesmo respiro que um grupo');
-    // A nota dos prints da Agatha de 20 set 2026: tarefas em dois grupos, uma numerada, uma com
-    // marcador e sublista. Grupo dentro da mesma lista ja abria o respiro (li.gap, v28); lista
-    // seguinte colava na anterior. Medido em pixels, que so o navegador tem
+    // The note from Agatha's screenshots of 20 Sep 2026: tasks in two groups, a numbered list, a bulleted
+    // one with a sublist. A group inside the same list already opened the gap (li.gap, v28); the next
+    // list stuck to the previous one. Measured in pixels, which only the browser has
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
     await open(buildPage('listas', currentApp));
     await js(FAKE_DRIVE);
@@ -843,218 +843,218 @@ const FAKE_DRIVE = `
       + '1. Wicked\n2. Hadestown\n3. The Phantom of The Opera\n\n\n- Agatha\n  - Lady\n  - Gucci\n', 0, 0);
     await js(`__App.setMode('preview'); 'ok'`);
     await sleep(200);
-    const listas = JSON.parse(await js(`(() => {
+    const lists = JSON.parse(await js(`(() => {
       const items = [...document.querySelectorAll('#preview-container li')];
       const li = (text) => items.find(el => el.firstChild && el.textContent.trim().startsWith(text) && !el.closest('li li'));
       const between = (a, b) => Math.round(li(b).getBoundingClientRect().top - li(a).getBoundingClientRect().bottom);
       return JSON.stringify({
-        mesmoGrupo: between('Lady', 'Banguela'),
-        grupo: between('Gucci', 'Agatha'),
-        tarefaNumerada: between('Ceiça', 'Wicked'),
-        numeradaMarcador: between('The Phantom', 'Agatha\\n'),
+        sameGroup: between('Lady', 'Banguela'),
+        group: between('Gucci', 'Agatha'),
+        taskToNumbered: between('Ceiça', 'Wicked'),
+        numberedToBullet: between('The Phantom', 'Agatha\\n'),
       });
     })()`));
-    console.log('     distancias em px:', JSON.stringify(listas));
-    check('itens do mesmo grupo continuam juntos', listas.mesmoGrupo < 10, listas);
-    check('tarefas seguidas de numerada: o mesmo respiro de um grupo', Math.abs(listas.tarefaNumerada - listas.grupo) <= 2, listas);
-    check('numerada seguida de lista com marcador: o mesmo respiro', Math.abs(listas.numeradaMarcador - listas.grupo) <= 2, listas);
+    console.log('     distancias em px:', JSON.stringify(lists));
+    check('itens do mesmo grupo continuam juntos', lists.sameGroup < 10, lists);
+    check('tarefas seguidas de numerada: o mesmo respiro de um grupo', Math.abs(lists.taskToNumbered - lists.group) <= 2, lists);
+    check('numerada seguida de lista com marcador: o mesmo respiro', Math.abs(lists.numberedToBullet - lists.group) <= 2, lists);
     await send('Emulation.clearDeviceMetricsOverride');
 
     console.log('17. Datilografia: a linha que se escreve para no meio da tela, e so a escrita rola');
-    // Sem teclado de verdade aqui: a area de escrita e a tela inteira menos cabecalho e barra. No
-    // celular o teclado encolhe a pagina (interactive-widget) e o meio passa a ser o meio do que sobra
+    // No real keyboard here: the writing area is the whole screen minus header and bar. On the
+    // phone the keyboard shrinks the page (interactive-widget) and the middle becomes the middle of what is left
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
     await open(buildPage('datilografia', currentApp));
     await js(FAKE_DRIVE);
-    const LONGA = Array.from({ length: 80 }, (_, i) => 'linha ' + i).join('\n');
-    // Altura do cursor em % da area que rola (0 = topo, 100 = pe), e a rolagem
-    const ondeEsta = async () => JSON.parse(await js(`(() => {
+    const TYPING_NOTE = Array.from({ length: 80 }, (_, i) => 'linha ' + i).join('\n');
+    // Height of the cursor as a % of the scrolling area (0 = top, 100 = bottom), and the scroll
+    const whereItIs = async () => JSON.parse(await js(`(() => {
       const view = __App.Editor._impl.view;
       const caret = view.coordsAtPos(view.state.selection.main.head);
       const box = view.scrollDOM.getBoundingClientRect();
-      return JSON.stringify({ altura: Math.round((caret.bottom - box.top) / box.height * 100),
-        rolagem: Math.round(view.scrollDOM.scrollTop) });
+      return JSON.stringify({ height: Math.round((caret.bottom - box.top) / box.height * 100),
+        scroll: Math.round(view.scrollDOM.scrollTop) });
     })()`));
 
-    await editNote(LONGA, 79, 'linha 79'.length);
+    await editNote(TYPING_NOTE, 79, 'linha 79'.length);
     await send('Input.insertText', { text: ' mais' });
     await sleep(150);
-    const datiloFim = await ondeEsta();
-    console.log('     escrevendo no fim da nota:', JSON.stringify(datiloFim));
-    check('escrevendo no fim de nota longa, a linha fica no meio e nao colada no pe', datiloFim.altura >= 35 && datiloFim.altura <= 55, datiloFim);
+    const typingAtEnd = await whereItIs();
+    console.log('     escrevendo no fim da nota:', JSON.stringify(typingAtEnd));
+    check('escrevendo no fim de nota longa, a linha fica no meio e nao colada no pe', typingAtEnd.height >= 35 && typingAtEnd.height <= 55, typingAtEnd);
 
-    // Ditado que quebra em varias linhas: a tela acompanha linha a linha e a frase entra inteira
-    const FRASE = 'hoje fui ao mercado e comprei tudo o que faltava pra semana, inclusive a racao dos cachorros e o cafe';
-    for (let n = 10; n <= FRASE.length; n += 15) {
-      await send('Input.imeSetComposition', { text: FRASE.slice(0, n), selectionStart: n, selectionEnd: n });
+    // Dictation that breaks into several lines: the screen follows line by line and the phrase goes in whole
+    const PHRASE = 'hoje fui ao mercado e comprei tudo o que faltava pra semana, inclusive a racao dos cachorros e o cafe';
+    for (let n = 10; n <= PHRASE.length; n += 15) {
+      await send('Input.imeSetComposition', { text: PHRASE.slice(0, n), selectionStart: n, selectionEnd: n });
       await sleep(40);
     }
-    await send('Input.insertText', { text: FRASE });
+    await send('Input.insertText', { text: PHRASE });
     await sleep(150);
-    const depoisDoDitado = await ondeEsta();
-    const texto = await js('__App.getContent()');
-    console.log('     depois de um ditado de varias linhas:', JSON.stringify(depoisDoDitado));
-    check('o ditado entra inteiro, uma vez so', texto.endsWith('linha 79 mais' + FRASE), texto.slice(-160));
-    check('... e a linha continua no meio, com a tela tendo subido', depoisDoDitado.altura >= 35 && depoisDoDitado.altura <= 55
-      && depoisDoDitado.rolagem > datiloFim.rolagem, { datiloFim, depoisDoDitado });
+    const afterDictation = await whereItIs();
+    const dictated = await js('__App.getContent()');
+    console.log('     depois de um ditado de varias linhas:', JSON.stringify(afterDictation));
+    check('o ditado entra inteiro, uma vez so', dictated.endsWith('linha 79 mais' + PHRASE), dictated.slice(-160));
+    check('... e a linha continua no meio, com a tela tendo subido', afterDictation.height >= 35 && afterDictation.height <= 55
+      && afterDictation.scroll > typingAtEnd.scroll, { typingAtEnd, afterDictation });
 
-    // No alto da nota nao ha o que rolar: escrever ali nao mexe na tela
-    await editNote(LONGA, 2, 0);
+    // At the top of the note there is nothing to scroll: writing there does not move the screen
+    await editNote(TYPING_NOTE, 2, 0);
     await js(`__App.Editor._impl.view.scrollDOM.scrollTop = 0; 'ok'`);
     await send('Input.insertText', { text: 'x' });
     await sleep(150);
-    const noAlto = await ondeEsta();
-    check('escrevendo no alto da nota, a tela fica parada', noAlto.rolagem === 0, noAlto);
+    const nearTop = await whereItIs();
+    check('escrevendo no alto da nota, a tela fica parada', nearTop.scroll === 0, nearTop);
 
-    // O toque so poe o cursor: tocar numa linha la embaixo nao puxa ela pro meio (quem puxa e a escrita)
-    const pe = JSON.parse(await js(`(() => { const b = __App.Editor._impl.view.scrollDOM.getBoundingClientRect();
+    // The tap only sets the cursor: tapping a line down below does not pull it to the middle (what pulls is the writing)
+    const nearBottom = JSON.parse(await js(`(() => { const b = __App.Editor._impl.view.scrollDOM.getBoundingClientRect();
       return JSON.stringify({ x: b.left + 80, y: b.bottom - 30 }); })()`));
     for (const type of ['mousePressed', 'mouseReleased']) {
-      await send('Input.dispatchMouseEvent', { type, x: pe.x, y: pe.y, button: 'left', clickCount: 1 });
+      await send('Input.dispatchMouseEvent', { type, x: nearBottom.x, y: nearBottom.y, button: 'left', clickCount: 1 });
     }
     await sleep(150);
-    const depoisDoToque = await ondeEsta();
-    check('tocar numa linha perto do pe poe o cursor la sem rolar', depoisDoToque.rolagem === 0 && depoisDoToque.altura > 80, depoisDoToque);
+    const afterTouch = await whereItIs();
+    check('tocar numa linha perto do pe poe o cursor la sem rolar', afterTouch.scroll === 0 && afterTouch.height > 80, afterTouch);
     await send('Emulation.clearDeviceMetricsOverride');
 
     console.log('18. Retomar a nota onde parou: reabre no mesmo paragrafo, com a foto de cima chegando depois');
-    // O que o jsdom nao prova: o layout de verdade, e a foto que chega do Drive depois de a nota aparecer.
-    // Guardado em pixels, o lugar cairia mais pra baixo enquanto a foto de cima nao chegou; guardado pelo
-    // bloco, cai no mesmo paragrafo, e a ancoragem de rolagem do navegador segura ele quando a foto cresce
+    // What jsdom does not prove: the real layout, and the photo that arrives from the Drive after the note shows up.
+    // Kept in pixels, the place would land further down while the photo above had not arrived; kept by the
+    // block, it lands on the same paragraph, and the browser's scroll anchoring holds it when the photo grows
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
-    const DRIVE_DA_FOTO = `
+    const PHOTO_DRIVE = `
       localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
       __App.accessToken = 'fake';
-      window.__foto = { atraso: 0, chegou: false };
+      window.__photo = { delay: 0, arrived: false };
       const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="800"><rect width="100%" height="100%" fill="#bb86fc"/></svg>';
-      const longa = '# Longa\\n\\n![[foto.png]]\\n\\n'
+      const longNote = '# Longa\\n\\n![[foto.png]]\\n\\n'
         + Array.from({ length: 60 }, (_, i) => 'paragrafo ' + i + ' ' + 'texto '.repeat((i % 7) * 6)).join('\\n\\n');
       window.fetch = async (url) => {
         const u = new URL(url);
         const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
         if (/files\\/FOTO$/.test(u.pathname)) {
-          await new Promise(r => setTimeout(r, window.__foto.atraso));
-          window.__foto.chegou = true;
+          await new Promise(r => setTimeout(r, window.__photo.delay));
+          window.__photo.arrived = true;
           return { ok: true, status: 200, blob: async () => new Blob([svg], { type: 'image/svg+xml' }) };
         }
-        if (u.searchParams.get('alt') === 'media') return ok(longa);
+        if (u.searchParams.get('alt') === 'media') return ok(longNote);
         if (/files\\/N3$/.test(u.pathname)) return ok({ id: 'N3', name: 'longa.md', parents: ['F1'], modifiedTime: 't1' });
         const q = u.searchParams.get('q') || '';
         return ok({ files: q.includes("'foto.png'") ? [{ id: 'FOTO', name: 'foto.png', mimeType: 'image/png', parents: ['m'] }] : [] });
       };
       'ok'`;
-    // O bloco no topo da tela, onde ele esta em relacao ao topo, e a altura da foto
-    const noTopo = async () => JSON.parse(await js(`(() => {
+    // The block at the top of the screen, where it sits against the top, and the photo's height
+    const atTop = async () => JSON.parse(await js(`(() => {
       const c = document.getElementById('preview-container');
       const top = c.getBoundingClientRect().top;
       const el = [...c.children].find(e => e.getBoundingClientRect().bottom > top);
-      const foto = document.querySelector('#preview-container img[data-embed]');
-      return JSON.stringify({ texto: el ? el.textContent.split(' texto')[0].trim() : '', px: el ? Math.round(el.getBoundingClientRect().top - top) : 0,
-        foto: foto ? Math.round(foto.getBoundingClientRect().height) : -1 });
+      const photo = document.querySelector('#preview-container img[data-embed]');
+      return JSON.stringify({ text: el ? el.textContent.split(' texto')[0].trim() : '', px: el ? Math.round(el.getBoundingClientRect().top - top) : 0,
+        photo: photo ? Math.round(photo.getBoundingClientRect().height) : -1 });
     })()`));
-    // O paragrafo 30 no topo, com 30px dele ja passados
-    const PARAGRAFO_30 = `(() => {
+    // Paragraph 30 at the top, with 30px of it already scrolled past
+    const PARAGRAPH_30 = `(() => {
       const c = document.getElementById('preview-container');
       const p = [...c.children].find(e => e.textContent.startsWith('paragrafo 30 '));
       c.scrollTop += p.getBoundingClientRect().top - c.getBoundingClientRect().top + 30;
       return 'ok';
     })()`;
-    const FOTO_NA_TELA = `window.__foto.chegou && document.querySelector('#preview-container img[data-embed]')?.naturalHeight > 0`;
-    const abrirLonga = () => js(`__App.openFile('N3', 'longa.md'); 'ok'`);
+    const PHOTO_ON_SCREEN = `window.__photo.arrived && document.querySelector('#preview-container img[data-embed]')?.naturalHeight > 0`;
+    const openLong = () => js(`__App.openFile('N3', 'longa.md'); 'ok'`);
 
-    // Abre, espera a foto, e deixa o paragrafo 30 no topo. Devolve o que estava no topo ao sair.
-    const lerAteOMeio = async (app, html) => {
+    // Opens, waits for the photo, and leaves paragraph 30 at the top. Returns what was at the top on leaving.
+    const readToTheMiddle = async (app, html) => {
       await open(buildPage('retomar', app, { html }));
       await js(`localStorage.clear(); 'ok'`);
-      await js(APAGAR_BANCO);
-      await js(DRIVE_DA_FOTO);
-      await abrirLonga();
-      await esperar(FOTO_NA_TELA, 3000);
+      await js(WIPE_DB);
+      await js(PHOTO_DRIVE);
+      await openLong();
+      await waitFor(PHOTO_ON_SCREEN, 3000);
       await sleep(300);
-      await js(PARAGRAFO_30);
+      await js(PARAGRAPH_30);
       await sleep(100);
-      return noTopo();
+      return atTop();
     };
 
-    const aoSair = await lerAteOMeio(currentApp);
-    console.log('     ao sair:', JSON.stringify(aoSair));
-    check('(o paragrafo 30 no topo, com a foto de cima ja na tela)', aoSair.texto === 'paragrafo 30' && aoSair.px === -30 && aoSair.foto > 500, aoSair);
+    const onLeaving = await readToTheMiddle(currentApp);
+    console.log('     ao sair:', JSON.stringify(onLeaving));
+    check('(o paragrafo 30 no topo, com a foto de cima ja na tela)', onLeaving.text === 'paragrafo 30' && onLeaving.px === -30 && onLeaving.photo > 500, onLeaving);
 
     await js(`__App.goHome(); 'ok'`);
-    await abrirLonga();
+    await openLong();
     await sleep(300);
-    const voltou = await noTopo();
-    console.log('     voltando pela home:', JSON.stringify(voltou));
-    check('sair e voltar: o mesmo paragrafo, no mesmo ponto', voltou.texto === 'paragrafo 30' && Math.abs(voltou.px - aoSair.px) <= 2, voltou);
+    const cameBack = await atTop();
+    console.log('     voltando pela home:', JSON.stringify(cameBack));
+    check('sair e voltar: o mesmo paragrafo, no mesmo ponto', cameBack.text === 'paragrafo 30' && Math.abs(cameBack.px - onLeaving.px) <= 2, cameBack);
 
-    // O app morto com a nota aberta (a pagina vai embora sem sair da nota) e aberto de novo: a foto
-    // agora tem que vir do Drive outra vez, e demora
+    // The app killed with the note open (the page goes away without leaving the note) and opened again: the photo
+    // now has to come from the Drive once more, and it takes a while
     await open(buildPage('retomar', currentApp));
-    await js(DRIVE_DA_FOTO);
-    await js(`window.__foto.atraso = 1500; 'ok'`);
-    await abrirLonga();
+    await js(PHOTO_DRIVE);
+    await js(`window.__photo.delay = 1500; 'ok'`);
+    await openLong();
     await sleep(250);
-    const cedo = await noTopo();
-    const fotoChegou = await js('window.__foto.chegou');
-    console.log('     reaberto, foto a caminho:', JSON.stringify(cedo));
+    const early = await atTop();
+    const photoArrived = await js('window.__photo.arrived');
+    console.log('     reaberto, foto a caminho:', JSON.stringify(early));
     check('app morto e aberto de novo: o mesmo paragrafo, com a foto de cima ainda a caminho',
-      cedo.texto === 'paragrafo 30' && Math.abs(cedo.px - aoSair.px) <= 2 && !fotoChegou && cedo.foto < 100, { cedo, fotoChegou });
-    await esperar(FOTO_NA_TELA, 4000);
+      early.text === 'paragrafo 30' && Math.abs(early.px - onLeaving.px) <= 2 && !photoArrived && early.photo < 100, { early, photoArrived });
+    await waitFor(PHOTO_ON_SCREEN, 4000);
     await sleep(300);
-    const tarde = await noTopo();
-    console.log('     depois de a foto chegar:', JSON.stringify(tarde));
+    const later = await atTop();
+    console.log('     depois de a foto chegar:', JSON.stringify(later));
     check('... e a foto crescendo em cima nao tira o paragrafo do lugar',
-      tarde.foto > 500 && tarde.texto === 'paragrafo 30' && Math.abs(tarde.px - aoSair.px) <= 2, tarde);
+      later.photo > 500 && later.text === 'paragrafo 30' && Math.abs(later.px - onLeaving.px) <= 2, later);
 
-    // Controle: o app de antes do card abre a mesma nota no topo, senao este cenario nao prova nada
-    let appAntesDoRetomar = null;
-    let htmlAntesDoRetomar = null;
+    // Control: the app from before the card opens the same note at the top, otherwise this scenario proves nothing
+    let appBeforeResume = null;
+    let htmlBeforeResume = null;
     try {
-      appAntesDoRetomar = execSync(`git -C "${ROOT}" show 7bed916:app.js`, { encoding: 'utf8', maxBuffer: 1e7, stdio: ['ignore', 'pipe', 'ignore'] });
-      htmlAntesDoRetomar = indexAt('7bed916');
+      appBeforeResume = execSync(`git -C "${ROOT}" show 7bed916:app.js`, { encoding: 'utf8', maxBuffer: 1e7, stdio: ['ignore', 'pipe', 'ignore'] });
+      htmlBeforeResume = indexAt('7bed916');
     } catch { /* shallow clone or no git: the control is skipped */ }
-    if (appAntesDoRetomar) {
-      await lerAteOMeio(appAntesDoRetomar, htmlAntesDoRetomar);
+    if (appBeforeResume) {
+      await readToTheMiddle(appBeforeResume, htmlBeforeResume);
       await js(`__App.goHome(); 'ok'`);
-      await abrirLonga();
+      await openLong();
       await sleep(300);
-      const semOCard = await noTopo();
-      check('controle: sem o card (7bed916), a nota reabre no topo', semOCard.texto === 'Longa', semOCard);
+      const withoutCard = await atTop();
+      check('controle: sem o card (7bed916), a nota reabre no topo', withoutCard.text === 'Longa', withoutCard);
     } else {
       console.log('     (controle pulado: commit antigo indisponivel)');
     }
-    await js(APAGAR_BANCO);
+    await js(WIPE_DB);
     await send('Emulation.clearDeviceMetricsOverride');
 
     console.log('19. Ler e Editar no mesmo trecho, com o CodeMirror de verdade');
-    // O topo de cada modo e lido 16px abaixo da borda (App.VIEW_INSET), onde o texto comeca sem rolar
+    // The top of each mode is read 16px below the edge (App.VIEW_INSET), where the text starts without scrolling
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
-    const NOTA_TRECHO = '---\ncreated: 2026-09-01\nupdated: 2026-09-01\n---\n\n# Trecho\n\n'
+    const STRETCH_NOTE = '---\ncreated: 2026-09-01\nupdated: 2026-09-01\n---\n\n# Trecho\n\n'
       + Array.from({ length: 60 }, (_, i) => i === 20
         ? 'paragrafo longo ' + 'palavra '.repeat(400).trim()
         : 'paragrafo ' + i + ' ' + 'texto '.repeat((i % 7) * 6)).join('\n\n');
-    const DRIVE_DO_TRECHO = `
+    const STRETCH_DRIVE = `
       localStorage.clear();
       localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
       __App.accessToken = 'fake';
-      window.__nota = ${JSON.stringify(NOTA_TRECHO)};
+      window.__note = ${JSON.stringify(STRETCH_NOTE)};
       window.fetch = async (url) => {
         const u = new URL(url);
         const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
-        if (u.searchParams.get('alt') === 'media') return ok(window.__nota);
+        if (u.searchParams.get('alt') === 'media') return ok(window.__note);
         if (u.pathname.endsWith('/N4')) return ok({ id: 'N4', name: 'trecho.md', parents: ['F1'], modifiedTime: 't1' });
         return ok({ files: [] });
       };
       'ok'`;
-    const nome = (s) => s.split(' texto')[0].split(' palavra')[0].trim();
-    const leitura = async () => {
+    const name = (s) => s.split(' texto')[0].split(' palavra')[0].trim();
+    const reading = async () => {
       const r = JSON.parse(await js(`(() => {
         const c = document.getElementById('preview-container');
         const probe = c.getBoundingClientRect().top + 16;
         const el = [...c.children].find(e => e.getBoundingClientRect().bottom > probe);
-        return JSON.stringify({ texto: el.textContent, px: Math.round(el.getBoundingClientRect().top - probe) });
+        return JSON.stringify({ text: el.textContent, px: Math.round(el.getBoundingClientRect().top - probe) });
       })()`));
-      return { texto: nome(r.texto), px: r.px };
+      return { text: name(r.text), px: r.px };
     };
     const editor = async () => {
       const r = JSON.parse(await js(`(() => {
@@ -1062,43 +1062,43 @@ const FAKE_DRIVE = `
         const top = v.scrollDOM.getBoundingClientRect().top;
         const b = v.lineBlockAtHeight(top + 16 - v.documentTop);
         const line = v.state.doc.lineAt(b.from);
-        // Onde, dentro da linha, esta o que aparece na altura da leitura: 0 = comeco, 1 = fim
+        // Where, inside the line, sits what shows at the reading's height: 0 = start, 1 = end
         const at = v.posAtCoords({ x: v.contentDOM.getBoundingClientRect().left + 40, y: top + 20 });
-        return JSON.stringify({ texto: line.text, px: Math.round(v.coordsAtPos(line.from).top - (top + 16)),
-          dentro: at == null ? -1 : Math.round((at - line.from) / Math.max(line.length, 1) * 100) / 100, foco: v.hasFocus });
+        return JSON.stringify({ text: line.text, px: Math.round(v.coordsAtPos(line.from).top - (top + 16)),
+          inside: at == null ? -1 : Math.round((at - line.from) / Math.max(line.length, 1) * 100) / 100, focus: v.hasFocus });
       })()`));
-      return { texto: nome(r.texto), px: r.px, dentro: r.dentro, foco: r.foco };
+      return { text: name(r.text), px: r.px, inside: r.inside, focus: r.focus };
     };
-    const tocarNoBotao = async () => {
+    const tapTheButton = async () => {
       const r = JSON.parse(await js(`JSON.stringify(document.getElementById('btn-preview').getBoundingClientRect())`));
       for (const type of ['mousePressed', 'mouseReleased']) {
         await send('Input.dispatchMouseEvent', { type, x: r.x + r.width / 2, y: r.y + r.height / 2, button: 'left', clickCount: 1 });
       }
       await sleep(500);
     };
-    const leituraEm = (inicio, px = 0) => js(`(() => {
+    const readingAt = (start, px = 0) => js(`(() => {
       const c = document.getElementById('preview-container');
-      const p = [...c.children].find(e => e.textContent.startsWith(${JSON.stringify(inicio)}));
+      const p = [...c.children].find(e => e.textContent.startsWith(${JSON.stringify(start)}));
       c.scrollTop += p.getBoundingClientRect().top - (c.getBoundingClientRect().top + 16) + ${px};
       return 'ok';
     })()`);
-    const abrirTrecho = async (app, html) => {
+    const openStretch = async (app, html) => {
       await open(buildPage('trecho', app, { html }));
-      await js(APAGAR_BANCO);
-      await js(DRIVE_DO_TRECHO);
+      await js(WIPE_DB);
+      await js(STRETCH_DRIVE);
       await js(`__App.openFile('N4', 'trecho.md').then(() => 'ok')`);
       await sleep(200);
     };
 
-    await abrirTrecho(currentApp);
-    await leituraEm('paragrafo 30 ');
-    const lendo = await leitura();
-    check('(lendo, com o paragrafo 30 no topo)', lendo.texto === 'paragrafo 30' && lendo.px === 0, lendo);
-    await tocarNoBotao();
-    const editando = await editor();
-    console.log('     Editar:', JSON.stringify(editando));
-    check('Editar: o editor abre com o paragrafo 30 no topo', await js('__App.mode') === 'edit' && editando.texto === 'paragrafo 30' && Math.abs(editando.px) <= 3, editando);
-    check('... sem pegar o foco, entao sem teclado', editando.foco === false, editando);
+    await openStretch(currentApp);
+    await readingAt('paragrafo 30 ');
+    const readingNow = await reading();
+    check('(lendo, com o paragrafo 30 no topo)', readingNow.text === 'paragrafo 30' && readingNow.px === 0, readingNow);
+    await tapTheButton();
+    const editing = await editor();
+    console.log('     Editar:', JSON.stringify(editing));
+    check('Editar: o editor abre com o paragrafo 30 no topo', await js('__App.mode') === 'edit' && editing.text === 'paragrafo 30' && Math.abs(editing.px) <= 3, editing);
+    check('... sem pegar o foco, entao sem teclado', editing.focus === false, editing);
 
     await js(`(() => {
       const v = __App.Editor._impl.view;
@@ -1107,49 +1107,49 @@ const FAKE_DRIVE = `
       return 'ok';
     })()`);
     await sleep(300);
-    await tocarNoBotao();
-    const lendoDeNovo = await leitura();
-    console.log('     Ler:', JSON.stringify(lendoDeNovo));
-    check('Ler: a leitura abre no paragrafo que estava no topo do editor', await js('__App.mode') === 'preview' && lendoDeNovo.texto === 'paragrafo 45' && Math.abs(lendoDeNovo.px) <= 3, lendoDeNovo);
+    await tapTheButton();
+    const readingAgain = await reading();
+    console.log('     Ler:', JSON.stringify(readingAgain));
+    check('Ler: a leitura abre no paragrafo que estava no topo do editor', await js('__App.mode') === 'preview' && readingAgain.text === 'paragrafo 45' && Math.abs(readingAgain.px) <= 3, readingAgain);
 
-    const idas = [];
+    const roundTrips = [];
     for (let i = 0; i < 3; i++) {
-      await tocarNoBotao();
-      await tocarNoBotao();
-      idas.push(await leitura());
+      await tapTheButton();
+      await tapTheButton();
+      roundTrips.push(await reading());
     }
-    console.log('     tres idas e voltas:', JSON.stringify(idas));
-    check('... e tres idas e voltas nao escorregam', idas.every(l => l.texto === 'paragrafo 45' && Math.abs(l.px - lendoDeNovo.px) <= 3), idas);
+    console.log('     tres idas e voltas:', JSON.stringify(roundTrips));
+    check('... e tres idas e voltas nao escorregam', roundTrips.every(l => l.text === 'paragrafo 45' && Math.abs(l.px - readingAgain.px) <= 3), roundTrips);
 
-    // Um paragrafo de uma linha so, enorme: lido ate a metade, o editor abre na metade dele
+    // A single-line paragraph, huge: read halfway, the editor opens at its middle
     await js(`(() => {
       const c = document.getElementById('preview-container');
       const p = [...c.children].find(e => e.textContent.startsWith('paragrafo longo'));
       c.scrollTop += p.getBoundingClientRect().top - (c.getBoundingClientRect().top + 16) + p.getBoundingClientRect().height / 2;
       return 'ok';
     })()`);
-    await tocarNoBotao();
-    const noMeio = await editor();
-    console.log('     paragrafo longo lido ate a metade:', JSON.stringify(noMeio));
-    check('paragrafo enorme lido ate a metade: o editor abre perto da metade dele', noMeio.texto === 'paragrafo longo' && noMeio.dentro > 0.35 && noMeio.dentro < 0.65, noMeio);
+    await tapTheButton();
+    const inTheMiddle = await editor();
+    console.log('     paragrafo longo lido ate a metade:', JSON.stringify(inTheMiddle));
+    check('paragrafo enorme lido ate a metade: o editor abre perto da metade dele', inTheMiddle.text === 'paragrafo longo' && inTheMiddle.inside > 0.35 && inTheMiddle.inside < 0.65, inTheMiddle);
 
-    // Controle: a v48 abre o editor no topo da nota
-    let appDaV48 = null;
-    let htmlDaV48 = null;
+    // Control: v48 opens the editor at the top of the note
+    let appOfV48 = null;
+    let htmlOfV48 = null;
     try {
-      appDaV48 = execSync(`git -C "${ROOT}" show cf8d4f1:app.js`, { encoding: 'utf8', maxBuffer: 1e7, stdio: ['ignore', 'pipe', 'ignore'] });
-      htmlDaV48 = indexAt('cf8d4f1');
+      appOfV48 = execSync(`git -C "${ROOT}" show cf8d4f1:app.js`, { encoding: 'utf8', maxBuffer: 1e7, stdio: ['ignore', 'pipe', 'ignore'] });
+      htmlOfV48 = indexAt('cf8d4f1');
     } catch { /* shallow clone or no git: the control is skipped */ }
-    if (appDaV48) {
-      await abrirTrecho(appDaV48, htmlDaV48);
-      await leituraEm('paragrafo 30 ');
-      await tocarNoBotao();
-      const naV48 = await editor();
-      check('controle: sem a fatia 2 (cf8d4f1), o Editar abre no topo da nota', naV48.texto === '---', naV48);
+    if (appOfV48) {
+      await openStretch(appOfV48, htmlOfV48);
+      await readingAt('paragrafo 30 ');
+      await tapTheButton();
+      const inV48 = await editor();
+      check('controle: sem a fatia 2 (cf8d4f1), o Editar abre no topo da nota', inV48.text === '---', inV48);
     } else {
       console.log('     (controle pulado: commit antigo indisponivel)');
     }
-    await js(APAGAR_BANCO);
+    await js(WIPE_DB);
     await send('Emulation.clearDeviceMetricsOverride');
 
     console.log('20. Texto da interface nao seleciona; leitura, editor e campos continuam selecionando');
@@ -1186,7 +1186,7 @@ const FAKE_DRIVE = `
         }
       }
       // A double click is only over once its dblclick has fired: the word gets selected before that
-      return esperar(count === 2 ? `window.__clicks.dblclick >= 1 && window.__clicks.click >= ${before + 2}`
+      return waitFor(count === 2 ? `window.__clicks.dblclick >= 1 && window.__clicks.click >= ${before + 2}`
         : `window.__clicks.click >= ${before + 1}`);
     };
     const userSelect = (selector) => js(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).userSelect`);
@@ -1247,9 +1247,9 @@ const FAKE_DRIVE = `
 
     // A link in the reading view still opens its note with a real click
     await js(`getSelection().removeAllRanges(); __App.openFile('N1', 'com link.md').then(() => 'ok')`);
-    await esperar(`document.querySelector('#preview-container a.wikilink')`);
+    await waitFor(`document.querySelector('#preview-container a.wikilink')`);
     await click(await wordAt('#preview-container a.wikilink', 'destino'));
-    const followed = await esperar(`__App.currentFile && __App.currentFile.id === 'N2'`);
+    const followed = await waitFor(`__App.currentFile && __App.currentFile.id === 'N2'`);
     check('um clique de verdade num [[link]] da leitura abre a nota', followed === true, await js('__App.currentFile && __App.currentFile.id'));
 
     // Editor: explicit user-select text, a real double click selects a word and lights the extract button,
@@ -1261,23 +1261,23 @@ const FAKE_DRIVE = `
       await userSelect('.cm-editor .cm-content'));
     await js(`window.__clicks.dblclick = 0; 'ok'`);
     await click(await wordAt('.cm-content', 'palavra'), 2);
-    const lit = await esperar(`document.body.classList.contains('has-selection')`);
+    const lit = await waitFor(`document.body.classList.contains('has-selection')`);
     const editorSelection = await js(`(() => { const v = __App.Editor._impl.view; const s = v.state.selection.main;
       return v.state.sliceDoc(s.from, s.to); })()`);
     check('duplo clique numa palavra do editor seleciona e acende o botao de extrair', lit === true && editorSelection.trim() === 'palavra',
       { lit, editorSelection });
     await send('Input.insertText', { text: 'termo' });
-    const typed = await esperar(`__App.getContent().startsWith('uma termo')`);
+    const typed = await waitFor(`__App.getContent().startsWith('uma termo')`);
     check('digitar por cima da selecao troca a palavra', typed === true, await js('__App.getContent()'));
     await send('Input.insertText', { text: ' [[' });
-    const listed = await esperar(`document.querySelectorAll('.cm-tooltip-autocomplete li').length >= 2`);
+    const listed = await waitFor(`document.querySelectorAll('.cm-tooltip-autocomplete li').length >= 2`);
     check('... e o [[ ainda abre a lista de notas', listed === true);
 
     // Fields: the rename box, opened by a real click on the note name, still selects a word
     await js(`__App.currentFile.name = 'nota de teste.md'; __App.updateFileNameDisplay(); 'ok'`);
     const nameBox = JSON.parse(await js(`JSON.stringify(document.getElementById('file-name').getBoundingClientRect())`));
     await click({ x: Math.round(nameBox.x + 10), y: Math.round(nameBox.y + nameBox.height / 2) });
-    const renaming = await esperar(`document.getElementById('modal-overlay').classList.contains('visible')`);
+    const renaming = await waitFor(`document.getElementById('modal-overlay').classList.contains('visible')`);
     check('um clique no nome da nota abre o renomear', renaming === true);
     check('o campo e selecionavel (user-select text)', await userSelect('#modal-input') === 'text', await userSelect('#modal-input'));
     await js(`(() => { const i = document.getElementById('modal-input'); i.value = 'nota de teste'; i.setSelectionRange(0, 0); return 'ok'; })()`);
@@ -1300,7 +1300,7 @@ const FAKE_DRIVE = `
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
     await open(buildPage('guardar', currentApp));
     // The Google Fonts sheet can hold the app back past open's fixed wait (see drive-notes-aprendizados, Testes)
-    await esperar('window.__App', 15000);
+    await waitFor('window.__App', 15000);
     await js(`__App.inboxNotes = async () => [
       { id: 'I1', name: 'ideias-drive-notes.md' }, { id: 'I2', name: 'ideias-vault.md' }, { id: 'I3', name: 'ideias-projetos-genai.md' },
       { id: 'I4', name: 'config-notebook.md' }, { id: 'I5', name: 'nwn-new-character.md' } ];
@@ -1324,12 +1324,12 @@ const FAKE_DRIVE = `
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
     await send('Emulation.setTouchEmulationEnabled', { enabled: true });
     await open(buildPage('sumario', currentApp));
-    await esperar('window.__App', 15000);
-    // Uma nota com titulos, aberta na leitura, sem Drive: o conteudo entra direto
+    await waitFor('window.__App', 15000);
+    // A note with headings, open in the reading view, with no Drive: the content goes in directly
     await js(`(() => { __App.currentFile = { id: 'T', name: 'uma nota com titulos.md' }; __App.setContent('# Um\\n\\ntexto\\n\\n## Dois\\n\\nmais');
       __App.showEditor(); __App.setMode('preview'); __App.updateFileNameDisplay(); return 'ok'; })()`);
-    // O que a pagina viu, contado na janela em captura (antes do ouvinte do app, que engole o clique):
-    // o toque chegou, o clique veio ou nao, e em quem caiu
+    // What the page saw, counted on the window in the capture phase (before the app's listener, which swallows the click):
+    // the touch arrived, the click came or not, and on what it landed
     await js(`window.__renamed = 0; __App.promptRename = () => { window.__renamed++; };
       window.__seen = { start: 0, move: 0, end: 0, cancel: 0, clicks: [] };
       window.addEventListener('touchstart', () => window.__seen.start++, true);
@@ -1337,60 +1337,60 @@ const FAKE_DRIVE = `
       window.addEventListener('touchend', () => window.__seen.end++, true);
       window.addEventListener('touchcancel', () => window.__seen.cancel++, true);
       window.addEventListener('click', (e) => window.__seen.clicks.push(e.target.id || e.target.className || e.target.tagName), true); 'ok'`);
-    const caixaNome = JSON.parse(await js(`JSON.stringify(document.getElementById('file-name').getBoundingClientRect())`));
-    const cx = Math.round(caixaNome.x + caixaNome.width / 2), cy = Math.round(caixaNome.y + caixaNome.height / 2);
-    const tocAberto = `document.getElementById('toc-overlay').classList.contains('visible')`;
-    // Cada etapa espera a pagina dizer que viu o toque (fila do Input nao e a do Runtime.evaluate), e o
-    // touchcancel que o navegador as vezes injeta faz a tentativa ser refeita, como no cenario 10
-    const segurar = async (dx) => {
+    const fileNameBox = JSON.parse(await js(`JSON.stringify(document.getElementById('file-name').getBoundingClientRect())`));
+    const cx = Math.round(fileNameBox.x + fileNameBox.width / 2), cy = Math.round(fileNameBox.y + fileNameBox.height / 2);
+    const tocOpen = `document.getElementById('toc-overlay').classList.contains('visible')`;
+    // Each step waits for the page to say it saw the touch (the Input queue is not the Runtime.evaluate one), and the
+    // touchcancel the browser sometimes injects makes the attempt be redone, as in scenario 10
+    const hold = async (dx) => {
       let r = null;
-      for (let tentativa = 1; tentativa <= 3; tentativa++) {
+      for (let attempt = 1; attempt <= 3; attempt++) {
         await js(`__App.closeToc(); window.__seen = { start: 0, move: 0, end: 0, cancel: 0, clicks: [] }; 'ok'`);
         await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: cx, y: cy }] });
-        await esperar('window.__seen.start >= 1', 4000);
+        await waitFor('window.__seen.start >= 1', 4000);
         if (dx) {
           await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: cx + dx, y: cy }] });
-          await esperar('window.__seen.move >= 1', 4000);
+          await waitFor('window.__seen.move >= 1', 4000);
         }
-        // Parado: o app abre o sumario com o dedo ainda na tela. Andou: passado o tempo do toque longo
-        // (contado depois de a pagina ver o movimento), nada abriu
-        const abriu = dx ? (await sleep(800), await js(tocAberto)) : await esperar(tocAberto, 4000);
+        // Still: the app opens the table of contents with the finger still on the screen. Moved: once the long press time
+        // has passed (counted after the page sees the move), nothing opened
+        const opened = dx ? (await sleep(800), await js(tocOpen)) : await waitFor(tocOpen, 4000);
         await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-        await esperar('window.__seen.end + window.__seen.cancel >= 1', 4000);
-        // O clique que o navegador manda depois de soltar (se mandar) vem logo atras do touchend
+        await waitFor('window.__seen.end + window.__seen.cancel >= 1', 4000);
+        // The click the browser sends after letting go (if it sends one) comes right behind the touchend
         await sleep(300);
         const seen = JSON.parse(await js('JSON.stringify(window.__seen)'));
-        r = { abriu, seen, aberto: await js(tocAberto), renamed: Number(await js('window.__renamed')) };
+        r = { opened, seen, openAfter: await js(tocOpen), renamed: Number(await js('window.__renamed')) };
         if (!seen.cancel) return r;
-        console.log(`     (tentativa ${tentativa} do toque longo perdida: touchcancel)`, JSON.stringify(seen));
+        console.log(`     (tentativa ${attempt} do toque longo perdida: touchcancel)`, JSON.stringify(seen));
       }
       return r;
     };
-    const parado = await segurar(0);
-    console.log('     segurar parado:', JSON.stringify(parado));
-    check('segurar o nome abre o sumario', parado.abriu === true && parado.aberto === true, parado);
-    check('... e soltar nao renomeia (o clique, se vier, e engolido)', parado.renamed === 0, parado);
-    const linha = JSON.parse(await js(`(() => { const b = document.querySelector('#toc-ul li').getBoundingClientRect();
+    const still = await hold(0);
+    console.log('     segurar parado:', JSON.stringify(still));
+    check('segurar o nome abre o sumario', still.opened === true && still.openAfter === true, still);
+    check('... e soltar nao renomeia (o clique, se vier, e engolido)', still.renamed === 0, still);
+    const firstRow = JSON.parse(await js(`(() => { const b = document.querySelector('#toc-ul li').getBoundingClientRect();
       const el = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2); return JSON.stringify({ hit: !!el && !!el.closest('#toc-ul li'), h: b.height }); })()`));
-    check('a primeira linha do sumario e tocavel e tem altura de dedo', linha.hit && linha.h >= 44, linha);
-    const fechar = JSON.parse(await js(`(() => { const b = document.getElementById('toc-close').getBoundingClientRect();
+    check('a primeira linha do sumario e tocavel e tem altura de dedo', firstRow.hit && firstRow.h >= 44, firstRow);
+    const closeButton = JSON.parse(await js(`(() => { const b = document.getElementById('toc-close').getBoundingClientRect();
       const el = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2); return JSON.stringify({ hit: !!el && !!el.closest('#toc-close'), bottom: b.bottom }); })()`));
-    check('o Fechar e tocavel, dentro da tela', fechar.hit && fechar.bottom <= 844, fechar);
-    // Esc e o voltar do CloseWatcher fora do Android (ver drive-notes-aprendizados, Testes)
+    check('o Fechar e tocavel, dentro da tela', closeButton.hit && closeButton.bottom <= 844, closeButton);
+    // Esc is the CloseWatcher's back outside Android (see drive-notes-aprendizados, Testes)
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-    const fechouNoVoltar = await esperar(`!(${tocAberto})`, 4000);
-    check('o voltar de verdade (Esc) fecha o sumario e fica na nota', fechouNoVoltar && await js(`__App.currentFile.id`) === 'T');
-    const andou = await segurar(40);
-    console.log('     dedo que anda:', JSON.stringify(andou));
-    check('dedo que anda 40px nao abre', andou.abriu === false && andou.aberto === false, andou);
-    // Um toque curto depois de um toque longo: renomeia como sempre (nada ficou preso pra engolir)
+    const closedOnBack = await waitFor(`!(${tocOpen})`, 4000);
+    check('o voltar de verdade (Esc) fecha o sumario e fica na nota', closedOnBack && await js(`__App.currentFile.id`) === 'T');
+    const moved = await hold(40);
+    console.log('     dedo que anda:', JSON.stringify(moved));
+    check('dedo que anda 40px nao abre', moved.opened === false && moved.openAfter === false, moved);
+    // A short tap after a long press: renames as always (nothing was left stuck to swallow)
     await js(`window.__seen.clicks = []; 'ok'`);
     await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: cx, y: cy }] });
     await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-    const renomeou = await esperar('window.__renamed >= 1', 4000);
-    check('toque curto no nome, depois disso, renomeia', renomeou === true && !(await js(tocAberto)), JSON.parse(await js('JSON.stringify(window.__seen)')));
-    console.log(`     o nome comeca em x=${Math.round(caixaNome.x)} (faixa do deslizar: ate 32px da borda)`);
+    const renamedAfter = await waitFor('window.__renamed >= 1', 4000);
+    check('toque curto no nome, depois disso, renomeia', renamedAfter === true && !(await js(tocOpen)), JSON.parse(await js('JSON.stringify(window.__seen)')));
+    console.log(`     o nome comeca em x=${Math.round(fileNameBox.x)} (faixa do deslizar: ate 32px da borda)`);
     await send('Emulation.setTouchEmulationEnabled', { enabled: false });
     await send('Emulation.clearDeviceMetricsOverride');
 
@@ -1398,58 +1398,58 @@ const FAKE_DRIVE = `
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
     await send('Emulation.setTouchEmulationEnabled', { enabled: true });
     await open(buildPage('espiar', currentApp));
-    await esperar('window.__App', 15000);
-    // Uma nota longa, com um link no comeco de cada paragrafo (o texto comeca em x=16, dentro da faixa
-    // do deslizar), aberta na leitura. Sem Drive: a busca e o conteudo da nota do outro lado sao trocados
-    const NOTA_COM_LINKS = Array.from({ length: 40 }, (_, i) => `[[Outra]] paragrafo ${i} com texto bastante pra ocupar a linha e um pouco mais`).join('\n\n');
+    await waitFor('window.__App', 15000);
+    // A long note, with a link at the start of each paragraph (the text starts at x=16, inside the swipe
+    // band), open in the reading view. No Drive: the lookup and the content of the note on the other side are swapped in
+    const LINKS_NOTE = Array.from({ length: 40 }, (_, i) => `[[Outra]] paragrafo ${i} com texto bastante pra ocupar a linha e um pouco mais`).join('\n\n');
     await js(`(() => {
       localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3)); __App.accessToken = 'fake';
       __App.findLinkedNote = async (target) => ({ base: target, note: { id: 'O', name: 'Outra.md' } });
       __App.driveGetFileContent = async () => '# Outra\\n\\ntexto da outra\\n\\n- [ ] uma tarefa';
-      __App.currentFile = { id: 'T', name: 'com links.md' }; __App.setContent(${JSON.stringify(NOTA_COM_LINKS)});
+      __App.currentFile = { id: 'T', name: 'com links.md' }; __App.setContent(${JSON.stringify(LINKS_NOTE)});
       __App.showEditor(); __App.setMode('preview'); __App.updateFileNameDisplay(); __App.isDirty = false;
       window.__seen = { start: 0, move: 0, end: 0, cancel: 0 };
       window.addEventListener('touchstart', () => window.__seen.start++, true);
       window.addEventListener('touchmove', () => window.__seen.move++, true);
       window.addEventListener('touchend', () => window.__seen.end++, true);
       window.addEventListener('touchcancel', () => window.__seen.cancel++, true);
-      // Registrado depois do app e em bolha: ve o menu do Chrome como ele chega, depois do ouvinte do app
+      // Registered after the app and in the bubble phase: sees Chrome's menu as it arrives, after the app's listener
       window.__ctx = null; document.addEventListener('contextmenu', (e) => { window.__ctx = e.defaultPrevented; });
       return 'ok'; })()`);
-    const cartaoAberto = `document.getElementById('peek-overlay').classList.contains('visible')`;
-    const topoDoLink = async () => {
+    const cardOpen = `document.getElementById('peek-overlay').classList.contains('visible')`;
+    const linkTop = async () => {
       await js(`document.getElementById('preview-container').scrollTop = 0; 'ok'`);
       return JSON.parse(await js(`JSON.stringify(document.querySelector('#preview-container a.wikilink').getBoundingClientRect())`));
     };
-    let caixaLink = await topoDoLink();
-    const lx = Math.round(caixaLink.x + Math.min(caixaLink.width / 2, 30)), ly = Math.round(caixaLink.y + caixaLink.height / 2);
-    const segurarLink = async () => {
+    let linkBox = await linkTop();
+    const lx = Math.round(linkBox.x + Math.min(linkBox.width / 2, 30)), ly = Math.round(linkBox.y + linkBox.height / 2);
+    const holdLink = async () => {
       let r = null;
-      for (let tentativa = 1; tentativa <= 3; tentativa++) {
+      for (let attempt = 1; attempt <= 3; attempt++) {
         await js(`__App.closePeek(); window.__ctx = null; window.__seen = { start: 0, move: 0, end: 0, cancel: 0 }; 'ok'`);
         await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: lx, y: ly }] });
-        await esperar('window.__seen.start >= 1', 4000);
-        const abriu = await esperar(cartaoAberto, 4000);
-        // Dedo ainda na tela: o menu do Chrome, se vier, vem agora (medido: o Edge headless nao manda
-        // contextmenu pra toque injetado, nem segurando 1,7s; o ouvinte e provado logo abaixo, direto)
+        await waitFor('window.__seen.start >= 1', 4000);
+        const opened = await waitFor(cardOpen, 4000);
+        // Finger still on the screen: Chrome's menu, if it comes, comes now (measured: headless Edge does not send
+        // contextmenu for an injected touch, not even holding for 1.7s; the listener is proven right below, directly)
         await sleep(400);
         await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-        await esperar('window.__seen.end + window.__seen.cancel >= 1', 4000);
+        await waitFor('window.__seen.end + window.__seen.cancel >= 1', 4000);
         await sleep(300);
         const seen = JSON.parse(await js('JSON.stringify(window.__seen)'));
-        r = { abriu, seen, aberto: await js(cartaoAberto), ctx: await js('window.__ctx'), file: await js('__App.currentFile && __App.currentFile.id'), view: await js('document.body.dataset.view') };
+        r = { opened, seen, openAfter: await js(cardOpen), ctx: await js('window.__ctx'), file: await js('__App.currentFile && __App.currentFile.id'), view: await js('document.body.dataset.view') };
         if (!seen.cancel) return r;
-        console.log(`     (tentativa ${tentativa} do toque longo perdida: touchcancel)`, JSON.stringify(seen));
+        console.log(`     (tentativa ${attempt} do toque longo perdida: touchcancel)`, JSON.stringify(seen));
       }
       return r;
     };
-    const leituraAntes = Number(await js(`document.getElementById('preview-container').scrollTop`));
-    const segurou = await segurarLink();
-    console.log('     segurar o link:', JSON.stringify(segurou));
-    check('segurar o link abre o cartao', segurou.abriu === true && segurou.aberto === true, segurou);
-    check('... e soltar nao navega', segurou.file === 'T' && segurou.view === 'preview', segurou);
-    check('... o menu do Chrome, se veio, chegou cancelado', segurou.ctx === null || segurou.ctx === true, segurou.ctx);
-    // O menu e a selecao, no navegador de verdade: desligados no link de nota, e so nele
+    const readingScrollBefore = Number(await js(`document.getElementById('preview-container').scrollTop`));
+    const held = await holdLink();
+    console.log('     segurar o link:', JSON.stringify(held));
+    check('segurar o link abre o cartao', held.opened === true && held.openAfter === true, held);
+    check('... e soltar nao navega', held.file === 'T' && held.view === 'preview', held);
+    check('... o menu do Chrome, se veio, chegou cancelado', held.ctx === null || held.ctx === true, held.ctx);
+    // The menu and the selection, on the real browser: off on a note link, and only there
     const menu = JSON.parse(await js(`(() => {
       const c = document.getElementById('preview-container');
       const a = c.querySelector('a.wikilink'), p = c.querySelector('p');
@@ -1457,69 +1457,69 @@ const FAKE_DRIVE = `
       return JSON.stringify({ linkCtx: ctx(a), textCtx: ctx(p), linkSelect: getComputedStyle(a).userSelect, textSelect: getComputedStyle(p).userSelect }); })()`));
     check('menu do Chrome cancelado no link de nota, nao no texto; o link nao seleciona, o texto sim',
       menu.linkCtx === true && menu.textCtx === false && menu.linkSelect === 'none' && menu.textSelect === 'text', menu);
-    const chegou = await esperar(`document.getElementById('peek-body').textContent.includes('texto da outra')`, 4000);
-    check('o cartao mostra a nota do outro lado, com o nome no topo', chegou && await js(`document.getElementById('peek-title').textContent`) === 'Outra');
-    // A regra dos campos dos dialogos (.modal input, largura cheia) nao pode esticar a caixinha da tarefa
-    const caixinha = JSON.parse(await js(`JSON.stringify(document.querySelector('#peek-body li > input[type="checkbox"]').getBoundingClientRect())`));
-    check('a caixinha de tarefa do cartao tem tamanho de caixinha, na linha do texto', caixinha.width < 30, caixinha);
-    const botoes = JSON.parse(await js(`(() => { const hit = (id) => { const b = document.getElementById(id).getBoundingClientRect();
+    const arrived = await waitFor(`document.getElementById('peek-body').textContent.includes('texto da outra')`, 4000);
+    check('o cartao mostra a nota do outro lado, com o nome no topo', arrived && await js(`document.getElementById('peek-title').textContent`) === 'Outra');
+    // The dialogs' field rule (.modal input, full width) must not stretch the task's checkbox
+    const checkbox = JSON.parse(await js(`JSON.stringify(document.querySelector('#peek-body li > input[type="checkbox"]').getBoundingClientRect())`));
+    check('a caixinha de tarefa do cartao tem tamanho de caixinha, na linha do texto', checkbox.width < 30, checkbox);
+    const peekButtons = JSON.parse(await js(`(() => { const hit = (id) => { const b = document.getElementById(id).getBoundingClientRect();
       const el = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2); return { hit: !!el && !!el.closest('#' + id), bottom: Math.round(b.bottom), h: Math.round(b.height) }; };
       const card = document.querySelector('#peek-overlay .modal').getBoundingClientRect();
-      return JSON.stringify({ abrir: hit('peek-open'), fechar: hit('peek-close'), card: { top: Math.round(card.top), bottom: Math.round(card.bottom), h: Math.round(card.height) } }); })()`));
-    console.log('     cartao:', JSON.stringify(botoes));
-    check('o Abrir e o Fechar sao tocaveis, dentro da tela', botoes.abrir.hit && botoes.fechar.hit && botoes.abrir.bottom <= 844 && botoes.fechar.bottom <= 844, botoes);
-    check('... e a leitura de baixo nao rolou', Number(await js(`document.getElementById('preview-container').scrollTop`)) === leituraAntes);
+      return JSON.stringify({ open: hit('peek-open'), close: hit('peek-close'), card: { top: Math.round(card.top), bottom: Math.round(card.bottom), h: Math.round(card.height) } }); })()`));
+    console.log('     cartao:', JSON.stringify(peekButtons));
+    check('o Abrir e o Fechar sao tocaveis, dentro da tela', peekButtons.open.hit && peekButtons.close.hit && peekButtons.open.bottom <= 844 && peekButtons.close.bottom <= 844, peekButtons);
+    check('... e a leitura de baixo nao rolou', Number(await js(`document.getElementById('preview-container').scrollTop`)) === readingScrollBefore);
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-    check('o voltar de verdade (Esc) fecha o cartao e fica na nota', await esperar(`!(${cartaoAberto})`, 4000) && await js(`__App.currentFile.id`) === 'T');
+    check('o voltar de verdade (Esc) fecha o cartao e fica na nota', await waitFor(`!(${cardOpen})`, 4000) && await js(`__App.currentFile.id`) === 'T');
 
-    // Rolar a leitura com o dedo comecando em cima de um link: rola, e nenhum cartao
-    let rolagem = null;
-    for (let tentativa = 1; tentativa <= 3; tentativa++) {
-      caixaLink = await topoDoLink();
+    // Scrolling the reading view with the finger starting on top of a link: it scrolls, and no card
+    let scrolling = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      linkBox = await linkTop();
       await js(`__App.closePeek(); window.__seen = { start: 0, move: 0, end: 0, cancel: 0 }; 'ok'`);
       await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: lx, y: ly }] });
       for (let i = 1; i <= 10; i++) {
         await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: lx, y: ly - 8 * i }] });
         await sleep(16);
       }
-      await esperar('window.__seen.move >= 10', 4000);
+      await waitFor('window.__seen.move >= 10', 4000);
       await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-      await esperar('window.__seen.end + window.__seen.cancel >= 1', 4000);
-      // Passado o tempo do toque longo desde o comeco: nada abriu
+      await waitFor('window.__seen.end + window.__seen.cancel >= 1', 4000);
+      // Once the long press time has passed since the start: nothing opened
       await sleep(800);
       const seen = JSON.parse(await js('JSON.stringify(window.__seen)'));
-      rolagem = { seen, scrollTop: Number(await js(`document.getElementById('preview-container').scrollTop`)), aberto: await js(cartaoAberto) };
-      if (!seen.cancel || rolagem.scrollTop > 0) break;
-      console.log(`     (tentativa ${tentativa} da rolagem perdida: touchcancel)`, JSON.stringify(seen));
+      scrolling = { seen, scrollTop: Number(await js(`document.getElementById('preview-container').scrollTop`)), openAfter: await js(cardOpen) };
+      if (!seen.cancel || scrolling.scrollTop > 0) break;
+      console.log(`     (tentativa ${attempt} da rolagem perdida: touchcancel)`, JSON.stringify(seen));
     }
-    console.log('     rolar em cima do link:', JSON.stringify(rolagem));
-    check('arrastar 80px pra cima comecando no link rola a leitura e nao abre cartao', rolagem.scrollTop > 0 && rolagem.aberto === false, rolagem);
+    console.log('     rolar em cima do link:', JSON.stringify(scrolling));
+    check('arrastar 80px pra cima comecando no link rola a leitura e nao abre cartao', scrolling.scrollTop > 0 && scrolling.openAfter === false, scrolling);
 
-    // Deslizar da borda comecando em cima de um link (o nome da nota comeca fora da faixa, ver o 22):
-    // o deslizar volta e o cartao nao abre
-    caixaLink = await topoDoLink();
-    const naBorda = JSON.parse(await js(`(() => { const el = document.elementFromPoint(20, ${ly}); return JSON.stringify({ link: !!el && !!el.closest('#preview-container a.wikilink'), x: ${Math.round(caixaLink.x)} }); })()`));
-    check('(o dedo em x=20 cai em cima do link)', naBorda.link, naBorda);
-    let deslizou = null;
-    for (let tentativa = 1; tentativa <= 3; tentativa++) {
+    // An edge swipe starting on top of a link (the note's name starts outside the band, see 22):
+    // the swipe goes back and the card does not open
+    linkBox = await linkTop();
+    const atEdge = JSON.parse(await js(`(() => { const el = document.elementFromPoint(20, ${ly}); return JSON.stringify({ link: !!el && !!el.closest('#preview-container a.wikilink'), x: ${Math.round(linkBox.x)} }); })()`));
+    check('(o dedo em x=20 cai em cima do link)', atEdge.link, atEdge);
+    let swiped = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
       await js(`__App.closePeek(); window.__seen = { start: 0, move: 0, end: 0, cancel: 0 }; 'ok'`);
       await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 20, y: ly }] });
       for (let i = 1; i <= 8; i++) {
         await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 20 + 130 * i / 8, y: ly }] });
         await sleep(16);
       }
-      await esperar('__App._swipe && __App._swipe.armed === true', 4000);
+      await waitFor('__App._swipe && __App._swipe.armed === true', 4000);
       await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-      const voltou = await esperar(`document.body.dataset.view === 'welcome'`, 4000);
+      const wentBack = await waitFor(`document.body.dataset.view === 'welcome'`, 4000);
       await sleep(800);
       const seen = JSON.parse(await js('JSON.stringify(window.__seen)'));
-      deslizou = { voltou, seen, aberto: await js(cartaoAberto), view: await js('document.body.dataset.view') };
-      if (voltou) break;
-      console.log(`     (tentativa ${tentativa} do deslizar perdida)`, JSON.stringify(deslizou));
+      swiped = { wentBack, seen, openAfter: await js(cardOpen), view: await js('document.body.dataset.view') };
+      if (wentBack) break;
+      console.log(`     (tentativa ${attempt} do deslizar perdida)`, JSON.stringify(swiped));
     }
-    console.log('     deslizar da borda em cima do link:', JSON.stringify(deslizou));
-    check('deslizar da borda comecando num link volta, e o cartao nao abre', deslizou.voltou === true && deslizou.aberto === false, deslizou);
+    console.log('     deslizar da borda em cima do link:', JSON.stringify(swiped));
+    check('deslizar da borda comecando num link volta, e o cartao nao abre', swiped.wentBack === true && swiped.openAfter === false, swiped);
     await send('Emulation.setTouchEmulationEnabled', { enabled: false });
     await send('Emulation.clearDeviceMetricsOverride');
   } finally {

@@ -136,7 +136,7 @@ const EVERY_DOCUMENT = `(() => {
     throw new Error(`Profile in use (${e.code}): an Edge left open by an earlier run? See drive-notes-aprendizados, Testes`);
   }
   const browser = await launch(DEBUG_PORT);
-  const { send, js, esperar } = browser;
+  const { send, js, waitFor } = browser;
 
   const state = () => js(`(async () => ({
     loads: +sessionStorage.getItem('__loads'),
@@ -156,7 +156,7 @@ const EVERY_DOCUMENT = `(() => {
     console.log('1. Primeira abertura de todas: o service worker assume sem recarregar a pagina');
     {
       await send('Page.navigate', { url: `${ORIGIN}/index.html` });
-      const took = await esperar(`navigator.serviceWorker.controller && window.__servedVersion`, 15000);
+      const took = await waitFor(`navigator.serviceWorker.controller && window.__servedVersion`, 15000);
       await sleep(2000);
       const s = await state();
       check('o service worker assumiu a pagina', took && s.controlled, s);
@@ -168,7 +168,7 @@ const EVERY_DOCUMENT = `(() => {
     {
       deploy(2);
       await send('Page.navigate', { url: `${ORIGIN}/index.html` });
-      const arrived = await esperar(`window.__servedVersion === 2`, 20000);
+      const arrived = await waitFor(`window.__servedVersion === 2`, 20000);
       await sleep(2000);
       const s = await state();
       check('a versao 2 chegou na tela sem abrir de novo', arrived && s.served === 2, s);
@@ -183,7 +183,7 @@ const EVERY_DOCUMENT = `(() => {
       const before = await state();
       check('(controle) sem voltar do fundo, nada muda', before.served === 2 && before.loads === 3, before);
       const visibility = await resume();
-      const arrived = await esperar(`window.__servedVersion === 3`, 20000);
+      const arrived = await waitFor(`window.__servedVersion === 3`, 20000);
       await sleep(1500);
       const s = await state();
       check('voltar do fundo trouxe a versao 3', arrived && s.served === 3 && s.loads === 4, { ...s, visibility });
@@ -193,7 +193,7 @@ const EVERY_DOCUMENT = `(() => {
     {
       await js(`localStorage.setItem('__drive', JSON.stringify({ A: { id: 'A', name: 'a.md', parents: [${JSON.stringify(VAULT)}], modifiedTime: '2026-09-22T10:00:00.000Z', content: 'versao 1' } })); 'ok'`, false);
       await js(`App.navigateTo('A', 'a.md')`);
-      await esperar(`App.currentFile?.id === 'A' && document.body.dataset.view === 'preview'`, 5000);
+      await waitFor(`App.currentFile?.id === 'A' && document.body.dataset.view === 'preview'`, 5000);
       await js(`App.setMode('edit');
         const view = App.Editor._impl.view;
         view.dispatch({ changes: { from: view.state.doc.length, insert: ' com o que ela escreveu' }, userEvent: 'input.type' });
@@ -203,7 +203,7 @@ const EVERY_DOCUMENT = `(() => {
 
       deploy(4);
       await resume();
-      const offered = await esperar(`document.getElementById('update-bar')?.classList.contains('hidden') === false`, 20000);
+      const offered = await waitFor(`document.getElementById('update-bar')?.classList.contains('hidden') === false`, 20000);
       await sleep(2000);
       const s = await state();
       const still = await js(`({ dirty: App.isDirty, text: App.getContent(), mode: App.mode,
@@ -215,7 +215,7 @@ const EVERY_DOCUMENT = `(() => {
       check('... e ainda sem nada no Drive, antes do toque', still.drive === 'versao 1', still.drive);
 
       await js(`document.getElementById('update-bar')?.click(); 'ok'`);
-      const reopened = await esperar(`window.__servedVersion === 4 && App.currentFile?.id === 'A'`, 20000);
+      const reopened = await waitFor(`window.__servedVersion === 4 && App.currentFile?.id === 'A'`, 20000);
       await sleep(1000);
       const after = await state();
       const note = await js(`({ id: App.currentFile?.id, mode: App.mode, text: App.getContent(), dirty: App.isDirty,
@@ -240,7 +240,7 @@ const EVERY_DOCUMENT = `(() => {
         d.L = { id: 'L', name: 'longa.md', parents: [${JSON.stringify(VAULT)}], modifiedTime: '2026-09-22T11:00:00.000Z', content: ${JSON.stringify(long)} };
         localStorage.setItem('__drive', JSON.stringify(d)); 'ok'`, false);
       await js(`App.navigateTo('L', 'longa.md')`);
-      await esperar(`App.currentFile?.id === 'L' && document.body.dataset.view === 'preview'`, 5000);
+      await waitFor(`App.currentFile?.id === 'L' && document.body.dataset.view === 'preview'`, 5000);
       await js(`(() => {
         const c = document.getElementById('preview-container');
         const p = [...c.children].find(e => e.textContent.startsWith('paragrafo 30 '));
@@ -253,11 +253,11 @@ const EVERY_DOCUMENT = `(() => {
 
       deploy(5);
       await resume();
-      const offered = await esperar(`document.getElementById('update-bar')?.classList.contains('hidden') === false`, 20000);
+      const offered = await waitFor(`document.getElementById('update-bar')?.classList.contains('hidden') === false`, 20000);
       await sleep(2000);
       check('a versao 5 assumiu, e o aviso apareceu', offered, await state());
       await js(`document.getElementById('update-bar')?.click(); 'ok'`);
-      const reopened = await esperar(`window.__servedVersion === 5 && App.currentFile?.id === 'L' && document.body.dataset.view === 'preview'`, 20000);
+      const reopened = await waitFor(`window.__servedVersion === 5 && App.currentFile?.id === 'L' && document.body.dataset.view === 'preview'`, 20000);
       await sleep(500);
       const back = await atTop();
       check('tocar no aviso: recarregou, na versao 5, e reabriu a mesma nota na leitura', reopened, await state());
@@ -267,7 +267,7 @@ const EVERY_DOCUMENT = `(() => {
     console.log('6. Compartilhar de outro app: o service worker guarda texto e foto, e o app abre na tela Guardar em…');
     {
       await send('Page.navigate', { url: `${ORIGIN}/index.html` });
-      await esperar(`navigator.serviceWorker.controller && window.App`, 15000);
+      await waitFor(`navigator.serviceWorker.controller && window.App`, 15000);
       // What Android does with the manifest's share_target: a multipart POST to the action, as a navigation
       await js(`(() => {
         const form = document.createElement('form');
@@ -279,7 +279,7 @@ const EVERY_DOCUMENT = `(() => {
         input.files = dt.files; form.appendChild(input);
         document.body.appendChild(form); form.submit(); return 'ok';
       })()`, false);
-      const opened = await esperar(`document.getElementById('arrival-overlay')?.classList.contains('visible')`, 15000);
+      const opened = await waitFor(`document.getElementById('arrival-overlay')?.classList.contains('visible')`, 15000);
       const s = await js(`(async () => {
         const db = await new Promise((ok, no) => { const r = indexedDB.open('drivenotes-arrivals', 1); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); });
         const all = await new Promise((ok) => { const r = db.transaction('arrivals').objectStore('arrivals').getAll(); r.onsuccess = () => ok(r.result); });
@@ -306,7 +306,7 @@ const EVERY_DOCUMENT = `(() => {
       await send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
       offline = true;
       await send('Page.navigate', { url: `${ORIGIN}/index.html?atalho=nova` });
-      const opened = await esperar(`document.body.dataset.view === 'edit' && App.currentFile && !App.currentFile.id`, 15000);
+      const opened = await waitFor(`document.body.dataset.view === 'edit' && App.currentFile && !App.currentFile.id`, 15000);
       const s = await js(`(async () => ({ search: location.search,
         withQuery: (await Promise.all((await caches.keys()).map(async (k) => (await (await caches.open(k)).keys()).map((r) => r.url))))
           .flat().filter((u) => u.includes('?atalho') || u.includes('?chegada')) }))()`, false);
@@ -319,7 +319,7 @@ const EVERY_DOCUMENT = `(() => {
     console.log('8. Transcricao do gravador (.txt): o service worker le o arquivo e guarda como texto');
     {
       await send('Page.navigate', { url: `${ORIGIN}/index.html` });
-      await esperar(`navigator.serviceWorker.controller && window.App`, 15000);
+      await waitFor(`navigator.serviceWorker.controller && window.App`, 15000);
       // Two files in one share: UTF-8 with its byte order mark, and UTF-16LE with its own. The recorder's
       // encoding is unknown until the phone says; both must come out as the same letters.
       await js(`(() => {
@@ -339,7 +339,7 @@ const EVERY_DOCUMENT = `(() => {
         input.files = dt.files; form.appendChild(input);
         document.body.appendChild(form); form.submit(); return 'ok';
       })()`, false);
-      const opened = await esperar(`document.getElementById('arrival-overlay')?.classList.contains('visible')`, 15000);
+      const opened = await waitFor(`document.getElementById('arrival-overlay')?.classList.contains('visible')`, 15000);
       const s = await js(`(async () => {
         const db = await new Promise((ok, no) => { const r = indexedDB.open('drivenotes-arrivals', 1); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); });
         const all = await new Promise((ok) => { const r = db.transaction('arrivals').objectStore('arrivals').getAll(); r.onsuccess = () => ok(r.result); });
@@ -365,29 +365,29 @@ const EVERY_DOCUMENT = `(() => {
         d.E = { id: 'E', name: 'editada.md', parents: [${JSON.stringify(VAULT)}], modifiedTime: '2026-09-22T12:00:00.000Z', content: ${JSON.stringify(long)} };
         localStorage.setItem('__drive', JSON.stringify(d)); 'ok'`, false);
       await js(`App.navigateTo('E', 'editada.md')`);
-      await esperar(`App.currentFile?.id === 'E' && document.body.dataset.view === 'preview'`, 5000);
+      await waitFor(`App.currentFile?.id === 'E' && document.body.dataset.view === 'preview'`, 5000);
       // Editar with the reading at the top of the note, then the editor scrolled by hand far below it
       await js(`App.togglePreview(); 'ok'`);
-      await esperar(`document.body.dataset.view === 'edit'`, 5000);
+      await waitFor(`document.body.dataset.view === 'edit'`, 5000);
       // The editor comes out of hiding with a scroll target of its own still pending (editAtReading's
       // showLine to the top), and the library keeps applying it over a scrollTop written from outside.
       // So scroll the way the app does, with a scrollIntoView effect, which replaces that target; polled,
       // because the editor lays out 399 lines in its own time. Not through App.Editor.showLine on purpose:
       // whoever positions and whoever restores must not be the same function
-      await esperar(`(App.Editor._impl.view.dispatch({ effects: window.CM6.EditorView.scrollIntoView(App.Editor._impl.view.state.doc.line(210).from, { y: 'start' }) }), App.Editor.topLine() > 100)`, 8000);
+      await waitFor(`(App.Editor._impl.view.dispatch({ effects: window.CM6.EditorView.scrollIntoView(App.Editor._impl.view.state.doc.line(210).from, { y: 'start' }) }), App.Editor.topLine() > 100)`, 8000);
       const left = await js(`App.Editor.topLine()`, false);
       check('(o editor rolado pra longe do topo, com a leitura deixada no topo)', left > 100, left);
 
       deploy(6);
       await resume();
-      const offered = await esperar(`document.getElementById('update-bar')?.classList.contains('hidden') === false`, 20000);
+      const offered = await waitFor(`document.getElementById('update-bar')?.classList.contains('hidden') === false`, 20000);
       await sleep(2000);
       check('a versao 6 assumiu, e o aviso apareceu', offered, await state());
       await js(`document.getElementById('update-bar')?.click(); 'ok'`);
-      const reopened = await esperar(`window.__servedVersion === 6 && App.currentFile?.id === 'E' && document.body.dataset.view === 'edit'`, 20000);
+      const reopened = await waitFor(`window.__servedVersion === 6 && App.currentFile?.id === 'E' && document.body.dataset.view === 'edit'`, 20000);
       // The editor is put back on its line once the note is in: wait for it to have left the top.
       // A real regression (the editor staying on line 1) runs the limit out, and the check below still fails
-      await esperar(`App.Editor.topLine() > 100`, 8000);
+      await waitFor(`App.Editor.topLine() > 100`, 8000);
       const back = await js(`App.Editor.topLine()`, false);
       console.log('     linha do topo do editor, antes e depois:', JSON.stringify({ left, back }));
       check('tocar no aviso: recarregou, na versao 6, e reabriu a mesma nota no editor', reopened, await state());

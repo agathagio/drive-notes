@@ -10,14 +10,14 @@ const MODULES = path.join(ROOT, 'node_modules');
 
 // Same files index.html loads from the CDNs, from the versions pinned in package.json
 const LIBS = {
-  // O app nao carrega mais o TinyMDE. Quem ainda precisa desta entrada e o controle historico do
-  // cenario 1 da suite de navegador, que roda o app de um commit anterior a troca de editor.
+  // The app no longer loads TinyMDE. What still needs this entry is the historical control of
+  // scenario 1 of the browser suite, which runs the app of a commit from before the editor swap.
   //
-  // Por isso o `tiny-markdown-editor` fica nas devDependencies DE PROPOSITO, mesmo depois da
-  // troca de editor: nao e sobra. Sem a biblioteca, o app antigo cai no textarea de reserva e o
-  // controle deixa de provar que o bug do ditado existia, que e a unica razao de ele rodar.
+  // That is why `tiny-markdown-editor` stays in devDependencies ON PURPOSE, even after the
+  // editor swap: it is not a leftover. Without the library, the old app falls back to the textarea and
+  // the control stops proving that the dictation bug existed, which is the only reason it runs.
   tinymde: path.join(MODULES, 'tiny-markdown-editor', 'dist', 'tiny-mde.js'),
-  // O pacote único gerado por esbuild, o mesmo arquivo que o index.html carrega
+  // The single bundle built by esbuild, the same file index.html loads
   cm6: path.join(ROOT, 'vendor', 'codemirror.js'),
   marked: path.join(MODULES, 'marked', 'marked.min.js'),
   purify: path.join(MODULES, 'dompurify', 'dist', 'purify.min.js'),
@@ -33,8 +33,8 @@ function tmpDir() {
 /**
  * Versions the app loads in production, read from the script tags in index.html.
  *
- * So o marked e o dompurify: o editor nao e mais uma CDN com versao no caminho, e sim o
- * vendor/codemirror.js versionado no repositorio, que nao tem numero nenhum pra comparar.
+ * Only marked and dompurify: the editor is no longer a CDN with a version in the path, but
+ * vendor/codemirror.js, versioned in the repository, which has no number at all to compare.
  */
 function cdnVersions() {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
@@ -87,13 +87,13 @@ function appSource() {
  * the app of an old commit, passes that commit's index.html too; without it the app.js tag would not
  * be found, and the page would run the current app without anyone noticing.
  *
- * O CodeMirror 6 nao precisa de troca nenhuma: o index.html carrega `vendor/codemirror.js` por
- * caminho relativo, e o <base> acima resolve isso dentro do proprio repositorio. O TinyMDE entra
- * por pedido, `{ tinymde: true }`, e quem pede e o controle historico do ditado (cenario 1 da suite
- * de navegador): ele roda o app de um commit anterior a troca de editor, que e TinyMDE puro e sem a
- * biblioteca cai no textarea de reserva. O index.html daquele commit carrega a lib do unpkg, e essa
- * tag vira a copia local do node_modules (ou sai, se ninguem pediu). Um index.html sem essa tag,
- * como o da arvore de hoje, recebe a copia local no fim do head quando ela e pedida.
+ * CodeMirror 6 needs no swap at all: index.html loads `vendor/codemirror.js` by a relative
+ * path, and the <base> above resolves that inside the repository itself. TinyMDE comes in on
+ * request, `{ tinymde: true }`, and the one asking is the historical dictation control (scenario 1
+ * of the browser suite): it runs the app of a commit from before the editor swap, which is pure
+ * TinyMDE and without the library falls back to the textarea. That commit's index.html loads the lib
+ * from unpkg, and that tag becomes the local copy from node_modules (or goes, if nobody asked). An
+ * index.html without that tag, like today's tree, gets the local copy at the end of head when it is asked for.
  */
 function buildPage(name, source, { tinymde = false, html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8') } = {}) {
   const dir = tmpDir();
@@ -149,39 +149,39 @@ async function launch(port) {
   const open = async (url) => { await send('Page.navigate', { url }); await sleep(1200); };
 
   /**
-   * Espera a pagina responder verdadeiro a `expressao`, em vez de dormir um tempo fixo.
-   * Devolve true se chegou, false se estourou o limite (quem chama decide o que fazer).
+   * Waits for the page to answer true to `expression`, instead of sleeping a fixed time.
+   * Returns true if it got there, false if it ran past the limit (the caller decides what to do).
    *
-   * Por que existe: toque e tecla injetados por `Input.dispatch*` entram por uma fila do
-   * navegador que NAO e a mesma do `Runtime.evaluate`. Quando o renderizador headless engasga
-   * (medido: cinco segundos entre o toque e o app reagir), uma leitura marcada no relogio chega
-   * antes de o app ter visto o gesto e a checagem fica vermelha sem nada estar quebrado. Quem
-   * espera uma condicao paga so o tempo que precisa, e no limite devolve false em vez de mentir.
+   * Why it exists: touches and keys injected by `Input.dispatch*` come in through a browser queue
+   * that is NOT the same as the one of `Runtime.evaluate`. When the headless renderer stalls
+   * (measured: five seconds between the touch and the app reacting), a read timed by the clock arrives
+   * before the app has seen the gesture and the check goes red with nothing broken. Whoever waits
+   * for a condition pays only the time it needs, and at the limit returns false instead of lying.
    *
-   * Espere um sinal ANTERIOR ao que a checagem olha (o app ter registrado o arrasto, e nao a seta
-   * estar pintada): assim uma regressao de verdade continua ficando vermelha, so que mais devagar.
-   * A expressao pode estourar enquanto a pagina nao esta pronta, e isso conta como "ainda nao".
+   * Wait for a signal EARLIER than the one the check looks at (the app having registered the drag,
+   * and not the arrow being painted): that way a real regression still goes red, only more slowly.
+   * The expression may throw while the page is not ready, and that counts as "not yet".
    */
-  const esperar = async (expressao, limite = 8000, passo = 50) => {
-    let ate = Date.now() + limite;
+  const waitFor = async (expression, limit = 8000, step = 50) => {
+    let deadline = Date.now() + limit;
     for (;;) {
       const t0 = Date.now();
-      let pronto = false;
-      try { pronto = await js(`!!(${expressao})`, false) === true; } catch { /* ainda nao */ }
-      // O tempo que o navegador levou pra responder nao conta no limite. Quando ele engasga, a
-      // resposta demora e chega descrevendo um instante anterior aos eventos que ainda estao na
-      // fila: sem descontar, uma unica pergunta lenta gastaria o limite inteiro e a espera
-      // desistiria sem nunca ter perguntado de novo (visto na primeira versao desta funcao).
-      ate += Date.now() - t0;
-      if (pronto) return true;
-      if (Date.now() >= ate) return false;
-      await sleep(passo);
+      let ready = false;
+      try { ready = await js(`!!(${expression})`, false) === true; } catch { /* not yet */ }
+      // The time the browser took to answer does not count toward the limit. When it stalls, the
+      // answer is slow and arrives describing an instant earlier than the events still in the
+      // queue: without discounting it, a single slow question would spend the whole limit and the wait
+      // would give up without ever having asked again (seen in the first version of this function).
+      deadline += Date.now() - t0;
+      if (ready) return true;
+      if (Date.now() >= deadline) return false;
+      await sleep(step);
     }
   };
 
   await send('Page.enable');
   await send('Emulation.setFocusEmulationEnabled', { enabled: true });
-  return { send, js, open, esperar, close: () => { ws.close(); proc.kill(); } };
+  return { send, js, open, waitFor, close: () => { ws.close(); proc.kill(); } };
 }
 
 /** Counts and prints checks; done() prints the verdict and exits with it */

@@ -1,50 +1,50 @@
 /* Drive Notes: Mobile-first dark theme */
 
 :root {
-  /* Os controles que o navegador desenha sozinho seguem o esquema declarado aqui, não o CSS.
-     Sem isto, a caixa VAZIA de uma tarefa sai branca no meio do texto escuro (a marcada já
-     pega o accent-color roxo de qualquer jeito), e a barra de rolagem sai clara. */
+  /* The controls the browser draws on its own follow the scheme declared here, not the CSS.
+     Without this, the EMPTY box of a task comes out white in the middle of the dark text (the
+     checked one picks up the purple accent-color anyway), and the scrollbar comes out light. */
   color-scheme: dark;
 
-  /* Cinza neutro, sem azul: o mesmo terreno do tema escuro padrão do Obsidian, pra o app e o
-     vault parecerem a mesma casa. O degrau é o contrário do que era: o corpo e o editor ficam
-     no tom mais escuro e o cromo (cabeçalho, barras) sobe, em vez do editor ser um buraco. */
+  /* Neutral grey, no blue: the same ground as Obsidian's default dark theme, so the app and the
+     vault look like the same house. The step is the reverse of what it was: the body and the editor
+     sit on the darkest tone and the chrome (header, bars) rises, instead of the editor being a hole. */
   --bg-primary: #1c1b1f;
   --bg-secondary: #242229;
   --bg-editor: #1c1b1f;
   --text-primary: #e4e0e8;
   --text-secondary: #928d99;
-  /* Dois tons do mesmo roxo, com papéis separados: o mais saturado preenche (cursor, checkbox,
-     barra de callout), o mais claro escreve (títulos, links), porque texto precisa de contraste. */
+  /* Two tones of the same purple, with separate roles: the more saturated one fills (cursor, checkbox,
+     callout bar), the lighter one writes (headings, links), because text needs contrast. */
   --accent: #8b6cef;
   --accent-hover: #a68dff;
   --border: #35323d;
   --toolbar-bg: #242229;
   --button-bg: #2f2c36;
   --button-hover: #3a3644;
-  /* Fundo do código, na leitura e no editor. Branco transparente, e não um cinza fixo, pra
-     funcionar por cima de qualquer uma das camadas escuras. Quem usa no editor é o realce de
-     sintaxe do CodeMirror, montado no app/editor-cm6.js: ele lê esta variável, não um hex próprio. */
+  /* Code background, in the reading view and in the editor. Transparent white, and not a fixed grey,
+     so it works over any of the dark layers. In the editor, the one using it is CodeMirror's syntax
+     highlighting, built in app/editor-cm6.js: it reads this variable, not a hex of its own. */
   --code-bg: rgba(255,255,255,0.08);
   /* The faintest surface: a table's even row, a callout, a code block. White, barely there, so it
      works over any of the dark layers, like --code-bg. */
   --faint-bg: rgba(255,255,255,0.04);
-  /* Marca-texto (==texto== na nota). O mesmo roxo do accent, transparente: por cima do fundo
-     escuro ele fica discreto o bastante para o texto continuar legível, e acompanha a paleta
-     em vez de fixar um amarelo de caneta. */
+  /* Highlighter (==text== in the note). The same purple as the accent, transparent: over the dark
+     background it stays subtle enough for the text to remain readable, and it follows the palette
+     instead of fixing a marker-pen yellow. */
   --mark-bg: color-mix(in srgb, var(--accent) 40%, transparent);
-  /* Desbotados de propósito: os cheios do Material antigo gritavam mais alto que o nome da nota */
+  /* Faded on purpose: the full-strength ones from the old Material shouted louder than the note's name */
   --success: #6bbf7b;
   --warning: #e0a458;
   --error: #e5707b;
-  /* Figtree na interface, IBM Plex Mono no editor. Vêm do Google Fonts; sem rede o fallback
-     do sistema assume, e o layout não muda de tamanho porque as métricas são parecidas. */
+  /* Figtree in the interface, IBM Plex Mono in the editor. They come from Google Fonts; without a
+     network the system fallback takes over, and the layout does not change size because the metrics are close. */
   --font-ui: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Fira Code", monospace;
-  /* Roxo da paleta de desenho: os outros cinco hexes vivem no SKETCH_COLORS do app/sketch.js */
+  /* Purple of the drawing palette: the other five hexes live in SKETCH_COLORS in app/sketch.js */
   --sketch-purple: #8b6cef;
-  /* Respiro entre grupos de uma lista na leitura: uma linha em branco, do tamanho de uma linha de
-     texto (o line-height do .preview-container). Mudou o line-height de lá, mude este junto. */
+  /* Breathing room between groups of a list in the reading view: one blank line, the height of a line
+     of text (the line-height of .preview-container). If the line-height there changes, change this one too. */
   --list-gap: 1.65em;
   /* Shadow under the play mark on a YouTube cover: without it the light triangle vanishes on a light
      cover. Black and soft, so it works over any picture. */
@@ -149,9 +149,9 @@ textarea {
   flex-shrink: 0;
 }
 
-/* Versão nova pronta: uma faixa embaixo do cabeçalho, a faixa inteira é o toque. Discreta de
-   propósito, no ritmo de vários deploys por dia ela aparece quase todo dia. Só o "atualizar"
-   leva o roxo que escreve, como um link. */
+/* New version ready: a strip under the header, the whole strip is the tap target. Discreet on
+   purpose: at a pace of several deploys a day it shows up almost every day. Only the "atualizar"
+   gets the purple that writes, like a link. */
 .update-bar {
   flex-shrink: 0;
   width: 100%;
@@ -207,14 +207,14 @@ textarea {
   font-size: 16px;
 }
 
-/* Ícones de traço. Quem desenha um emoji é a fonte de emoji do sistema: ela não herda cor
-   nenhuma, ignora a paleta e muda de forma a cada fabricante de Android. O SVG pega o
-   currentColor do botão, então acompanha o tema, inclusive quando o botão fica ativo e a
-   cor vira branco. O display:block tira a folga de linha de base que um SVG em linha deixa
-   embaixo; o margin auto centraliza dentro do .toolbar-btn, que centraliza por text-align.
-   O pointer-events:none mantém o botão como alvo do toque: sem ele o e.target passa a ser o
-   desenho, e quem decide olhando pro alvo (o deslizar da borda, em onSwipeStart) teria que
-   atravessar o SVG pra achar o botão. */
+/* Stroke icons. An emoji is drawn by the system's emoji font: it inherits no color at all,
+   ignores the palette and changes shape with every Android maker. The SVG takes the button's
+   currentColor, so it follows the theme, including when the button turns active and the
+   color becomes white. The display:block removes the baseline gap an inline SVG leaves
+   underneath; the margin auto centers it inside the .toolbar-btn, which centers by text-align.
+   The pointer-events:none keeps the button as the tap target: without it e.target becomes the
+   drawing, and whatever decides by looking at the target (the edge swipe, in onSwipeStart) would
+   have to go through the SVG to find the button. */
 .btn-icon svg,
 .toolbar-btn svg,
 .sketch-tool svg {
@@ -233,8 +233,8 @@ textarea {
   flex-direction: column;
 }
 
-/* O editor monta a árvore dele dentro do #editor, e os dois precisam entrar na cadeia de flex
-   pra o texto rolar por dentro em vez de estourar o container. */
+/* The editor builds its tree inside #editor, and both need to join the flex chain
+   so the text scrolls inside instead of overflowing the container. */
 #editor {
   flex: 1 1 0;
   min-height: 0;
@@ -242,21 +242,21 @@ textarea {
   flex-direction: column;
 }
 
-/* ── Editor CodeMirror 6 ──
-   O CM6 monta .cm-editor > .cm-scroller > .cm-content dentro do #editor, e divide entre os três
-   o trabalho: quem entra no flex é o .cm-editor, quem rola por dentro é o .cm-scroller (e é nele
-   que o CM6 espera as regras de fonte), e o recuo do texto é do .cm-content.
-   Fonte, tamanho, entrelinha, recuo e fundo são os mesmos que o editor tinha antes da troca, de
-   propósito. As cores do texto vêm do syntaxHighlighting no app/editor-cm6.js, não daqui.
-   Uma ressalva no recuo: os 16px do .cm-content são os de sempre, mas o tema de fábrica do CM6 põe
-   `padding: 0 2px 0 6px` na .cm-line, então o texto começa a 22px da borda e termina a 18px, e não
-   a 16px dos dois lados. Fica assim de propósito: esses 6px são o que impede o cursor na coluna 0
-   de ficar colado na borda.
+/* ── CodeMirror 6 editor ──
+   CM6 builds .cm-editor > .cm-scroller > .cm-content inside #editor, and splits the work among the
+   three: the one that joins the flex is .cm-editor, the one that scrolls inside is .cm-scroller (and it
+   is there that CM6 expects the font rules), and the text inset belongs to .cm-content.
+   Font, size, line height, inset and background are the same the editor had before the switch, on
+   purpose. The text colors come from the syntaxHighlighting in app/editor-cm6.js, not from here.
+   One caveat on the inset: the 16px of .cm-content are the usual ones, but CM6's stock theme puts
+   `padding: 0 2px 0 6px` on .cm-line, so the text starts 22px from the edge and ends 18px from it, and
+   not 16px on both sides. It stays that way on purpose: those 6px are what keeps the cursor at column 0
+   from sticking to the edge.
 
-   Todo seletor daqui pra baixo leva o .cm-editor na frente, e não é enfeite: o CM6 injeta o tema
-   de fábrica com a classe dele na frente (`.ͼ1 .cm-scroller`), então um `.cm-scroller` sozinho
-   perde por especificidade e a regra não pega. Com duas classes dos dois lados o desempate é a
-   ordem, e o style.css vem depois (o CM6 monta o <style> dele como primeiro filho do <head>). */
+   Every selector from here down carries .cm-editor in front, and it is not decoration: CM6 injects its
+   stock theme with its own class in front (`.ͼ1 .cm-scroller`), so a bare `.cm-scroller` loses on
+   specificity and the rule does not apply. With two classes on both sides the tie-break is the
+   order, and style.css comes later (CM6 mounts its <style> as the first child of <head>). */
 .cm-editor {
   flex: 1 1 0;
   min-height: 0;
@@ -264,7 +264,7 @@ textarea {
   color: var(--text-primary);
 }
 
-/* O CM6 de fábrica desenha um contorno pontilhado em volta do editor inteiro quando ele tem foco */
+/* Stock CM6 draws a dotted outline around the whole editor when it has focus */
 .cm-editor.cm-focused {
   outline: none;
 }
@@ -285,12 +285,12 @@ textarea {
   padding: 16px 16px 50vh;
 }
 
-/* O drawSelection esconde o cursor e a seleção do navegador e desenha os dois em camadas
-   próprias. O tema de fábrica do CM6 pinta essas camadas pra fundo claro: cursor preto
-   (invisível aqui) e seleção cinza-clara (texto ilegível por cima). Não adianta pôr
-   `caret-color` no .cm-content: o drawSelection zera ele com `!important`, e quem aparece na
-   tela é o .cm-cursor. A segunda linha da seleção é comprida porque a do CM6 pro editor em
-   foco tem quatro classes, e um seletor mais curto perderia dela. */
+/* drawSelection hides the browser's cursor and selection and draws both in layers of its
+   own. CM6's stock theme paints those layers for a light background: black cursor
+   (invisible here) and light-grey selection (text unreadable on top of it). Putting
+   `caret-color` on .cm-content does not help: drawSelection resets it with `!important`, and what
+   shows on screen is .cm-cursor. The second selection line is long because CM6's own one for the
+   focused editor has four classes, and a shorter selector would lose to it. */
 .cm-editor .cm-cursor {
   border-left-color: var(--accent);
 }
@@ -299,15 +299,15 @@ textarea {
   background: var(--button-hover);
 }
 
-/* O bloco de propriedades (`---` ... `---` no começo da nota) e os colchetes que não são link.
-   Quem marca as linhas e os trechos é o campo de decoração do createCM6Editor, no app/editor-cm6.js: o parser de
-   markdown do CM6 lê o bloco como título setext de nível 2, e lê `[[wikilink]]`, `[!note]` e
-   `tags: [a, b]` como link de referência sem destino. Sem estas duas regras, as propriedades saem
-   grandes, roxas e em negrito na primeira tela de toda nota, e os três colchetes saem sublinhados.
-   As regras alcançam também os <span> de dentro da linha, que é onde o realce põe tamanho, peso e
-   cor: mexer só na linha não adiantaria.
-   `1em` e não `15px`: cada span volta ao tamanho do pai, então a conta continua saindo do
-   .cm-scroller se o tamanho do editor mudar. */
+/* The properties block (`---` ... `---` at the start of the note) and the brackets that are not links.
+   What marks the lines and the spans is the decoration field of createCM6Editor, in app/editor-cm6.js: CM6's
+   markdown parser reads the block as a level-2 setext heading, and reads `[[wikilink]]`, `[!note]` and
+   `tags: [a, b]` as a reference link with no destination. Without these two rules, the properties come out
+   big, purple and bold on the first screen of every note, and the three brackets come out underlined.
+   The rules also reach the <span>s inside the line, which is where the highlighting puts size, weight and
+   color: touching only the line would not be enough.
+   `1em` and not `15px`: each span goes back to its parent's size, so the math still comes from
+   .cm-scroller if the editor's size changes. */
 .cm-editor .cm-line.frontmatter-line,
 .cm-editor .cm-line.frontmatter-line span {
   font-size: 1em;
@@ -316,12 +316,12 @@ textarea {
   text-decoration: none;
 }
 
-/* `inherit` e não uma cor fixa: o span da decoração envolve os spans do realce (medido no pacote
-   real), então herdar devolve o colchete pra cor da linha onde ele está, e dentro do bloco de
-   propriedades quem manda é a regra de cima, que é mais específica.
-   Medido também: numa citação o realce pinta cada pedaço da linha num span irmão, e não num que
-   envolve a linha toda, então `[!note]` sai na cor do texto comum e não na cor apagada da citação
-   em volta. É texto comum, que é o que foi pedido, só um tom mais claro que a citação. */
+/* `inherit` and not a fixed color: the decoration span wraps the highlighting spans (measured on the
+   real package), so inheriting gives the bracket back the color of the line it sits on, and inside the
+   properties block the rule above wins, since it is more specific.
+   Also measured: in a quote the highlighting paints each piece of the line in a sibling span, and not in
+   one that wraps the whole line, so `[!note]` comes out in the plain text color and not in the faded
+   color of the quote around it. It is plain text, which is what was asked for, just a shade lighter than the quote. */
 .cm-editor .plain-brackets,
 .cm-editor .plain-brackets span {
   color: inherit;
@@ -447,7 +447,7 @@ textarea {
 /* The item that follows a blank line in the note: the only place where a list opens up (see app/markdown.js) */
 .preview-container li.gap { margin-top: var(--list-gap); }
 
-/* Marca-texto: ==texto== na nota (ver markExtension no app/markdown.js) */
+/* Highlighter: ==text== in the note (see markExtension in app/markdown.js) */
 mark {
   background: var(--mark-bg);
   color: inherit;
@@ -685,9 +685,9 @@ mark {
   overflow-x: auto;
   flex-shrink: 0;
   -webkit-overflow-scrolling: touch;
-  /* O dedo arrastado em cima dos botoes rola a barra, e so de lado: o navegador ja sabe disso no
-     comeco do gesto, sem esperar pra ver. O toque em si continua sendo do botao (ver
-     bindToolbarButton), e o deslizar da borda ignora a barra de proposito (ver onSwipeStart). */
+  /* A finger dragged over the buttons scrolls the bar, and only sideways: the browser knows this at
+     the start of the gesture, without waiting to see. The tap itself still belongs to the button (see
+     bindToolbarButton), and the edge swipe ignores the bar on purpose (see onSwipeStart). */
   touch-action: pan-x;
   position: fixed;
   bottom: 0;
@@ -702,9 +702,9 @@ mark {
   color: var(--text-secondary);
   border: none;
   border-radius: 4px;
-  /* Largura fixa, nao flexivel: item de flex encolhe ate o piso antes de estourar o container,
-     e era por isso que a barra nunca rolava apesar do overflow-x: auto. 44px e o alvo de dedo
-     recomendado, e e maior que os 30px que os botoes acabavam tendo espremidos. */
+  /* Fixed width, not flexible: a flex item shrinks down to its floor before overflowing the container,
+     and that is why the bar never scrolled despite the overflow-x: auto. 44px is the recommended finger
+     target, and it is bigger than the 30px the buttons ended up with when squeezed. */
   flex: 0 0 44px;
   padding: 8px 2px;
   font-size: 14px;
@@ -941,7 +941,7 @@ body.has-selection .toolbar-btn.toolbar-extract {
   white-space: normal;
 }
 
-/* ── Guardar em… / Anotar em… (App.openArrivalSheet) ── */
+/* ── The "Guardar em…" / "Anotar em…" sheet (App.openArrivalSheet) ── */
 
 /* What arrived, at the top: three lines at most, the rest cut. The space above and below is a border in
    the box's own color, not padding: overflow cuts at the padding's outer edge, and a long text showed
@@ -1363,7 +1363,7 @@ body[data-view="preview"] .file-name {
   }
 }
 
-/* ── Tela de desenho ── */
+/* ── Drawing screen ── */
 
 .sketch-screen {
   position: fixed;

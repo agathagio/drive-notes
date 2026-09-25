@@ -115,7 +115,7 @@ function makeDrive() {
       if (drive.failWrites) return json({}, 500);
       const f = drive.files.get(m[1]);
       const patch = JSON.parse(opts.body);
-      // A lixeira do Drive: o arquivo continua existindo, so para de aparecer nas buscas
+      // The Drive's trash: the file still exists, it just stops showing up in searches
       if (patch.trashed) {
         if (drive.failTrash) return json({}, 500);
         f.trashed = true; f.modifiedTime = drive.tick();
@@ -234,13 +234,13 @@ async function boot({ auth = true, seedStorage = {}, seedSession = {}, watcher =
   };
   const drafts = () => App.listDrafts();
   if (editor) {
-    // O jsdom nao tem layout: o CM6 mede texto por Range.getClientRects e estoura dentro de um
-    // requestAnimationFrame (erro assincrono, barulhento, que nao quebra asserção mas polui).
-    // Devolver lista vazia cala a medicao sem tocar no estado, que e o que os testes checam.
-    const vazio = () => Object.assign([], { item: () => null });
-    w.Range.prototype.getClientRects = vazio;
+    // jsdom has no layout: CM6 measures text through Range.getClientRects and throws inside a
+    // requestAnimationFrame (an async error, noisy, that breaks no assertion but pollutes).
+    // Returning an empty list silences the measuring without touching the state, which is what the tests check.
+    const empty = () => Object.assign([], { item: () => null });
+    w.Range.prototype.getClientRects = empty;
     w.Range.prototype.getBoundingClientRect = () => new w.DOMRect(0, 0, 0, 0);
-    w.Element.prototype.getClientRects = vazio;
+    w.Element.prototype.getClientRects = empty;
     w.eval(fs.readFileSync(LIBS.cm6, 'utf8'));
     const host = w.document.createElement('div');
     w.document.body.appendChild(host);
@@ -251,54 +251,54 @@ async function boot({ auth = true, seedStorage = {}, seedSession = {}, watcher =
 }
 
 /**
- * Enter de verdade: um keydown no elemento editavel do CM6, que e por onde ele escuta, no celular
- * e aqui. E a unica forma de testar Enter que prova alguma coisa. Chamar o comando na mao pula o
- * keymap, e e no keymap que mora a ordem entre o Enter do app e o da biblioteca: foi assim que o
- * binding do commit 5f96e08, que nunca rodou no app, passou batido pela suite inteira.
+ * A real Enter: a keydown on CM6's editable element, which is where it listens, on the phone
+ * and here. It is the only way of testing Enter that proves anything. Calling the command by hand skips
+ * the keymap, and it is in the keymap that the order between the app's Enter and the library's lives: that
+ * is how the binding of commit 5f96e08, which never ran in the app, slipped past the whole suite.
  */
-function apertarEnter(w, view) {
+function pressEnter(w, view) {
   view.contentDOM.dispatchEvent(new w.KeyboardEvent('keydown',
     { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
 }
 
 /**
- * Digita no fim do documento como uma edicao de usuario: o `userEvent` e o que faz o historico do
- * desfazer registrar a digitacao. Isto morava no app.js como App.cm6Digitar ate 21 set 2026, onde
- * era o unico lugar fora da fachada a alcancar a implementacao do editor. E codigo de teste, e o
- * lugar dele e aqui.
+ * Types at the end of the document as a user edit: the `userEvent` is what makes the undo
+ * history record the typing. This lived in app.js as App.cm6Digitar until 21 Sep 2026, where
+ * it was the only place outside the facade to reach the editor's implementation. It is test code, and
+ * its place is here.
  */
-function cm6Type(App, texto) {
+function cm6Type(App, text) {
   const view = App.Editor._impl.view;
-  view.dispatch({ changes: { from: view.state.doc.length, insert: texto }, userEvent: 'input.type' });
+  view.dispatch({ changes: { from: view.state.doc.length, insert: text }, userEvent: 'input.type' });
 }
 
 /**
- * Onde a decoracao `plain-brackets` esta AGORA, lida das fontes de decoracao do editor em vez do
- * DOM: o DOM so desenha a janela visivel, e o que este cenario precisa saber e o que o editor
- * calculou pro documento inteiro. Fonte de StateField vem como conjunto pronto; fonte de
- * ViewPlugin vem como funcao da view.
+ * Where the `plain-brackets` decoration is NOW, read from the editor's decoration sources instead of
+ * the DOM: the DOM only draws the visible window, and what this scenario needs to know is what the editor
+ * computed for the whole document. A StateField source comes as a ready set; a ViewPlugin source
+ * comes as a function of the view.
  */
-function colchetesComuns(App, w) {
+function plainBrackets(App, w) {
   const view = App.Editor._impl.view;
-  const marcas = [];
-  for (const fonte of view.state.facet(w.CM6.EditorView.decorations)) {
-    const conjunto = typeof fonte === 'function' ? fonte(view) : fonte;
-    conjunto.between(0, view.state.doc.length, (de, ate, deco) => {
-      if (deco.spec?.class === 'plain-brackets') marcas.push([de, ate]);
+  const marks = [];
+  for (const source of view.state.facet(w.CM6.EditorView.decorations)) {
+    const set = typeof source === 'function' ? source(view) : source;
+    set.between(0, view.state.doc.length, (from, to, deco) => {
+      if (deco.spec?.class === 'plain-brackets') marks.push([from, to]);
     });
   }
-  return marcas;
+  return marks;
 }
 
-/** Poe o texto, poe o cursor, aperta Enter. Devolve o texto e onde o cursor parou (linha:coluna) */
-function enterEm(App, w, conteudo, em) {
+/** Sets the text, sets the cursor, presses Enter. Returns the text and where the cursor stopped (line:column) */
+function enterAt(App, w, content, at) {
   const view = App.Editor._impl.view;
-  App.Editor.setText(conteudo);
-  view.dispatch({ selection: { anchor: em } });
-  apertarEnter(w, view);
+  App.Editor.setText(content);
+  view.dispatch({ selection: { anchor: at } });
+  pressEnter(w, view);
   const cursor = view.state.selection.main.head;
-  const linha = view.state.doc.lineAt(cursor);
-  return { text: view.state.doc.toString(), at: `${linha.number - 1}:${cursor - linha.from}` };
+  const line = view.state.doc.lineAt(cursor);
+  return { text: view.state.doc.toString(), at: `${line.number - 1}:${cursor - line.from}` };
 }
 
 /** Puts a record in the arrival box of a phone (an IndexedDB factory, see boot's `idb`), the way sw.js does */
@@ -341,23 +341,23 @@ async function scenario(title, block) {
     const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
     check('sw.js guarda no cache offline essas mesmas versoes', Object.keys(cdn).every(name => sw.includes(`${name}@${cdn[name]}/`)));
 
-    // O sw.js e quem decide se o celular pega a versao nova ou fica na velha. Arquivo nosso que o
-    // index.html carrega e que nao esta no STATIC_ASSETS nunca entra no cache: o app abre pela
-    // metade sem rede, e ninguem percebe ate o aparelho estar offline. Foi assim que o
-    // vendor/codemirror.js quase ficou de fora na troca de editor.
+    // sw.js is what decides whether the phone gets the new version or stays on the old one. A file of ours that
+    // index.html loads and that is not in STATIC_ASSETS never goes into the cache: the app opens half
+    // broken without a network, and nobody notices until the phone is offline. That is how
+    // vendor/codemirror.js almost got left out in the editor swap.
     const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-    const estaticos = /const STATIC_ASSETS = \[([\s\S]*?)\]/.exec(sw)[1];
-    const nossos = [...html.matchAll(/<script[^>]*\ssrc="(?!https?:|\/\/|data:)([^"]+)"/g)]
+    const staticAssets = /const STATIC_ASSETS = \[([\s\S]*?)\]/.exec(sw)[1];
+    const ours = [...html.matchAll(/<script[^>]*\ssrc="(?!https?:|\/\/|data:)([^"]+)"/g)]
       .map(m => m[1].replace(/^\.\//, ''));
     check('todo arquivo nosso que o index.html carrega esta no STATIC_ASSETS do sw.js',
-      nossos.length > 0 && nossos.every(src => estaticos.includes(`'./${src}'`)),
-      { nossos, faltando: nossos.filter(src => !estaticos.includes(`'./${src}'`)) });
+      ours.length > 0 && ours.every(src => staticAssets.includes(`'./${src}'`)),
+      { ours, missing: ours.filter(src => !staticAssets.includes(`'./${src}'`)) });
     // A file in app/ that index.html does not load is dead code that looks alive, and a src that does
     // not exist is a 404 on the phone. core.js comes first because it is the one that declares App.
     const loaded = appScripts(html);
     const inFolder = fs.readdirSync(path.join(ROOT, 'app')).filter(f => f.endsWith('.js')).map(f => `app/${f}`);
-    check('todo app/*.js da pasta esta no index.html', inFolder.every(f => loaded.includes(f)), { sobrando: inFolder.filter(f => !loaded.includes(f)) });
-    check('todo script do app que o index.html carrega existe', loaded.every(f => fs.existsSync(path.join(ROOT, f))), { faltando: loaded.filter(f => !fs.existsSync(path.join(ROOT, f))) });
+    check('todo app/*.js da pasta esta no index.html', inFolder.every(f => loaded.includes(f)), { leftover: inFolder.filter(f => !loaded.includes(f)) });
+    check('todo script do app que o index.html carrega existe', loaded.every(f => fs.existsSync(path.join(ROOT, f))), { missing: loaded.filter(f => !fs.existsSync(path.join(ROOT, f))) });
     check('o primeiro script do app e o app/core.js, que declara o App', loaded[0] === 'app/core.js', loaded);
 
     // The CDN scripts carry an integrity hash: the browser refuses a file that does not match it,
@@ -424,7 +424,7 @@ async function scenario(title, block) {
     check('Drive NAO foi sobrescrito', drive.files.get('A').content === 'editado no PC');
     check('dialogo de conflito visivel', App.els.conflict.classList.contains('visible'));
     check('rascunho guardado com meu texto', App.listDrafts()[0]?.content === 'editado no celular');
-    await App.save(); // autosave durante conflito
+    await App.save(); // autosave during a conflict
     check('autosave em conflito nao escreve', drive.count('PATCH') === 0);
 
     w.document.querySelector('[data-conflict="copy"]').click();
@@ -493,9 +493,9 @@ async function scenario(title, block) {
   {
     const { App, drive, type } = await boot();
     drive.delay = 40;
-    App.newFile();               // POST em andamento
+    App.newFile();               // POST in progress
     type('t1');
-    App.saveDraft();             // o que o visibilitychange faz
+    App.saveDraft();             // what visibilitychange does
     const p1 = App.save();
     type('t1 t2');
     const p2 = App.save();
@@ -513,11 +513,11 @@ async function scenario(title, block) {
     a.drive.delay = 40;
     a.App.newFile();
     a.type('texto');
-    a.App.saveDraft();           // fileId ainda null
-    await a.App._saveChain;      // create termina
+    a.App.saveDraft();           // fileId still null
+    await a.App._saveChain;      // create finishes
     const d = a.App.listDrafts()[0];
     check('rascunho agora aponta pro arquivo criado', d && d.fileId === 'new1' && !!d.baseModifiedTime, d);
-    // "reinicia o app": abre o rascunho e salva
+    // "restarts the app": opens the draft and saves
     a.App.currentFile = null; a.App.isDirty = false;
     a.App.openDraft(d.key);
     await a.App.save();
@@ -538,7 +538,7 @@ async function scenario(title, block) {
     App.renderDrafts();
     check('secao "Nao sincronizados" visivel com 1 item', !w.document.getElementById('drafts-list').classList.contains('hidden') && w.document.querySelectorAll('#drafts-ul li').length === 1);
     drive.failWrites = false;
-    App.currentFile = null; App.isDirty = false; // simula reinicio
+    App.currentFile = null; App.isDirty = false; // simulates a restart
     await App.openFile('A', 'a.md');
     check('reabrir prefere o rascunho e marca sujo', App.getContent() === 'sem rede' && App.isDirty);
     await App.save();
@@ -697,7 +697,7 @@ async function scenario(title, block) {
     const image = (id, name, parent, type = 'image/jpeg') => { drive.put(id, name, 'bin', [parent]); drive.files.get(id).mimeType = type; };
     image('I1', 'foto.jpg', 'media');
     image('D1', 'repetida.png', 'media', 'image/png');
-    image('D2', 'repetida.png', 'folderZ', 'image/png'); // mais nova: sem a regra do _media, ganharia
+    image('D2', 'repetida.png', 'folderZ', 'image/png'); // newer: without the _media rule, it would win
     drive.put('P', 'doc.pdf', 'bin', ['media']); drive.files.get('P').mimeType = 'application/pdf';
     drive.put('A', 'a.md', '![[foto.jpg]]\n\n![[foto.jpg|300]]\n\n![[_media/repetida.png|legenda]]\n\n![[doc.pdf]]\n\n![[sumiu.webp]]');
     await App.openFile('A', 'a.md');
@@ -797,7 +797,7 @@ async function scenario(title, block) {
     const ta = App.els.editorElement;
     const photo = (n) => new w.File([`bytes-${n}`], `IMG_${n}.JPG`, { type: 'image/jpeg' });
     const uploaded = () => [...drive.files.values()].filter(f => /(^|-)foto-\d/.test(f.name));
-    // O seletor devolve uma FileList; aqui basta a lista que o app percorre
+    // The picker hands back a FileList; here the list the app walks through is enough
     const pick = (...files) => {
       Object.defineProperty(App.els.photoInput, 'files', { configurable: true, value: files });
       App.els.photoInput.dispatchEvent(new w.Event('change'));
@@ -809,7 +809,7 @@ async function scenario(title, block) {
     w.document.querySelector('[data-photo="camera"]').click();
     check('galeria aceita varias, camera continua uma por vez', many.join('|') === 'true|false', many);
 
-    // Um envio por vez: contar quantos POST ficam no ar ao mesmo tempo
+    // One upload at a time: count how many POSTs are in flight at the same time
     const real = w.fetch;
     let flying = 0, most = 0;
     w.fetch = async (url, opts = {}) => {
@@ -827,43 +827,43 @@ async function scenario(title, block) {
     check('nomes da mesma leva nao se repetem', names.length === 3 && new Set(names).size === 3, names);
     const jpeg = new w.Blob(['x'], { type: 'image/jpeg' });
     const taken = new Set();
-    const leva = [App.mediaName(jpeg, null, 'foto', taken), App.mediaName(jpeg, null, 'foto', taken), App.mediaName(jpeg, null, 'foto', taken)];
-    check('no mesmo segundo, a segunda e a terceira ganham -2 e -3', /^a-foto-\d{6}\.jpg$/.test(leva[0])
-      && leva[1] === leva[0].replace('.jpg', '-2.jpg') && leva[2] === leva[0].replace('.jpg', '-3.jpg'), leva);
+    const batch = [App.mediaName(jpeg, null, 'foto', taken), App.mediaName(jpeg, null, 'foto', taken), App.mediaName(jpeg, null, 'foto', taken)];
+    check('no mesmo segundo, a segunda e a terceira ganham -2 e -3', /^a-foto-\d{6}\.jpg$/.test(batch[0])
+      && batch[1] === batch[0].replace('.jpg', '-2.jpg') && batch[2] === batch[0].replace('.jpg', '-3.jpg'), batch);
 
-    // Uma leva de fotos tem que cair uma embaixo da outra, e nao todas na mesma posicao guardada
-    // (a ultima ficaria em cima). Quem segura isso e a marca que cada insercao devolve, entao a
-    // prova roda no editor de verdade, nao no textarea.
+    // A batch of photos has to land one under the other, and not all at the same saved position
+    // (the last one would end up on top). What holds this is the mark each insertion returns, so the
+    // proof runs on the real editor, not on the textarea.
     {
-      const { App: comEditor } = await boot({ editor: true });
-      const view = comEditor.Editor._impl.view;
+      const { App: withEditor } = await boot({ editor: true });
+      const view = withEditor.Editor._impl.view;
 
-      // Caminho de reserva: a camera tocada antes de o dedo encostar no texto. Sem cursor posto, a
-      // foto vai pro fim da nota, e o fim anda junto com a leva.
-      comEditor.Editor.setText('linha um');
-      let at = comEditor.Editor.markCaret();
+      // Fallback path: the camera tapped before the finger touched the text. With no cursor set, the
+      // photo goes to the end of the note, and the end moves along with the batch.
+      withEditor.Editor.setText('linha um');
+      let at = withEditor.Editor.markCaret();
       check('o editor voltou do seletor sem cursor nenhum', at === null, at);
-      for (const n of [1, 2, 3]) at = comEditor.insertOnOwnLine(`![[f${n}]]`, at) || at;
+      for (const n of [1, 2, 3]) at = withEditor.insertOnOwnLine(`![[f${n}]]`, at) || at;
       check('sem cursor no editor, a fila continua na ordem',
-        comEditor.Editor.getText() === 'linha um\n![[f1]]\n![[f2]]\n![[f3]]\n', comEditor.Editor.getText());
+        withEditor.Editor.getText() === 'linha um\n![[f1]]\n![[f2]]\n![[f3]]\n', withEditor.Editor.getText());
 
-      // O caso do celular: o cursor foi posto no texto e o seletor de foto levou o foco embora
-      // (no CM6 a marca sobrevive a isso). So aqui a ordem depende MESMO de cada insercao devolver
-      // a marca da linha seguinte: sem esse retorno, a marca velha e mapeada pra ANTES do que
-      // acabou de entrar e a leva sai de tras pra frente, que e o bug do commit 439b920. Partir de
-      // marca nula, como o caminho de cima, deixaria a ordem certa por acidente.
-      comEditor.Editor.setText('linha um');
-      comEditor.Editor.focus();
+      // The phone's case: the cursor was set in the text and the photo picker took the focus away
+      // (in CM6 the mark survives that). Only here does the order REALLY depend on each insertion returning
+      // the mark of the next line: without that return, the old mark is mapped to BEFORE what
+      // just went in and the batch comes out back to front, which is the bug of commit 439b920. Starting from
+      // a null mark, like the path above, would leave the order right by accident.
+      withEditor.Editor.setText('linha um');
+      withEditor.Editor.focus();
       view.dispatch({ selection: { anchor: 'linha um'.length } });
       view.contentDOM.blur();
-      at = comEditor.Editor.markCaret();
+      at = withEditor.Editor.markCaret();
       check('cursor posto antes de o seletor roubar o foco: a marca existe', !!at, at);
-      for (const n of [1, 2, 3]) at = comEditor.insertOnOwnLine(`![[f${n}]]`, at) || at;
+      for (const n of [1, 2, 3]) at = withEditor.insertOnOwnLine(`![[f${n}]]`, at) || at;
       check('com cursor posto, a fila empilha a partir dele, na ordem',
-        comEditor.Editor.getText() === 'linha um\n![[f1]]\n![[f2]]\n![[f3]]\n', comEditor.Editor.getText());
+        withEditor.Editor.getText() === 'linha um\n![[f1]]\n![[f2]]\n![[f3]]\n', withEditor.Editor.getText());
     }
 
-    // Erro no meio: o que ja entrou fica, o resto nem sobe
+    // Error halfway: what already went in stays, the rest does not even go up
     const kept = ta.value;
     const had = uploaded().length;
     let posts = 0;
@@ -887,7 +887,7 @@ async function scenario(title, block) {
     drive.put('B2', 'Nota B.md', '# Topo\n\ntexto\n\n## Alvo\n\naqui', ['folderA']);
     drive.put('OB', "O'Brien.md", 'apostrofo', ['folderZ']);
     drive.put('X', 'Planilha.xlsx', 'bin', ['folderA']); drive.files.get('X').mimeType = 'application/vnd.ms-excel';
-    drive.remoteEdit('B1', 'B de outra pasta'); // B1 mais recente: sem a regra da pasta, ganharia
+    drive.remoteEdit('B1', 'B de outra pasta'); // B1 more recent: without the folder rule, it would win
     let scrolled = null;
     w.HTMLElement.prototype.scrollIntoView = function () { scrolled = this.textContent; };
 
@@ -913,7 +913,7 @@ async function scenario(title, block) {
     await click(3);
     check('nome com apostrofo e encontrado', App.currentFile.id === 'OB', drive.log.filter(l => l.startsWith('LIST')).pop());
 
-    w.history.back(); await sleep(80); // gesto de voltar do sistema
+    w.history.back(); await sleep(80); // the system's back gesture
     check('gesto do sistema: volta pra A', App.currentFile.id === 'A');
     App.els.btnBack.click(); await sleep(80);
     check('voltar de novo: tela inicial com recentes', view() === 'welcome' && App.currentFile === null && w.document.querySelectorAll('#recents-ul li').length >= 2 && App.els.fileName.textContent === 'Drive Notes');
@@ -1062,12 +1062,12 @@ async function scenario(title, block) {
     App.newFile();
     const ta = App.els.editorElement;
     ta.value = 'primeira linha\nsegunda linha\nterceira';
-    ta.selectionStart = ta.selectionEnd = 20; // no meio da segunda linha
+    ta.selectionStart = ta.selectionEnd = 20; // in the middle of the second line
     App.isDirty = false;
     App.applyFormat('heading');
     check('cursor no meio: marcador vai pro comeco da linha', ta.value === 'primeira linha\n## segunda linha\nterceira', ta.value);
     check('marcou como nao salvo', App.isDirty);
-    ta.selectionStart = 3; ta.selectionEnd = 20; // pega linhas 1 e 2
+    ta.selectionStart = 3; ta.selectionEnd = 20; // covers lines 1 and 2
     App.applyFormat('list');
     check('selecao de varias linhas: todas ganham o marcador', ta.value === '- primeira linha\n- segunda linha\nterceira', ta.value);
     ta.selectionStart = 2; ta.selectionEnd = 10;
@@ -1144,13 +1144,13 @@ async function scenario(title, block) {
     check('... volta pra tela inicial e desarma o watcher', d.body.dataset.view === 'welcome' && w.__watchers.length === 0);
     check('proximo voltar sai do app', w.__back() === 'EXIT');
 
-    // link quebrado: a tela nao muda, a pilha tambem nao
+    // broken link: the screen does not change, and neither does the stack
     await App.navigateTo('L', 'com link.md');
     drive.files.get('n-z').name = 'renomeada.md';
     App.els.previewContainer.querySelector('a.wikilink').click(); await sleep(80);
     check('link quebrado nao deixa entrada sobrando', App.currentFile?.id === 'L' && App.navStack.length === 1, App.navStack);
 
-    // dialogo aberto: voltar fecha o dialogo, nao sai da nota
+    // dialog open: back closes the dialog, it does not leave the note
     App.els.fileName.click();
     check('modal de renomear aberto', App.els.modal.classList.contains('visible'));
     w.__back(); await sleep(20);
@@ -1585,7 +1585,7 @@ async function scenario(title, block) {
       }
     };
 
-    // A rede de verdade nao responde na hora: e essa janela que deixava o segundo toque entrar
+    // The real network does not answer right away: that window is what let the second tap in
     drive.delay = 50;
     openSketch();
     scribble();
@@ -1597,7 +1597,7 @@ async function scenario(title, block) {
     check('e escrevem UM embed so na nota', embeds() === 1, ta.value);
     check('a tela volta ao normal depois de fechar', title.textContent === 'Desenho' && !btnDone.disabled && !btnCancel.disabled);
 
-    // O voltar do sistema nao passa por cima da trava: ele chama sketchCancel direto
+    // The system back does not get past the lock: it calls sketchCancel directly
     openSketch();
     scribble();
     const inFlight = App.sketchFinish();
@@ -1606,7 +1606,7 @@ async function scenario(title, block) {
     await inFlight;
     check('e o envio terminou normalmente', uploaded().length === 2 && embeds() === 2, ta.value);
 
-    // Falhar nao pode deixar a tela travada pra sempre: senao nao da nem pra sair
+    // Failing must not leave the screen locked forever: otherwise there is not even a way out
     drive.failWrites = true;
     openSketch();
     scribble();
@@ -1647,7 +1647,7 @@ async function scenario(title, block) {
     await App.save(); await App._saveChain;
     check('e vai pro Drive', bodyOf(drive.files.get('A').content).includes('- [x] Agatha') && drive.files.get('A').content.includes('1. [x] numerada'), drive.files.get('A').content);
 
-    // Se o texto e a tela discordarem de quantas tarefas existem, marcar a errada e pior que nao marcar
+    // If the text and the screen disagree on how many tasks there are, checking the wrong one is worse than not checking
     drive.put('B', 'b.md', 'texto\n\n    - [ ] isto e bloco de codigo por recuo\n\n- [ ] uma\n');
     await App.openFile('B', 'b.md');
     check('contagem que nao bate: caixas ficam desligadas', boxes().length === 1 && boxes()[0].disabled, boxes().map(b => b.disabled));
@@ -1667,7 +1667,7 @@ async function scenario(title, block) {
       e.changedTouches = [{ clientX: x, clientY: y }];
       d.body.dispatchEvent(e);
     };
-    // Um arrasto de dedo: comeca em (x0, y0), passa pelo meio e solta em (x1, y1)
+    // A finger drag: starts at (x0, y0), goes through the middle and lets go at (x1, y1)
     const swipe = async (x0, x1, y0 = 300, y1 = 300) => {
       touch('touchstart', x0, y0);
       touch('touchmove', (x0 + x1) / 2, (y0 + y1) / 2);
@@ -1695,7 +1695,7 @@ async function scenario(title, block) {
     await swipe(W - 5, W - 150);
     check('sem nada pra frente, a borda direita nao faz nada', App.currentFile?.id === 'n-z' && App.navStack.length === 3);
 
-    // Dedo de verdade: nao cai colado na borda, e o comeco do arrasto do polegar e um arco, nao uma reta
+    // A real finger: it does not land flush on the edge, and the start of a thumb drag is an arc, not a straight line
     await swipe(28, 170);
     check('pega com o dedo a 28px da borda', App.currentFile?.id === 'L', App.currentFile?.id);
     await swipe(W - 28, W - 170);
@@ -1735,12 +1735,12 @@ async function scenario(title, block) {
     App.els.previewContainer.querySelector('a.wikilink').click(); await sleep(80);
     check('abrir outra coisa depois de voltar zera o avancar', App.currentFile?.id === 'n-z' && App.fwdStack.length === 0, App.fwdStack);
 
-    // Dialogo aberto: a esquerda fecha o dialogo, como o botao voltar
+    // Dialog open: the left edge closes the dialog, like the back button
     App.showDiagnostics();
     await swipe(5, 150);
     check('com dialogo aberto, deslizar fecha o dialogo e fica na nota', !d.getElementById('debug-overlay').classList.contains('visible') && App.currentFile?.id === 'n-z');
 
-    // Texto selecionado: arrastar perto da borda e mexer na selecao, nao voltar
+    // Text selected: dragging near the edge is adjusting the selection, not going back
     const range = d.createRange();
     range.selectNodeContents(App.els.previewContainer);
     w.getSelection().removeAllRanges(); w.getSelection().addRange(range);
@@ -1748,7 +1748,7 @@ async function scenario(title, block) {
     check('com texto selecionado nao volta', App.currentFile?.id === 'n-z');
     w.getSelection().removeAllRanges();
 
-    // Tela de desenho: traco que comeca na borda e traco
+    // Drawing screen: a stroke that starts at the edge is a stroke
     App.setMode('edit');
     d.querySelector('.toolbar-btn[data-sketch]').click();
     await swipe(5, 150);
@@ -1758,8 +1758,8 @@ async function scenario(title, block) {
 
   await scenario('38. Navegar de novo antes de a nota anterior carregar nao suja a pilha do voltar', async () => {
   {
-    // Do log do aparelho em 19 set 2026: dois "avancar" com 1s de intervalo, rede lenta, e depois o voltar
-    // parou tres vezes na mesma pasta. A tela que fica pra tras era lida enquanto a nota ainda carregava.
+    // From the phone's log on 19 Sep 2026: two "forward" 1s apart, slow network, and then back
+    // stopped three times on the same folder. The screen left behind was read while the note was still loading.
     const { App, drive, w } = await boot({ watcher: true });
     seedVault(drive);
     drive.put('L', 'com link.md', 'vai [[zebra]]', [VAULT]);
@@ -1775,9 +1775,9 @@ async function scenario(title, block) {
     check('pasta, com duas notas pra frente', d.body.dataset.view === 'browse' && App.fwdStack.length === 2, stack());
 
     drive.delay = 60;
-    App.goForward();            // comeca a carregar "com link"...
+    App.goForward();            // starts loading "com link"...
     await sleep(10);
-    await App.goForward();      // ...e avanca de novo antes de ela chegar
+    await App.goForward();      // ...and goes forward again before it arrives
     await sleep(200);
     check('dois avancar seguidos: chega na nota do link, com a do meio na pilha', App.currentFile?.id === 'n-z' && stack().join(' > ') === 'welcome > pasta:vault > L', stack());
 
@@ -1786,7 +1786,7 @@ async function scenario(title, block) {
     w.__back(); await sleep(200);
     check('voltar: a pasta, uma vez so', d.body.dataset.view === 'browse' && stack().join(' > ') === 'welcome', stack());
 
-    // Dois toques seguidos na lista: o segundo nao pode empilhar a pasta de novo
+    // Two taps in a row on the list: the second must not stack the folder again
     item('zebra').click();
     await sleep(10);
     item('Abacaxi').click();
@@ -1796,21 +1796,21 @@ async function scenario(title, block) {
     w.__back(); await sleep(200);
     check('dois voltar bastam pra sair da pasta: nenhum cai no vazio', d.body.dataset.view === 'welcome', [d.body.dataset.view, stack()]);
 
-    // Voltar com a nota ainda carregando desiste dela: ela nao pode aparecer sozinha depois
+    // Going back with the note still loading gives up on it: it must not show up on its own later
     d.getElementById('welcome-open').click(); await sleep(250);
     item('zebra').click();
     await sleep(10);
     w.__back(); await sleep(250);
     check('voltar no meio do carregamento fica na pasta', d.body.dataset.view === 'browse' && App.currentFile === null && stack().join(' > ') === 'welcome', [d.body.dataset.view, App.currentFile?.id, stack()]);
 
-    // O mesmo de dentro de uma nota: o link tocado e abandonado nao aparece depois
+    // The same from inside a note: the link tapped and abandoned does not show up later
     item('com link').click(); await sleep(250);
     App.els.previewContainer.querySelector('a.wikilink').click();
     await sleep(10);
     w.__back(); await sleep(250);
     check('voltar com o link ainda carregando fica na nota', App.currentFile?.id === 'L' && stack().join(' > ') === 'welcome > pasta:vault', [App.currentFile?.id, stack()]);
 
-    // Toque que nao abre nada, dado com outra nota a caminho, nao pode comer a entrada dela
+    // A tap that opens nothing, made with another note on its way, must not eat that note's entry
     drive.put('Q', 'quebrada.md', 'vai [[zebra]] e [[nao existe]]', [VAULT]);
     await App.openFile('Q', 'quebrada.md');
     const links = App.els.previewContainer.querySelectorAll('a.wikilink');
@@ -1820,7 +1820,7 @@ async function scenario(title, block) {
     await sleep(300);
     check('o ultimo toque vence: link quebrado tocado com outra nota a caminho desiste dela, avisa e fica', App.currentFile?.id === 'Q' && /não encontrada/.test(App.els.saveStatus.textContent) && stack().join(' > ') === 'welcome > pasta:vault', [App.currentFile?.id, App.els.saveStatus.textContent, stack()]);
 
-    // Dois voltar seguidos com a rede lenta sobem dois niveis: o segundo nao pode "desistir" do primeiro
+    // Two backs in a row on a slow network go up two levels: the second must not "give up" on the first
     links[0].click(); await sleep(250);
     check('nota do link aberta a partir da quebrada', App.currentFile?.id === 'n-z' && stack().join(' > ') === 'welcome > pasta:vault > Q', stack());
     w.__back();
@@ -1876,8 +1876,8 @@ async function scenario(title, block) {
     await App.openFile('D', 'd.md');
     check('na sublista o gap fica no item da sublista', classes() === '|||gap|' && c.querySelectorAll('li ul > li').length === 3, c.innerHTML);
 
-    const tarefas = '- [ ] um\n- [x] dois\n\n- [ ] tres\n- [ ] quatro\n';
-    drive.put('E', 'e.md', tarefas);
+    const tasks = '- [ ] um\n- [x] dois\n\n- [ ] tres\n- [ ] quatro\n';
+    drive.put('E', 'e.md', tasks);
     await App.openFile('E', 'e.md');
     const boxes = () => [...c.querySelectorAll('li > input[type="checkbox"]')];
     check('4 caixas, filhas diretas do li e tocaveis', boxes().length === 4 && boxes().every(b => !b.disabled), c.innerHTML);
@@ -1885,7 +1885,7 @@ async function scenario(title, block) {
     const box = boxes()[2];
     box.checked = true;
     box.dispatchEvent(new w.Event('change', { bubbles: true }));
-    check('tocar na caixa do segundo grupo marca a linha certa da nota', App.getContent() === tarefas.replace('- [ ] tres', '- [x] tres'), App.getContent());
+    check('tocar na caixa do segundo grupo marca a linha certa da nota', App.getContent() === tasks.replace('- [ ] tres', '- [x] tres'), App.getContent());
 
     drive.put('F', 'f.md', '- um\n\n  continuado\n\n- dois\n');
     await App.openFile('F', 'f.md');
@@ -1910,16 +1910,16 @@ async function scenario(title, block) {
       parent: host,
       extensions: [w.CM6.lineWrapping, w.CM6.markdown({ base: w.CM6.markdownLanguage })],
     });
-    // A string termina em \n, que pro CM6 conta como uma quarta linha vazia (doc.lines = numero de \n + 1,
-    // contagem de texto puro, sem depender de layout): medido com o pacote real, nao e efeito do jsdom.
+    // The string ends in \n, which to CM6 counts as a fourth empty line (doc.lines = number of \n + 1,
+    // a plain text count, not depending on layout): measured with the real package, it is not a jsdom effect.
     check('o editor desenhou as linhas no DOM', host.querySelectorAll('.cm-line').length === 4,
       host.querySelectorAll('.cm-line').length);
     view.dispatch({ changes: { from: view.state.doc.length, insert: 'fim' } });
     check('escrever por transacao funciona', view.state.doc.toString().endsWith('fim'));
     check('a arvore de sintaxe reconhece tarefa', (() => {
-      const nomes = [];
-      w.CM6.syntaxTree(view.state).iterate({ enter: (n) => nomes.push(n.name) });
-      return nomes.includes('TaskMarker');
+      const names = [];
+      w.CM6.syntaxTree(view.state).iterate({ enter: (n) => names.push(n.name) });
+      return names.includes('TaskMarker');
     })());
     view.destroy();
   }
@@ -1933,31 +1933,31 @@ async function scenario(title, block) {
     check('texto ida e volta', App.Editor.getText() === 'uma linha\noutra linha');
 
     App.Editor.setText('primeira\nsegunda');
-    const marca = App.Editor.markCaret();
-    App.Editor.insertOnOwnLine('![[foto.png]]', marca);
+    const mark = App.Editor.markCaret();
+    App.Editor.insertOnOwnLine('![[foto.png]]', mark);
     check('inseriu em linha propria', App.Editor.getText().includes('![[foto.png]]'), App.Editor.getText());
 
-    // A lib do editor tem que ficar atras da fachada: quem esta fora dela fala com App.Editor e mais
-    // nada. A fachada sao dois arquivos, app/editor.js (a fachada e o textarea de reserva) e
-    // app/editor-cm6.js (a implementacao); todo outro arquivo do app e onde moram os chamadores.
-    // O vocabulario procurado e o do CM6; `\.dispatch\(` nao pega o `dispatchEvent(` que o app usa no DOM.
+    // The editor's lib has to stay behind the facade: whoever is outside it talks to App.Editor and nothing
+    // else. The facade is two files, app/editor.js (the facade and the fallback textarea) and
+    // app/editor-cm6.js (the implementation); every other file of the app is where the callers live.
+    // The vocabulary searched for is CM6's; `\.dispatch\(` does not catch the `dispatchEvent(` the app uses on the DOM.
     const FACADE = ['app/editor.js', 'app/editor-cm6.js'];
     const sourceOf = (files) => files.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
     const outsideFacade = sourceOf(appScripts().filter(f => !FACADE.includes(f)));
-    // `Editor\._impl` fecha a fuga mais obvia: um chamador que pegasse a implementacao pela
-    // fachada (`App.Editor._impl.view.focus()`) nao casaria com nenhum dos outros pedacos
-    const VOCABULARIO_DA_LIB = /window\.CM6|EditorView|view\.state|\.dispatch\(|doc\.line|Editor\._impl/;
+    // `Editor\._impl` closes the most obvious leak: a caller that grabbed the implementation through the
+    // facade (`App.Editor._impl.view.focus()`) would not match any of the other pieces
+    const LIB_VOCABULARY = /window\.CM6|EditorView|view\.state|\.dispatch\(|doc\.line|Editor\._impl/;
     check('nenhum chamador fora da fachada toca a lib',
-      !VOCABULARIO_DA_LIB.test(outsideFacade), VOCABULARIO_DA_LIB.exec(outsideFacade)?.[0]);
-    // ... e a checagem acima so vale se ela souber achar a lib quando ela aparece de verdade
+      !LIB_VOCABULARY.test(outsideFacade), LIB_VOCABULARY.exec(outsideFacade)?.[0]);
+    // ... and the check above is only worth something if it can find the lib when it really shows up
     check('a checagem acima enxerga a lib: dentro da fachada o vocabulario esta la',
-      VOCABULARIO_DA_LIB.test(sourceOf(FACADE)));
+      LIB_VOCABULARY.test(sourceOf(FACADE)));
     check('os dois arquivos da fachada existem com esse nome no index.html', FACADE.every(f => appScripts().includes(f)));
 
-    // O app nao carrega ajudante que so o teste usa. O cm6Type (cm6Digitar, no nome de antes da
-    // traducao) vivia aqui dentro por ser codigo de teste morando no app: ele alcancava
-    // Editor._impl.view de dentro da secao do editor, que e justo o pedaco onde a checagem acima
-    // nao olha. Agora e uma funcao do proprio arquivo de teste
+    // The app does not load a helper that only the test uses. cm6Type (cm6Digitar, by its name from before the
+    // translation) lived in here for being test code living in the app: it reached
+    // Editor._impl.view from inside the editor section, which is exactly the piece where the check above
+    // does not look. Now it is a function of the test file itself
     check('o app nao expoe ajudante que so o teste usa',
       App.cm6Type === undefined && App.cm6Digitar === undefined);
     check('... e o fonte tambem nao o traz', !/cm6Type|cm6Digitar/.test(sourceOf(appScripts())));
@@ -1972,89 +1972,89 @@ async function scenario(title, block) {
     App.Editor.setText('linha um\nlinha dois');
     check('texto ida e volta', App.Editor.getText() === 'linha um\nlinha dois');
 
-    // Abrir uma nota NAO pode entrar na pilha do desfazer. Se entrar, um toque em desfazer logo
-    // depois de abrir apaga a nota aberta e traz de volta o texto da anterior, que e o pior jeito
-    // de perder texto que este app tem. Quem garante isso e a anotacao addToHistory:false do
-    // setText, mas quem executa e a biblioteca: e propriedade emergente dela, e sem esta
-    // checagem nada no projeto acusaria a volta do bug.
+    // Opening a note must NOT go into the undo stack. If it does, a tap on undo right
+    // after opening erases the open note and brings back the text of the previous one, which is the worst way
+    // of losing text this app has. What guarantees this is setText's addToHistory:false
+    // annotation, but what carries it out is the library: it is an emergent property of it, and without this
+    // check nothing in the project would flag the bug coming back.
     check('abrir uma nota nao entra na pilha: nao ha o que desfazer', App.Editor.undo() === false);
     check('... e o texto aberto nao se mexe', App.Editor.getText() === 'linha um\nlinha dois', App.Editor.getText());
 
-    // O jsdom nao tem layout e ninguem consegue tocar no texto: o view e usado so pra pôr o cursor
-    // onde um dedo poria, que e o unico jeito de simular o uso real aqui.
+    // jsdom has no layout and nobody can touch the text: the view is used only to put the cursor
+    // where a finger would, which is the only way of simulating real use here.
     const view = App.Editor._impl.view;
-    const NOTA = '---\ncreated: 2026-09-21\nupdated: 2026-09-21\n---\n\ntexto da nota';
+    const NOTE = '---\ncreated: 2026-09-21\nupdated: 2026-09-21\n---\n\ntexto da nota';
 
-    // Nota aberta da lista e camera tocada antes de tocar no texto: a selecao esta em 0 por
-    // artefato de carregar o texto, nao por escolha, e a foto ali comeria o frontmatter
-    App.Editor.setText(NOTA);
+    // Note opened from the list and camera tapped before touching the text: the selection is at 0 as an
+    // artifact of loading the text, not by choice, and the photo there would eat the frontmatter
+    App.Editor.setText(NOTE);
     check('editor nunca focado: nao ha cursor de que falar, a marca e null',
       App.Editor.markCaret() === null, App.Editor.markCaret());
-    const marcaDoFim = App.Editor.insertOnOwnLine('![[foto.png]]', App.Editor.markCaret());
+    const endMark = App.Editor.insertOnOwnLine('![[foto.png]]', App.Editor.markCaret());
     check('editor nunca focado: a foto entra no fim, o frontmatter fica na primeira linha',
-      App.Editor.getText() === `${NOTA}\n![[foto.png]]\n`, App.Editor.getText());
-    check('a insercao devolve marca, e marca nunca e falsy', !!marcaDoFim, marcaDoFim);
+      App.Editor.getText() === `${NOTE}\n![[foto.png]]\n`, App.Editor.getText());
+    check('a insercao devolve marca, e marca nunca e falsy', !!endMark, endMark);
 
-    // A leva da galeria, pelo caminho do savePhoto: cada foto usa o retorno da anterior. Parte de
-    // cursor posto de proposito: com marca nula toda insercao cairia no fim do documento e a ordem
-    // sairia certa por acidente, mesmo se o retorno da marca sumisse (o bug do commit 439b920).
+    // The gallery batch, through savePhoto's path: each photo uses the previous one's return. It starts from
+    // a cursor set on purpose: with a null mark every insertion would land at the end of the document and the order
+    // would come out right by accident, even if the mark's return disappeared (the bug of commit 439b920).
     App.Editor.setText('nota com fotos');
     App.Editor.focus();
     view.dispatch({ selection: { anchor: 'nota com fotos'.length } });
     view.contentDOM.blur();
     let at = App.Editor.markCaret();
     check('cursor posto antes de a leva comecar: a marca existe', !!at, at);
-    for (const nome of ['um.jpg', 'dois.jpg', 'tres.jpg']) at = App.insertOnOwnLine(`![[${nome}]]`, at) || at;
+    for (const name of ['um.jpg', 'dois.jpg', 'tres.jpg']) at = App.insertOnOwnLine(`![[${name}]]`, at) || at;
     check('a leva de fotos sai na ordem em que foi escolhida',
       App.Editor.getText() === 'nota com fotos\n![[um.jpg]]\n![[dois.jpg]]\n![[tres.jpg]]\n', App.Editor.getText());
 
-    // O uso normal: o cursor foi posto no meio do texto e o foco foi embora depois (o seletor de
-    // foto rouba). A foto cai no cursor, que e onde ela foi pedida, e nao no fim
-    App.Editor.setText(NOTA);
+    // Normal use: the cursor was set in the middle of the text and the focus went away afterwards (the photo
+    // picker steals it). The photo lands at the cursor, which is where it was asked for, and not at the end
+    App.Editor.setText(NOTE);
     App.Editor.focus();
-    view.dispatch({ selection: { anchor: NOTA.indexOf('texto da nota') + 5 } });
+    view.dispatch({ selection: { anchor: NOTE.indexOf('texto da nota') + 5 } });
     view.contentDOM.blur();
     check('o foco foi mesmo embora', !view.hasFocus);
-    const marcaDoMeio = App.Editor.markCaret();
-    check('cursor posto antes de o foco sumir: a marca existe', !!marcaDoMeio, marcaDoMeio);
-    App.Editor.insertOnOwnLine('![[meio.png]]', marcaDoMeio);
+    const middleMark = App.Editor.markCaret();
+    check('cursor posto antes de o foco sumir: a marca existe', !!middleMark, middleMark);
+    App.Editor.insertOnOwnLine('![[meio.png]]', middleMark);
     check('sem foco mas com cursor posto: a foto entra no cursor e o frontmatter fica inteiro',
       App.Editor.getText() === `---\ncreated: 2026-09-21\nupdated: 2026-09-21\n---\n\ntexto\n![[meio.png]]\n da nota`,
       App.Editor.getText());
 
-    // A nota cresce enquanto a foto sobe: a marca anda junto e a foto cai onde foi pedida
+    // The note grows while the photo goes up: the mark moves along and the photo lands where it was asked for
     App.Editor.setText('uma nota\ncom tres linhas\nde texto');
     App.Editor.focus();
     App.Editor.moveCaretToEnd();
-    const marca = App.Editor.markCaret();
+    const mark = App.Editor.markCaret();
     cm6Type(App, '\nescrito enquanto a foto subia');
-    App.Editor.insertOnOwnLine('![[tarde.png]]', marca);
+    App.Editor.insertOnOwnLine('![[tarde.png]]', mark);
     check('a foto entra na marca, e o que foi escrito depois continua embaixo',
       App.Editor.getText() === 'uma nota\ncom tres linhas\nde texto\n![[tarde.png]]\n\nescrito enquanto a foto subia',
       App.Editor.getText());
 
-    // A marca vence o cursor vivo, e e isso que a docstring do insertOnOwnLine descreve: entre
-    // tocar na camera e a foto chegar do Drive a pessoa continua na nota e o cursor anda. A foto
-    // cai onde ela estava quando pediu a foto, e nao onde o cursor esta agora.
+    // The mark beats the live cursor, and that is what insertOnOwnLine's docstring describes: between
+    // tapping the camera and the photo arriving from the Drive the person stays in the note and the cursor moves. The photo
+    // lands where she was when she asked for the photo, and not where the cursor is now.
     App.Editor.setText('primeira\nsegunda\nterceira');
     App.Editor.focus();
     view.dispatch({ selection: { anchor: 'primeira'.length } });
-    const marcaDaPrimeira = App.Editor.markCaret();
+    const firstLineMark = App.Editor.markCaret();
     view.dispatch({ selection: { anchor: view.state.doc.length } });
-    App.insertOnOwnLine('![[pedida-antes.png]]', marcaDaPrimeira);
+    App.insertOnOwnLine('![[pedida-antes.png]]', firstLineMark);
     check('a marca vence o cursor vivo: a foto cai onde foi pedida',
       App.Editor.getText() === 'primeira\n![[pedida-antes.png]]\n\nsegunda\nterceira', App.Editor.getText());
 
-    // Recarga depois de conflito com a pessoa dentro do editor: o texto troca debaixo dela, mas ela
-    // continua ali escrevendo, entao o cursor dela continua valendo (nao vira nota aberta da lista)
+    // Reload after a conflict with the person inside the editor: the text changes under her, but she
+    // keeps writing there, so her cursor still counts (it does not become a note opened from the list)
     check('o editor continua focado', view.hasFocus);
     App.Editor.setText('texto novo, que chegou do Drive');
     check('texto trocado com o editor focado: ainda ha cursor de que falar',
       App.Editor.markCaret() !== null, App.Editor.markCaret());
 
-    // E a nota encolher inteira embaixo da marca (recarregada durante o upload) nao pode estourar
+    // And the whole note shrinking under the mark (reloaded during the upload) must not throw
     App.Editor.setText('curta');
-    App.Editor.insertOnOwnLine('![[depois.png]]', marca);
+    App.Editor.insertOnOwnLine('![[depois.png]]', mark);
     check('marca de nota que encolheu nao estoura: cai no comeco do texto novo',
       App.Editor.getText() === '![[depois.png]]\ncurta', App.Editor.getText());
 
@@ -2064,8 +2064,8 @@ async function scenario(title, block) {
     check('desfez', App.Editor.undo() && App.Editor.getText() === 'base', App.Editor.getText());
     check('refez', App.Editor.redo() && App.Editor.getText() === 'base mais', App.Editor.getText());
 
-    // O mesmo, mas com a pilha cheia: escreveu numa nota e abriu outra da lista. O que foi digitado
-    // na nota anterior nao pode sobrar pra ser desfeito em cima desta
+    // The same, but with a full stack: wrote in a note and opened another from the list. What was typed
+    // in the previous note must not be left over to be undone on top of this one
     App.Editor.setText('outra nota, aberta da lista');
     check('abrir outra nota depois de escrever: nao sobra o que desfazer', App.Editor.undo() === false);
     check('... e o texto da nota aberta fica intacto',
@@ -2075,40 +2075,40 @@ async function scenario(title, block) {
 
   await scenario('39e. Nota longa: os colchetes comuns acompanham o que esta na tela', async () => {
   {
-    // A decoracao que devolve [[wikilink]] e [!note] ao texto comum percorria a arvore de sintaxe
-    // INTEIRA, e so quando o documento mudava. Numa nota grande isso custava uma varredura da nota
-    // toda a cada tecla e, pior, o que o parser ainda nao tinha alcancado (ele tem orcamento de
-    // tempo e continua depois, por transacoes que NAO mudam o documento) ficava sem decoracao ate
-    // a proxima tecla: colchete roxo e sublinhado no fim da nota. Agora quem decora e um plugin de
-    // view, que olha so a janela visivel e refaz a conta quando a tela rola ou a arvore cresce.
+    // The decoration that gives [[wikilink]] and [!note] back to plain text walked the WHOLE syntax tree,
+    // and only when the document changed. On a big note that cost a sweep of the whole note
+    // on every key and, worse, what the parser had not reached yet (it has a time budget
+    // and carries on later, through transactions that do NOT change the document) stayed undecorated until
+    // the next key: purple, underlined brackets at the end of the note. Now the decorating is done by a view
+    // plugin, which looks only at the visible window and redoes the math when the screen scrolls or the tree grows.
     const { App, w } = await boot({ editor: true });
     const view = App.Editor._impl.view;
 
-    const linhas = ['[[comeco]] e o resto da primeira linha'];
-    for (let i = 0; i < 3000; i++) linhas.push(`linha ${i} com texto suficiente pra nota ficar grande de verdade`);
-    linhas.push('[[fim]]');
-    App.Editor.setText(linhas.join('\n'));
+    const lines = ['[[comeco]] e o resto da primeira linha'];
+    for (let i = 0; i < 3000; i++) lines.push(`linha ${i} com texto suficiente pra nota ficar grande de verdade`);
+    lines.push('[[fim]]');
+    App.Editor.setText(lines.join('\n'));
 
     check('o editor tem so uma parte da nota na tela', view.viewport.to < view.state.doc.length,
       `viewport ate ${view.viewport.to} de ${view.state.doc.length}`);
-    const noComeco = colchetesComuns(App, w);
+    const atStart = plainBrackets(App, w);
     check('decora so o que esta na tela: o [[comeco]] sim, o [[fim]] la embaixo ainda nao',
-      noComeco.length === 1 && noComeco[0][1] < view.viewport.to, noComeco);
+      atStart.length === 1 && atStart[0][1] < view.viewport.to, atStart);
 
-    // Rolar ate o fim. O jsdom nao tem layout, entao a janela visivel se move fingindo o retangulo
-    // do editor bem acima da tela, que e como o CM6 le "esta rolado la pra baixo" sem layout nenhum
-    const fundo = new w.DOMRect(0, -2e6, 800, 4e6);
-    view.scrollDOM.getBoundingClientRect = () => fundo;
-    view.contentDOM.getBoundingClientRect = () => fundo;
-    view.dom.getBoundingClientRect = () => fundo;
+    // Scroll to the end. jsdom has no layout, so the visible window moves by faking the editor's
+    // rectangle far above the screen, which is how CM6 reads "it is scrolled all the way down" with no layout at all
+    const bottom = new w.DOMRect(0, -2e6, 800, 4e6);
+    view.scrollDOM.getBoundingClientRect = () => bottom;
+    view.contentDOM.getBoundingClientRect = () => bottom;
+    view.dom.getBoundingClientRect = () => bottom;
     view.requestMeasure();
     for (let i = 0; i < 60 && view.viewport.to < view.state.doc.length; i++) await sleep(25);
     check('a tela chegou ao fim da nota', view.viewport.to === view.state.doc.length, JSON.stringify(view.viewport));
 
-    const ultima = view.state.doc.line(view.state.doc.lines);
-    const noFim = colchetesComuns(App, w);
+    const lastLine = view.state.doc.line(view.state.doc.lines);
+    const atEnd = plainBrackets(App, w);
     check('o [[fim]] ganha a decoracao so de a tela chegar nele, sem ninguem digitar nada',
-      noFim.some(([de, ate]) => de >= ultima.from && ate <= ultima.to), noFim.slice(-3));
+      atEnd.some(([from, to]) => from >= lastLine.from && to <= lastLine.to), atEnd.slice(-3));
     check('... e no DOM a linha sai como texto comum, nao como link',
       [...w.document.querySelectorAll('.plain-brackets')].some((el) => el.textContent === '[fim]'),
       [...w.document.querySelectorAll('.cm-line')].map((el) => el.className));
@@ -2120,11 +2120,11 @@ async function scenario(title, block) {
     const { App, w } = await boot({ editor: true });
     const view = App.Editor._impl.view;
 
-    // Enter de verdade, pelo caminho do teclado. Este cenario chamava os comandos na mao e por
-    // isso deixou passar que o Enter configurado pelo app (o do commit 5f96e08) nunca rodava: o
-    // markdown() instala o dele em Prec.high e ganhava de qualquer binding do keymap do app.
-    // Agora o comando do app entra em Prec.highest, e e isto aqui que prova que ele chega la.
-    const enter = (conteudo, em) => enterEm(App, w, conteudo, em);
+    // A real Enter, through the keyboard path. This scenario called the commands by hand and so
+    // let through that the Enter configured by the app (the one of commit 5f96e08) never ran:
+    // markdown() installs its own at Prec.high and beat any binding of the app's keymap.
+    // Now the app's command goes in at Prec.highest, and this here is what proves it gets there.
+    const enter = (content, at) => enterAt(App, w, content, at);
 
     check('o editor do teste e o CM6, nao o textarea', App.Editor.kind() === 'cm6');
 
@@ -2138,25 +2138,25 @@ async function scenario(title, block) {
     r = enter('- [ ] ', 6);
     check('tarefa vazia encerra a lista', r.text === '' && r.at === '0:0', r);
 
-    // A checagem que estava faltando, e que e o motivo de este cenario apertar Enter de verdade:
-    // SAIR DE UMA LISTA DE UM ITEM SO CUSTA UM ENTER. Sem o nonTightLists:false chegando ao
-    // teclado, o segundo Enter insere uma linha em branco e mantem o marcador, e so o terceiro
-    // encerra. Era o que o app fazia de verdade enquanto esta suite achava que nao: o binding do
-    // commit 5f96e08 nunca rodou, porque o Enter do markdown() esta em Prec.high.
+    // The check that was missing, and that is the reason this scenario presses a real Enter:
+    // LEAVING A ONE-ITEM LIST COSTS ONE ENTER. Without nonTightLists:false reaching the
+    // keyboard, the second Enter inserts a blank line and keeps the marker, and only the third
+    // ends it. That is what the app really did while this suite thought it did not: the binding of
+    // commit 5f96e08 never ran, because markdown()'s Enter is at Prec.high.
     {
       App.Editor.setText('- [ ] comprar pao');
       view.dispatch({ selection: { anchor: 17 } });
-      apertarEnter(w, view);
+      pressEnter(w, view);
       check('primeiro Enter: nasce uma segunda tarefa vazia',
         view.state.doc.toString() === '- [ ] comprar pao\n- [ ] ', view.state.doc.toString());
-      apertarEnter(w, view);
+      pressEnter(w, view);
       check('segundo Enter na tarefa vazia: encerra a lista de uma vez, sem linha em branco no meio',
         view.state.doc.toString() === '- [ ] comprar pao\n', view.state.doc.toString());
 
       App.Editor.setText('- item');
       view.dispatch({ selection: { anchor: 6 } });
-      apertarEnter(w, view);
-      apertarEnter(w, view);
+      pressEnter(w, view);
+      pressEnter(w, view);
       check('o mesmo na lista comum: dois Enters e a lista acabou, sem linha em branco no meio',
         view.state.doc.toString() === '- item\n', view.state.doc.toString());
     }
@@ -2194,40 +2194,40 @@ async function scenario(title, block) {
   {
     const { App } = await boot({ editor: true });
     const view = App.Editor._impl.view;
-    const formatar = (texto, de, ate, nome) => {
-      App.Editor.setText(texto);
-      view.dispatch({ selection: { anchor: de, head: ate } });
-      App.Editor.format(nome);
+    const format = (text, from, to, name) => {
+      App.Editor.setText(text);
+      view.dispatch({ selection: { anchor: from, head: to } });
+      App.Editor.format(name);
       return App.Editor.getText();
     };
 
-    check('negrito envolve a selecao', formatar('uma palavra', 4, 11, 'bold') === 'uma **palavra**');
-    check('italico envolve a selecao', formatar('uma palavra', 4, 11, 'italic') === 'uma *palavra*');
-    check('codigo envolve a selecao', formatar('uma palavra', 4, 11, 'code') === 'uma `palavra`');
-    check('sem selecao o negrito poe um lugar pra escrever', formatar('vazio', 5, 5, 'bold') === 'vazio**texto**');
-    check('link usa o formato do app', formatar('site', 0, 4, 'link') === '[site](url)');
-    check('titulo entra no comeco da linha', formatar('uma linha', 3, 3, 'heading') === '## uma linha');
-    check('titulo de novo tira', formatar('## uma linha', 4, 4, 'heading') === 'uma linha');
-    check('lista troca o marcador do titulo', formatar('## uma linha', 4, 4, 'list') === '- uma linha');
-    check('tarefa entra', formatar('uma linha', 3, 3, 'checklist') === '- [ ] uma linha');
+    check('negrito envolve a selecao', format('uma palavra', 4, 11, 'bold') === 'uma **palavra**');
+    check('italico envolve a selecao', format('uma palavra', 4, 11, 'italic') === 'uma *palavra*');
+    check('codigo envolve a selecao', format('uma palavra', 4, 11, 'code') === 'uma `palavra`');
+    check('sem selecao o negrito poe um lugar pra escrever', format('vazio', 5, 5, 'bold') === 'vazio**texto**');
+    check('link usa o formato do app', format('site', 0, 4, 'link') === '[site](url)');
+    check('titulo entra no comeco da linha', format('uma linha', 3, 3, 'heading') === '## uma linha');
+    check('titulo de novo tira', format('## uma linha', 4, 4, 'heading') === 'uma linha');
+    check('lista troca o marcador do titulo', format('## uma linha', 4, 4, 'list') === '- uma linha');
+    check('tarefa entra', format('uma linha', 3, 3, 'checklist') === '- [ ] uma linha');
     check('citacao em duas linhas de uma vez',
-      formatar('uma\ndois', 1, 6, 'quote') === '> uma\n> dois');
+      format('uma\ndois', 1, 6, 'quote') === '> uma\n> dois');
 
-    // Regressao: a nota termina em \n, entao o CM6 conta uma terceira linha vazia depois do
-    // ultimo Enter. Selecionar a nota inteira e formatar e uso comum, e essa linha vazia nao foi
-    // tocada de verdade pela selecao (a selecao termina exatamente no comeco dela): nao pode
-    // ganhar o marcador
+    // Regression: the note ends in \n, so CM6 counts a third empty line after the
+    // last Enter. Selecting the whole note and formatting is common use, and that empty line was not
+    // really touched by the selection (the selection ends exactly at its start): it must not
+    // get the marker
     {
-      const notaComQuebra = 'compra\nleite\n';
-      App.Editor.setText(notaComQuebra);
-      view.dispatch({ selection: { anchor: 0, head: notaComQuebra.length } });
+      const noteWithBreak = 'compra\nleite\n';
+      App.Editor.setText(noteWithBreak);
+      view.dispatch({ selection: { anchor: 0, head: noteWithBreak.length } });
       App.Editor.format('quote');
       check('selecao ate o fim do texto nao marca a linha vazia que a quebra final cria',
         App.Editor.getText() === '> compra\n> leite\n', App.Editor.getText());
     }
 
-    // Sem selecao, o negrito precisa deixar a selecao no miolo (em cima de "texto"), senao quem
-    // digitar em seguida escreve fora dos asteriscos
+    // With no selection, bold has to leave the selection on the inside (over "texto"), otherwise whoever
+    // types next writes outside the asterisks
     App.Editor.setText('vazio');
     view.dispatch({ selection: { anchor: 5, head: 5 } });
     App.Editor.format('bold');
@@ -2236,22 +2236,22 @@ async function scenario(title, block) {
       view.state.doc.sliceString(sel.from, sel.to) === 'texto',
       view.state.doc.sliceString(sel.from, sel.to));
 
-    // Com selecao, formatar tambem deixa a selecao abrangendo so o texto formatado, nao os
-    // marcadores: quem digitar em seguida substitui a palavra, nao apaga os asteriscos junto.
-    // A selecao armada aqui (a frase inteira) e de proposito diferente da selecao final esperada
-    // (so o texto, sem as marcas): se o codigo nao somar antes.length certinho, ou nao mexer na
-    // selecao, o resultado nao bate nem no texto nem na posicao
+    // With a selection, formatting also leaves the selection covering only the formatted text, not the
+    // markers: whoever types next replaces the word, and does not erase the asterisks along with it.
+    // The selection set up here (the whole phrase) is on purpose different from the expected final selection
+    // (only the text, without the marks): if the code does not add antes.length just right, or does not touch the
+    // selection, the result matches neither the text nor the position
     App.Editor.setText('uma palavra');
     view.dispatch({ selection: { anchor: 0, head: 11 } });
     App.Editor.format('bold');
     const sel2 = view.state.selection.main;
     check('com selecao mais ampla que o esperado, a selecao final encolhe pro texto formatado, sem as marcas',
       view.state.doc.sliceString(sel2.from, sel2.to) === 'uma palavra' && sel2.from === 2 && sel2.to === 13,
-      { from: sel2.from, to: sel2.to, texto: view.state.doc.sliceString(sel2.from, sel2.to) });
+      { from: sel2.from, to: sel2.to, text: view.state.doc.sliceString(sel2.from, sel2.to) });
 
-    // O botao e tocado com o teclado aberto: se o foco nao voltar pro editor, o teclado fecha.
-    // Os dois caminhos do formatar (wrap e marcador de linha) retornam em pontos diferentes do
-    // codigo, entao os dois precisam ser conferidos.
+    // The button is tapped with the keyboard open: if the focus does not come back to the editor, the keyboard closes.
+    // The two paths of formatting (wrap and line marker) return at different points of the
+    // code, so both need to be checked.
     view.contentDOM.blur();
     App.Editor.setText('uma linha');
     view.dispatch({ selection: { anchor: 3, head: 3 } });
@@ -2266,61 +2266,61 @@ async function scenario(title, block) {
     check('o foco volta pro editor depois de formatar por wrap (senao o teclado fecha)',
       view.hasFocus);
 
-    // O cursor depois do marcador de linha. Trocar a linha inteira (o que o codigo fazia) manda o
-    // cursor pro comeco dela: uma posicao dentro de um trecho substituido volta pro inicio do
-    // trecho. No celular isso e tocar em lista e ver o cursor pular pra antes do marcador, longe
-    // de onde se estava escrevendo.
-    const cursorDepoisDe = (texto, pos, nome) => {
-      App.Editor.setText(texto);
+    // The cursor after the line marker. Replacing the whole line (what the code did) sends the
+    // cursor to its start: a position inside a replaced span goes back to the start of the
+    // span. On the phone that is tapping list and seeing the cursor jump to before the marker, far
+    // from where one was writing.
+    const caretAfter = (text, pos, name) => {
+      App.Editor.setText(text);
       view.dispatch({ selection: { anchor: pos, head: pos } });
-      App.Editor.format(nome);
-      const linha = view.state.doc.lineAt(view.state.selection.main.head);
+      App.Editor.format(name);
+      const line = view.state.doc.lineAt(view.state.selection.main.head);
       return {
-        texto: App.Editor.getText(),
-        coluna: view.state.selection.main.head - linha.from,
-        linha: linha.number,
+        text: App.Editor.getText(),
+        column: view.state.selection.main.head - line.from,
+        line: line.number,
       };
     };
 
-    let r = cursorDepoisDe('uma linha', 3, 'list');
+    let r = caretAfter('uma linha', 3, 'list');
     check('marcador novo: o cursor segue o texto, nao volta pro comeco da linha',
-      r.texto === '- uma linha' && r.coluna === 5, r);
+      r.text === '- uma linha' && r.column === 5, r);
 
-    r = cursorDepoisDe('', 0, 'list');
+    r = caretAfter('', 0, 'list');
     check('linha vazia: o cursor fica depois do marcador, que e de onde se digita',
-      r.texto === '- ' && r.coluna === 2, r);
+      r.text === '- ' && r.column === 2, r);
 
-    r = cursorDepoisDe('uma linha', 0, 'checklist');
+    r = caretAfter('uma linha', 0, 'checklist');
     check('cursor no comeco da linha: passa pra depois do marcador, nao fica antes dele',
-      r.texto === '- [ ] uma linha' && r.coluna === 6, r);
+      r.text === '- [ ] uma linha' && r.column === 6, r);
 
-    r = cursorDepoisDe('- uma linha', 7, 'list');
+    r = caretAfter('- uma linha', 7, 'list');
     check('tirando o marcador o cursor volta junto com o texto',
-      r.texto === 'uma linha' && r.coluna === 5, r);
+      r.text === 'uma linha' && r.column === 5, r);
 
-    r = cursorDepoisDe('- uma linha', 1, 'list');
+    r = caretAfter('- uma linha', 1, 'list');
     check('cursor dentro do marcador que sai: fica no comeco do texto',
-      r.texto === 'uma linha' && r.coluna === 0, r);
+      r.text === 'uma linha' && r.column === 0, r);
 
-    r = cursorDepoisDe('## titulo', 5, 'quote');
+    r = caretAfter('## titulo', 5, 'quote');
     check('trocando um marcador por outro de tamanho diferente o cursor acompanha',
-      r.texto === '> titulo' && r.coluna === 4, r);
+      r.text === '> titulo' && r.column === 4, r);
 
-    r = cursorDepoisDe('  - sub item', 6, 'checklist');
+    r = caretAfter('  - sub item', 6, 'checklist');
     check('com recuo o cursor tambem acompanha',
-      r.texto === '  - [ ] sub item' && r.coluna === 10, r);
+      r.text === '  - [ ] sub item' && r.column === 10, r);
 
-    // Varias linhas de uma vez: a segunda linha so cai no lugar certo se o deslocamento das
-    // anteriores for somado
+    // Several lines at once: the second line only lands in the right place if the shift of the
+    // earlier ones is added up
     App.Editor.setText('uma\ndois\ntres');
     view.dispatch({ selection: { anchor: 1, head: 10 } });
     App.Editor.format('quote');
-    const selFinal = view.state.selection.main;
-    const linhaFinal = view.state.doc.lineAt(selFinal.head);
+    const finalSel = view.state.selection.main;
+    const finalLine = view.state.doc.lineAt(finalSel.head);
     check('selecao de tres linhas: as pontas acompanham o texto que se moveu',
-      App.Editor.getText() === '> uma\n> dois\n> tres' && selFinal.anchor === 3
-      && linhaFinal.number === 3 && selFinal.head - linhaFinal.from === 3,
-      { texto: App.Editor.getText(), anchor: selFinal.anchor, head: selFinal.head });
+      App.Editor.getText() === '> uma\n> dois\n> tres' && finalSel.anchor === 3
+      && finalLine.number === 3 && finalSel.head - finalLine.from === 3,
+      { text: App.Editor.getText(), anchor: finalSel.anchor, head: finalSel.head });
   }
   });
 
@@ -2328,8 +2328,8 @@ async function scenario(title, block) {
   {
     const { App } = await boot({ editor: true });
     const contentDOM = App.Editor._impl.view.contentDOM;
-    // O CM6 poe autocapitalize="off" na area de escrita, e o Android obedece: a nota inteira saia
-    // em minuscula. O editor antigo era um contenteditable comum e nao desligava nada.
+    // CM6 puts autocapitalize="off" on the writing area, and Android obeys: the whole note came out
+    // in lowercase. The old editor was a plain contenteditable and turned nothing off.
     check('a area de escrita pede maiuscula no comeco de frase',
       contentDOM.getAttribute('autocapitalize') === 'sentences',
       contentDOM.getAttribute('autocapitalize'));
@@ -2341,56 +2341,56 @@ async function scenario(title, block) {
     const { App, w } = await boot({ editor: true });
     App._embedInfo.set('foto.png', { url: 'blob:x', width: 800, height: 400 });
     App.Editor.setText('antes\n![[foto.png]]\ndepois');
-    const mudou = App.Editor.decorateEmbeds((linha) => App.embedForLine(linha));
-    check('a decoracao disse que mudou algo', mudou === true);
+    const changed = App.Editor.decorateEmbeds((line) => App.embedForLine(line));
+    check('a decoracao disse que mudou algo', changed === true);
 
-    const linhas = [...w.document.querySelectorAll('.cm-line')];
-    const comFoto = linhas.filter((el) => el.classList.contains('embed-line'));
-    check('so a linha da foto foi decorada', comFoto.length === 1, linhas.map(e => e.className));
-    check('a linha decorada e a do meio', comFoto[0].textContent === '![[foto.png]]', comFoto[0].textContent);
-    check('a imagem entrou como variavel de CSS', /blob:x/.test(comFoto[0].getAttribute('style') || ''));
+    const lines = [...w.document.querySelectorAll('.cm-line')];
+    const withPhoto = lines.filter((el) => el.classList.contains('embed-line'));
+    check('so a linha da foto foi decorada', withPhoto.length === 1, lines.map(e => e.className));
+    check('a linha decorada e a do meio', withPhoto[0].textContent === '![[foto.png]]', withPhoto[0].textContent);
+    check('a imagem entrou como variavel de CSS', /blob:x/.test(withPhoto[0].getAttribute('style') || ''));
 
-    // Editar uma linha depois da foto (a de cima nao muda de posicao) nao pode fazer a decoracao
-    // sumir nem acusar mudanca: a posicao da linha da foto e o estilo dela continuam os mesmos.
-    // Medido: editar uma linha ANTES da foto desloca o offset dela no documento, e a assinatura
-    // (que leva a posicao) acusa mudanca corretamente ali, entao o teste evita esse caso pra isolar
-    // o que quer provar
+    // Editing a line after the photo (the one above does not change position) must not make the decoration
+    // vanish nor report a change: the position of the photo's line and its style stay the same.
+    // Measured: editing a line BEFORE the photo shifts its offset in the document, and the signature
+    // (which carries the position) correctly reports a change there, so the test avoids that case to isolate
+    // what it wants to prove
     App.Editor.setText('antes\n![[foto.png]]\ndepois editado');
-    const mudouOutraLinha = App.Editor.decorateEmbeds((linha) => App.embedForLine(linha));
+    const changedOtherLine = App.Editor.decorateEmbeds((line) => App.embedForLine(line));
     check('editar uma linha depois da foto nao acusa mudanca (mesma posicao, mesmo estilo)',
-      mudouOutraLinha === false, mudouOutraLinha);
+      changedOtherLine === false, changedOtherLine);
     check('a foto continua desenhada depois de editar outra linha',
       w.document.querySelectorAll('.cm-line.embed-line').length === 1);
 
-    // Trocar a foto por outra do mesmo tamanho mantem a posicao e a contagem de decoracoes iguais:
-    // so o estilo muda. Contar decoracoes nao bastaria pra pegar isso (armadilha do brief); a
-    // assinatura tem que levar o estilo, nao so a posicao
+    // Swapping the photo for another of the same size keeps the position and the count of decorations the same:
+    // only the style changes. Counting decorations would not be enough to catch this (a trap from the brief); the
+    // signature has to carry the style, not only the position
     App._embedInfo.set('foto.png', { url: 'blob:novo', width: 800, height: 400 });
-    const mudouTrocaDeFoto = App.Editor.decorateEmbeds((linha) => App.embedForLine(linha));
+    const changedPhotoSwap = App.Editor.decorateEmbeds((line) => App.embedForLine(line));
     check('trocar a foto por outra do mesmo tamanho e detectado como mudanca de verdade',
-      mudouTrocaDeFoto === true, mudouTrocaDeFoto);
+      changedPhotoSwap === true, changedPhotoSwap);
 
-    // A medida real chega depois, por uma busca assincrona no Drive: o texto do editor nao muda
-    // nada, so a resposta de infoDaLinha. E por isso que o campo se refaz por StateEffect, nao so
-    // quando o documento muda
-    // Medido: a decoracao que havia (a da troca de foto, acima) some, e isso e uma mudanca real na
-    // tela (o espaco da foto fecha), entao decorateEmbeds acusa mudou=true aqui tambem, nao so
-    // quando uma decoracao aparece
+    // The real size arrives later, through an async lookup on the Drive: the editor's text does not change
+    // at all, only the answer of embedForLine. That is why the field rebuilds on a StateEffect, not only
+    // when the document changes
+    // Measured: the decoration that was there (the one from the photo swap, above) goes away, and that is a real change on
+    // screen (the photo's space closes), so decorateEmbeds reports changed=true here too, not only
+    // when a decoration shows up
     App._embedInfo.delete('foto.png');
     App.Editor.setText('antes\n![[foto.png]]\ndepois');
-    let semMedidaAinda = App.Editor.decorateEmbeds((linha) => App.embedForLine(linha));
+    let noSizeYet = App.Editor.decorateEmbeds((line) => App.embedForLine(line));
     check('sem medida ainda, nenhuma linha decorada, e o sumico da decoracao anterior conta como mudanca',
-      w.document.querySelectorAll('.cm-line.embed-line').length === 0 && semMedidaAinda === true,
-      semMedidaAinda);
+      w.document.querySelectorAll('.cm-line.embed-line').length === 0 && noSizeYet === true,
+      noSizeYet);
 
     App._embedInfo.set('foto.png', { url: 'blob:chegou-depois', width: 800, height: 400 });
-    const medidaChegouDepois = App.Editor.decorateEmbeds((linha) => App.embedForLine(linha));
+    const sizeArrivedLater = App.Editor.decorateEmbeds((line) => App.embedForLine(line));
     check('a medida chegando depois decora sozinha, sem o texto ter mudado',
-      medidaChegouDepois === true && w.document.querySelectorAll('.cm-line.embed-line').length === 1,
-      medidaChegouDepois);
+      sizeArrivedLater === true && w.document.querySelectorAll('.cm-line.embed-line').length === 1,
+      sizeArrivedLater);
 
     App.Editor.setText('so texto');
-    App.Editor.decorateEmbeds((linha) => App.embedForLine(linha));
+    App.Editor.decorateEmbeds((line) => App.embedForLine(line));
     check('sem embed, nenhuma linha decorada',
       w.document.querySelectorAll('.cm-line.embed-line').length === 0);
   }
@@ -2398,21 +2398,21 @@ async function scenario(title, block) {
 
   await scenario('42b. A tela so volta pro cursor com o editor em foco', async () => {
   {
-    // O scrollCaretIntoView antigo so rolava quando a selecao do DOM estava dentro do editor, ou
-    // seja, com o editor em foco. Sem essa guarda: abrir uma nota longa, tocar em Editar sem tocar
-    // no texto (o cursor fica em 0), rolar pra ler, e a tela pula de volta pro topo assim que uma
-    // foto termina de carregar. O mesmo vale pro resize do visualViewport, que no Android dispara
-    // tambem quando a barra do navegador se esconde ao rolar.
+    // The old scrollCaretIntoView only scrolled when the DOM selection was inside the editor, that
+    // is, with the editor focused. Without that guard: open a long note, tap Editar without touching
+    // the text (the cursor stays at 0), scroll to read, and the screen jumps back to the top as soon as a
+    // photo finishes loading. The same goes for the visualViewport resize, which on Android also fires
+    // when the browser bar hides on scroll.
     const { App, w } = await boot({ editor: true });
     const view = App.Editor._impl.view;
-    const ROLAGEM = w.CM6.EditorView.scrollIntoView(0).type;
-    const dispatchDeVerdade = view.dispatch.bind(view);
-    let rolagens = 0;
+    const SCROLL = w.CM6.EditorView.scrollIntoView(0).type;
+    const realDispatch = view.dispatch.bind(view);
+    let scrolls = 0;
     view.dispatch = (...specs) => {
       for (const spec of specs) {
-        for (const efeito of [].concat(spec?.effects || [])) if (efeito.is(ROLAGEM)) rolagens++;
+        for (const effect of [].concat(spec?.effects || [])) if (effect.is(SCROLL)) scrolls++;
       }
-      return dispatchDeVerdade(...specs);
+      return realDispatch(...specs);
     };
 
     App.setMode('edit');
@@ -2423,14 +2423,14 @@ async function scenario(title, block) {
     App.decorateEditorEmbeds();
     check('a foto chegou do Drive e mudou a altura da linha',
       w.document.querySelectorAll('.cm-line.embed-line').length === 1);
-    check('sem foco, a foto que chegou nao joga a tela de volta pro cursor', rolagens === 0, rolagens);
+    check('sem foco, a foto que chegou nao joga a tela de volta pro cursor', scrolls === 0, scrolls);
 
     App.Editor.focus();
     check('o editor esta em foco', view.hasFocus);
     App._embedInfo.set('foto.png', { url: 'blob:outra', width: 800, height: 400 });
     App.decorateEditorEmbeds();
-    check('com foco, a linha que mudou de altura continua perseguindo o cursor', rolagens === 1, rolagens);
-    view.dispatch = dispatchDeVerdade;
+    check('com foco, a linha que mudou de altura continua perseguindo o cursor', scrolls === 1, scrolls);
+    view.dispatch = realDispatch;
   }
   });
 
@@ -2439,56 +2439,56 @@ async function scenario(title, block) {
     const { App, w } = await boot({ editor: true });
     App.Editor.setText('base');
     cm6Type(App, ' mais');
-    const desfazer = w.document.querySelector('.toolbar-btn[data-history="undo"]');
-    const refazer = w.document.querySelector('.toolbar-btn[data-history="redo"]');
-    check('os dois botoes existem na barra', !!desfazer && !!refazer);
-    desfazer.dispatchEvent(new w.Event('click', { bubbles: true }));
+    const undoButton = w.document.querySelector('.toolbar-btn[data-history="undo"]');
+    const redoButton = w.document.querySelector('.toolbar-btn[data-history="redo"]');
+    check('os dois botoes existem na barra', !!undoButton && !!redoButton);
+    undoButton.dispatchEvent(new w.Event('click', { bubbles: true }));
     check('o botao desfez', App.Editor.getText() === 'base', App.Editor.getText());
-    refazer.dispatchEvent(new w.Event('click', { bubbles: true }));
+    redoButton.dispatchEvent(new w.Event('click', { bubbles: true }));
     check('o botao refez', App.Editor.getText() === 'base mais', App.Editor.getText());
   }
   });
 
   await scenario('43b. Desfazer sem nada pra desfazer nao suja a nota', async () => {
   {
-    // Nota recem aberta: a pilha esta vazia. Sem olhar o retorno de undo(), o botao marcava a
-    // nota como suja de qualquer jeito, e trinta segundos depois o autosave gravava no Drive com o
-    // updated de hoje sem uma unica edicao ter acontecido
+    // A freshly opened note: the stack is empty. Without looking at undo()'s return, the button marked the
+    // note as dirty anyway, and thirty seconds later the autosave wrote to the Drive with
+    // today's updated without a single edit having happened
     const { App, w } = await boot({ editor: true });
     const view = App.Editor._impl.view;
-    const NOTA = '---\ncreated: 2026-01-02\nupdated: 2026-01-03\n---\n\ntexto';
-    App.setContent(NOTA);
-    const desfazer = w.document.querySelector('.toolbar-btn[data-history="undo"]');
-    const refazer = w.document.querySelector('.toolbar-btn[data-history="redo"]');
+    const NOTE = '---\ncreated: 2026-01-02\nupdated: 2026-01-03\n---\n\ntexto';
+    App.setContent(NOTE);
+    const undoButton = w.document.querySelector('.toolbar-btn[data-history="undo"]');
+    const redoButton = w.document.querySelector('.toolbar-btn[data-history="redo"]');
     check('nota recem aberta esta limpa', App.isDirty === false);
-    desfazer.dispatchEvent(new w.Event('click', { bubbles: true }));
+    undoButton.dispatchEvent(new w.Event('click', { bubbles: true }));
     check('desfazer sem nada pra desfazer nao suja a nota', App.isDirty === false, App.isDirty);
-    refazer.dispatchEvent(new w.Event('click', { bubbles: true }));
+    redoButton.dispatchEvent(new w.Event('click', { bubbles: true }));
     check('refazer sem nada pra refazer tambem nao', App.isDirty === false, App.isDirty);
-    check('e o texto continua o que foi aberto', App.Editor.getText() === NOTA, App.Editor.getText());
+    check('e o texto continua o que foi aberto', App.Editor.getText() === NOTE, App.Editor.getText());
 
-    // E o botao continua marcando quando desfaz de verdade
+    // And the button still marks it when it really undoes
     cm6Type(App, ' novo');
     App.isDirty = false;
-    desfazer.dispatchEvent(new w.Event('click', { bubbles: true }));
+    undoButton.dispatchEvent(new w.Event('click', { bubbles: true }));
     check('desfazer de verdade marca a nota como nao salva', App.isDirty === true);
-    check('... e desfez mesmo', App.Editor.getText() === NOTA, App.Editor.getText());
+    check('... e desfez mesmo', App.Editor.getText() === NOTE, App.Editor.getText());
 
-    // A pilha do desfazer nao pode atravessar a troca de nota. A edicao da nota A aqui e uma
-    // DELECAO (sair de uma lista de um item), que e o caso que sobrevivia ao remapeamento: desfazer
-    // na nota B colava o `- [ ] ` no fim dela, marcava como alterada e o autosave gravava isso no
-    // Drive trinta segundos depois. Corromper nota que a pessoa so abriu.
-    const NOTA_B = 'nota B, so aberta da lista e nao tocada';
+    // The undo stack must not cross a change of note. The edit of note A here is a
+    // DELETION (leaving a one-item list), which is the case that survived the remapping: undoing
+    // in note B stuck the `- [ ] ` at its end, marked it as changed and the autosave wrote that to the
+    // Drive thirty seconds later. Corrupting a note the person only opened.
+    const NOTE_B = 'nota B, so aberta da lista e nao tocada';
     App.setContent('- [ ] comprar pao');
     view.dispatch({ selection: { anchor: 17 } });
-    apertarEnter(w, view);
-    apertarEnter(w, view);
+    pressEnter(w, view);
+    pressEnter(w, view);
     check('na nota A, sair da lista deixou uma delecao pra tras',
       App.Editor.getText() === '- [ ] comprar pao\n', App.Editor.getText());
-    App.setContent(NOTA_B);
-    check('nota B aberta e limpa', App.isDirty === false && App.Editor.getText() === NOTA_B, App.Editor.getText());
-    desfazer.dispatchEvent(new w.Event('click', { bubbles: true }));
-    check('desfazer na nota B nao traz pedaco da nota A', App.Editor.getText() === NOTA_B, App.Editor.getText());
+    App.setContent(NOTE_B);
+    check('nota B aberta e limpa', App.isDirty === false && App.Editor.getText() === NOTE_B, App.Editor.getText());
+    undoButton.dispatchEvent(new w.Event('click', { bubbles: true }));
+    check('desfazer na nota B nao traz pedaco da nota A', App.Editor.getText() === NOTE_B, App.Editor.getText());
     check('... e a nota B continua limpa, entao o autosave nao tem o que gravar', App.isDirty === false);
   }
   });
@@ -2498,9 +2498,9 @@ async function scenario(title, block) {
     const { App, w } = await boot({ editor: true });
     const view = App.Editor._impl.view;
 
-    // Enter de verdade, como no cenario 40: o comando do app so chega ao teclado por estar em
-    // Prec.highest, acima do Enter que o markdown() instala em Prec.high
-    const enter = (conteudo, em) => enterEm(App, w, conteudo, em);
+    // A real Enter, as in scenario 40: the app's command only reaches the keyboard by being at
+    // Prec.highest, above the Enter that markdown() installs at Prec.high
+    const enter = (content, at) => enterAt(App, w, content, at);
 
     check('o editor do teste e o CM6, nao o textarea', App.Editor.kind() === 'cm6');
 
@@ -2515,7 +2515,7 @@ async function scenario(title, block) {
     check('citacao vazia sem o espaco depois do sinal tambem encerra',
       r.text === '> citacao\n' && r.at === '1:0', r);
 
-    // O caso que motivou a decisao: sair de um bloco de callout sem gastar tres Enters
+    // The case that drove the decision: leaving a callout block without spending three Enters
     r = enter('> [!note] aviso\n> corpo\n> ', 26);
     check('bloco de callout: a linha vazia encerra na hora',
       r.text === '> [!note] aviso\n> corpo\n' && r.at === '2:0', r);
@@ -2523,33 +2523,33 @@ async function scenario(title, block) {
     r = enter('  > recuada\n  > ', 16);
     check('citacao recuada vazia tambem encerra', r.text === '  > recuada\n' && r.at === '1:0', r);
 
-    // O comando so pode pegar a linha que e SO citacao vazia: sinal de maior no meio da frase e
-    // texto comum, e um Enter ali e um Enter comum
+    // The command may only take a line that is ONLY an empty quote: a greater-than sign in the middle of a sentence is
+    // plain text, and an Enter there is a plain Enter
     r = enter('a > b', 5);
     check('sinal de maior no meio da frase nao e citacao', r.text === 'a > b\n' && r.at === '1:0', r);
 
-    // Dentro de bloco de codigo, `> ` e texto do codigo, nao citacao: o Enter so quebra a linha. O
-    // comando decidia pelo texto da linha e apagava o conteudo dela
+    // Inside a code block, `> ` is code text, not a quote: the Enter only breaks the line. The
+    // command decided by the line's text and erased its content
     r = enter('```\n> \n```', 6);
     check('linha "> " dentro de bloco de codigo: o Enter quebra a linha e o "> " fica',
       r.text === '```\n> \n\n```' && r.at === '2:0', r);
     r = enter('```\n>\n```', 5);
     check('linha ">" dentro de bloco de codigo tambem fica', r.text === '```\n>\n\n```' && r.at === '2:0', r);
-    // Bloco de codigo dentro de uma citacao: a linha e codigo, a citacao em volta nao encerra nela
+    // A code block inside a quote: the line is code, the quote around it does not end on it
     r = enter('> ```\n> \n> ```', 8);
     check('"> " dentro de codigo que mora numa citacao continua sendo codigo',
       r.text.startsWith('> ```\n> \n') && r.text.endsWith('> ```') && r.text.split('\n').length === 4, r);
 
-    // Com um trecho selecionado, o Enter e o da biblioteca: ele troca a selecao pela linha nova.
-    // O comando de encerrar citacao olhava so a linha do cursor e ignorava a selecao, entao apagava
-    // o `> ` e deixava o trecho selecionado na nota: o Enter da pessoa sumia no caminho.
+    // With a span selected, the Enter is the library's: it replaces the selection with the new line.
+    // The end-the-quote command looked only at the cursor's line and ignored the selection, so it erased
+    // the `> ` and left the selected span in the note: the person's Enter got lost along the way.
     App.Editor.setText('> um\n> dois\n> ');
     view.dispatch({ selection: { anchor: 2, head: 14 } });
-    apertarEnter(w, view);
+    pressEnter(w, view);
     check('Enter com trecho selecionado substitui a selecao, em vez de so encerrar a citacao',
       !view.state.doc.toString().includes('dois'), view.state.doc.toString());
 
-    // Regressao: o que ja funcionava continua com a biblioteca, e igual ao cenario 40
+    // Regression: what already worked stays with the library, the same as scenario 40
     r = enter('- item', 6);
     check('lista comum continua lista comum', r.text === '- item\n- ' && r.at === '1:2', r);
     r = enter('1. um', 5);
@@ -2570,69 +2570,69 @@ async function scenario(title, block) {
     App.newFile();
     App.setMode('edit');
 
-    // O toque como o Chrome entrega: as coordenadas do fim vem em changedTouches, porque no
-    // touchend a lista touches ja esta vazia
-    const toque = (el, tipo, x, y) => {
-      const e = new w.Event(tipo, { cancelable: true, bubbles: true });
-      const ponto = [{ clientX: x, clientY: y }];
-      e.touches = tipo === 'touchend' ? [] : ponto;
-      e.changedTouches = ponto;
+    // The touch the way Chrome delivers it: the end coordinates come in changedTouches, because on
+    // touchend the touches list is already empty
+    const touch = (el, type, x, y) => {
+      const e = new w.Event(type, { cancelable: true, bubbles: true });
+      const point = [{ clientX: x, clientY: y }];
+      e.touches = type === 'touchend' ? [] : point;
+      e.changedTouches = point;
       el.dispatchEvent(e);
       return e;
     };
 
-    const lista = d.querySelector('.toolbar-btn[data-format="list"]');
+    const listButton = d.querySelector('.toolbar-btn[data-format="list"]');
     App.Editor.setText('uma linha');
     App.Editor._impl.view.dispatch({ selection: { anchor: 9, head: 9 } });
 
-    const comeco = toque(lista, 'touchstart', 100, 700);
-    const fim = toque(lista, 'touchend', 100, 700);
+    const start = touch(listButton, 'touchstart', 100, 700);
+    const end = touch(listButton, 'touchend', 100, 700);
     check('o comeco do toque nao e cancelado: e ele que deixa o navegador rolar a barra',
-      !comeco.defaultPrevented);
-    check('o fim do toque e cancelado: e o que segura o teclado aberto', fim.defaultPrevented);
+      !start.defaultPrevented);
+    check('o fim do toque e cancelado: e o que segura o teclado aberto', end.defaultPrevented);
     check('dedo parado em cima do botao: a formatacao acontece',
       App.Editor.getText() === '- uma linha', App.Editor.getText());
 
-    // Arrastar em cima do botao e rolar a barra, nao tocar nele
+    // Dragging over the button is scrolling the bar, not tapping it
     App.Editor.setText('outra linha');
-    toque(lista, 'touchstart', 100, 700);
-    toque(lista, 'touchend', 160, 704);
+    touch(listButton, 'touchstart', 100, 700);
+    touch(listButton, 'touchend', 160, 704);
     check('dedo arrastado de lado em cima do botao nao formata nada',
       App.Editor.getText() === 'outra linha', App.Editor.getText());
 
-    // Um tremor de dedo continua sendo toque
-    toque(lista, 'touchstart', 100, 700);
-    toque(lista, 'touchend', 104, 703);
+    // A shaky finger is still a tap
+    touch(listButton, 'touchstart', 100, 700);
+    touch(listButton, 'touchend', 104, 703);
     check('tremida de dedo ainda e toque', App.Editor.getText() === '- outra linha', App.Editor.getText());
 
-    // O navegador que assume a rolagem manda touchcancel e nunca chega ao touchend: o proximo
-    // toque nao pode herdar a posicao do gesto abandonado
+    // The browser that takes over the scrolling sends touchcancel and never gets to touchend: the next
+    // tap must not inherit the position of the abandoned gesture
     App.Editor.setText('mais uma');
-    toque(lista, 'touchstart', 100, 700);
-    toque(lista, 'touchcancel', 300, 700);
-    toque(lista, 'touchend', 300, 700);
+    touch(listButton, 'touchstart', 100, 700);
+    touch(listButton, 'touchcancel', 300, 700);
+    touch(listButton, 'touchend', 300, 700);
     check('gesto que virou rolagem nao formata quando o dedo larga longe',
       App.Editor.getText() === 'mais uma', App.Editor.getText());
 
-    // O mouse continua no clique, e sem roubar o foco do editor
+    // The mouse stays on click, and without stealing the editor's focus
     App.Editor.setText('no mouse');
-    const abaixou = new w.Event('mousedown', { cancelable: true, bubbles: true });
-    lista.dispatchEvent(abaixou);
-    lista.click();
+    const mouseDown = new w.Event('mousedown', { cancelable: true, bubbles: true });
+    listButton.dispatchEvent(mouseDown);
+    listButton.click();
     check('no mouse o clique formata, e o mousedown e cancelado pra nao tirar o foco',
-      App.Editor.getText() === '- no mouse' && abaixou.defaultPrevented, App.Editor.getText());
+      App.Editor.getText() === '- no mouse' && mouseDown.defaultPrevented, App.Editor.getText());
 
-    // A camera e a galeria abrem o seletor de dentro do toque, e o desenho abre a tela cheia:
-    // os dois passam pelo mesmo caminho, entao um toque neles tambem tem que agir
-    let abriu = 0;
-    App.els.photoInput.click = () => { abriu++; };
-    const galeria = d.querySelector('.toolbar-btn[data-photo="gallery"]');
-    toque(galeria, 'touchstart', 300, 700);
-    toque(galeria, 'touchend', 300, 700);
-    check('o botao da galeria abre o seletor no fim do toque', abriu === 1, abriu);
-    toque(galeria, 'touchstart', 300, 700);
-    toque(galeria, 'touchend', 360, 700);
-    check('arrastar em cima do botao da galeria nao abre o seletor', abriu === 1, abriu);
+    // The camera and the gallery open the picker from inside the tap, and the drawing opens the full screen:
+    // both go through the same path, so a tap on them also has to act
+    let opened = 0;
+    App.els.photoInput.click = () => { opened++; };
+    const galleryButton = d.querySelector('.toolbar-btn[data-photo="gallery"]');
+    touch(galleryButton, 'touchstart', 300, 700);
+    touch(galleryButton, 'touchend', 300, 700);
+    check('o botao da galeria abre o seletor no fim do toque', opened === 1, opened);
+    touch(galleryButton, 'touchstart', 300, 700);
+    touch(galleryButton, 'touchend', 360, 700);
+    check('arrastar em cima do botao da galeria nao abre o seletor', opened === 1, opened);
   }
   });
 
@@ -2640,8 +2640,8 @@ async function scenario(title, block) {
   {
     const { App, w } = await boot();
     const d = w.document;
-    // O jsdom nao tem Cache Storage: a leitura falha e o painel diz que nao deu, em vez de
-    // inventar um numero. Versao errada no painel e pior que versao nenhuma
+    // jsdom has no Cache Storage: the read fails and the panel says it could not, instead of
+    // making up a number. A wrong version on the panel is worse than no version at all
     check('sem cache storage a versao sai como indisponivel', App._version === 'indisponível', App._version);
 
     w.caches = { keys: async () => ['drivenotes-v36', 'outra-coisa-v1'] };
@@ -2663,22 +2663,22 @@ async function scenario(title, block) {
   await scenario('47. A barra de formatacao: 18 botoes, todos desenhados', async () => {
   {
     const { w } = await boot();
-    const botoes = [...w.document.querySelectorAll('.toolbar .toolbar-btn')];
-    const ordem = botoes.map(b => b.dataset.history || b.dataset.format || b.dataset.photo || b.dataset.sketch
+    const buttons = [...w.document.querySelectorAll('.toolbar .toolbar-btn')];
+    const order = buttons.map(b => b.dataset.history || b.dataset.format || b.dataset.photo || b.dataset.sketch
       || (b.hasAttribute('data-extract') ? 'extract' : undefined));
-    // A ordem e a barra que a Agatha usa com o polegar: desfazer e refazer, os links da nota, a
-    // foto e o desenho, a formatacao de texto, os blocos, e as listas no fim. O de extrair (v43) so
-    // aparece com texto selecionado e gruda na ponta direita: e o ultimo da fila de proposito
-    const esperada = ['undo', 'redo', 'wikilink', 'tag', 'camera', 'gallery', 'open', 'heading',
+    // The order is the bar Agatha uses with her thumb: undo and redo, the note's links, the
+    // photo and the drawing, the text formatting, the blocks, and the lists at the end. The extract one (v43) only
+    // shows up with text selected and sticks to the right end: it is last in line on purpose
+    const expected = ['undo', 'redo', 'wikilink', 'tag', 'camera', 'gallery', 'open', 'heading',
       'bold', 'italic', 'strikethrough', 'highlight', 'code', 'quote', 'link', 'list', 'ordered', 'checklist', 'extract'];
-    check('a barra tem os 18 botoes na ordem combinada, e o de extrair no fim', ordem.join(',') === esperada.join(','), ordem);
-    // Letra e emoji na barra saiam com a fonte de cada Android e nao herdavam a cor do botao:
-    // todo botao e SVG de traco, e nenhum tem texto solto dentro
-    const semDesenho = botoes.filter(b => !b.querySelector('svg') || b.textContent.trim());
-    check('todo botao e um SVG, sem letra nem emoji sobrando', semDesenho.length === 0,
-      semDesenho.map(b => b.title));
-    const semNome = botoes.filter(b => !(b.getAttribute('aria-label') || '').trim());
-    check('todo botao se anuncia pro leitor de tela', semNome.length === 0, semNome.map(b => b.title));
+    check('a barra tem os 18 botoes na ordem combinada, e o de extrair no fim', order.join(',') === expected.join(','), order);
+    // Letters and emoji on the bar came out in each Android's font and did not inherit the button's color:
+    // every button is a stroke SVG, and none has loose text inside
+    const undrawn = buttons.filter(b => !b.querySelector('svg') || b.textContent.trim());
+    check('todo botao e um SVG, sem letra nem emoji sobrando', undrawn.length === 0,
+      undrawn.map(b => b.title));
+    const unnamed = buttons.filter(b => !(b.getAttribute('aria-label') || '').trim());
+    check('todo botao se anuncia pro leitor de tela', unnamed.length === 0, unnamed.map(b => b.title));
   }
   });
 
@@ -2696,10 +2696,10 @@ async function scenario(title, block) {
 
     App.Editor.setText('');
     App.applyFormat('wikilink');
-    // Mudou com a lista de notas (v39): o link nasce vazio, cursor no meio, e a lista abre em cima
-    // dele. Um "texto" de enfeite filtraria a lista ate nao sobrar nada. Ver o cenario 55.
+    // Changed with the note list (v39): the link is born empty, cursor in the middle, and the list opens over
+    // it. A placeholder "texto" would filter the list until nothing was left. See scenario 55.
     check('sem selecao entra [[]] com o cursor no meio, pra lista filtrar do zero',
-      App.Editor.getText() === '[[]]' && sel() === '2,2', { texto: App.Editor.getText(), sel: sel() });
+      App.Editor.getText() === '[[]]' && sel() === '2,2', { text: App.Editor.getText(), sel: sel() });
 
     App.Editor.setText('etiqueta');
     view.dispatch({ selection: { anchor: 0, head: 8 } });
@@ -2710,14 +2710,14 @@ async function scenario(title, block) {
     App.Editor.setText('');
     App.applyFormat('tag');
     check('sem selecao a tag deixa #texto com "texto" selecionado',
-      App.Editor.getText() === '#texto' && sel() === '1,6', { texto: App.Editor.getText(), sel: sel() });
+      App.Editor.getText() === '#texto' && sel() === '1,6', { text: App.Editor.getText(), sel: sel() });
   }
   });
 
   await scenario('49. Lista numerada na barra', async () => {
   {
-    // A numerada entra pela tabela FORMATS como qualquer outro marcador de linha: quem faz o
-    // trabalho e o linePrefixChange, e e ele que segura o cursor onde a escrita estava
+    // The numbered one comes in through the FORMATS table like any other line marker: the one doing the
+    // work is linePrefixChange, and it is what holds the cursor where the writing was
     const { App } = await boot({ editor: true });
     const view = App.Editor._impl.view;
     const cursor = () => view.state.selection.main.head;
@@ -2726,53 +2726,53 @@ async function scenario(title, block) {
     view.dispatch({ selection: { anchor: 3 } });
     App.applyFormat('ordered');
     check('a lista vira numerada e o cursor continua depois do "a"',
-      App.Editor.getText() === '1. a' && cursor() === 4, { texto: App.Editor.getText(), cursor: cursor() });
+      App.Editor.getText() === '1. a' && cursor() === 4, { text: App.Editor.getText(), cursor: cursor() });
 
     App.applyFormat('ordered');
     check('numerada de novo tira o marcador',
-      App.Editor.getText() === 'a' && cursor() === 1, { texto: App.Editor.getText(), cursor: cursor() });
+      App.Editor.getText() === 'a' && cursor() === 1, { text: App.Editor.getText(), cursor: cursor() });
 
     App.Editor.setText('1. a');
     view.dispatch({ selection: { anchor: 4 } });
     App.applyFormat('list');
     check('numerada vira lista com um toque, sem virar duas linhas de marcador',
-      App.Editor.getText() === '- a' && cursor() === 3, { texto: App.Editor.getText(), cursor: cursor() });
+      App.Editor.getText() === '- a' && cursor() === 3, { text: App.Editor.getText(), cursor: cursor() });
   }
   });
 
   await scenario('50. O leitor entende marca-texto e riscado', async () => {
   {
     const { App } = await boot();
-    const ler = (texto) => { App.setContent(texto); App.setMode('preview'); return App.els.previewContainer.innerHTML; };
-    check('==x== vira marca-texto', ler('==x==').includes('<mark>x</mark>'), ler('==x=='));
+    const read = (text) => { App.setContent(text); App.setMode('preview'); return App.els.previewContainer.innerHTML; };
+    check('==x== vira marca-texto', read('==x==').includes('<mark>x</mark>'), read('==x=='));
     check('o negrito sobrevive dentro da marca',
-      ler('==**x**==').includes('<mark><strong>x</strong></mark>'), ler('==**x**=='));
-    // O sanitizador nao pode comer a tag nova, e os casos que nao sao marca-texto continuam texto
-    check('o DOMPurify deixa o <mark> passar', ler('==x==').includes('<mark'), ler('==x=='));
-    check('==== sozinho nao abre marca nenhuma', !ler('====').includes('<mark'), ler('===='));
-    check('== x == com espaco encostado fica texto', !ler('== x ==').includes('<mark'), ler('== x =='));
-    check('~~x~~ continua saindo riscado pelo GFM', ler('~~x~~').includes('<del>x</del>'), ler('~~x~~'));
+      read('==**x**==').includes('<mark><strong>x</strong></mark>'), read('==**x**=='));
+    // The sanitizer must not eat the new tag, and the cases that are not highlights stay text
+    check('o DOMPurify deixa o <mark> passar', read('==x==').includes('<mark'), read('==x=='));
+    check('==== sozinho nao abre marca nenhuma', !read('====').includes('<mark'), read('===='));
+    check('== x == com espaco encostado fica texto', !read('== x ==').includes('<mark'), read('== x =='));
+    check('~~x~~ continua saindo riscado pelo GFM', read('~~x~~').includes('<del>x</del>'), read('~~x~~'));
   }
   });
 
   await scenario('51. Foto e desenho nascem com o nome da nota, sem a data', async () => {
   {
     const { App, drive, w } = await boot();
-    const slug = (nome) => App.slugForMedia(nome);
+    const slug = (name) => App.slugForMedia(name);
     check("'Voz Blue' vira voz-blue", slug('Voz Blue') === 'voz-blue', slug('Voz Blue'));
     check('acento, dois pontos e exclamacao viram hifen ou somem',
       slug('Reunião 17 set: decisões!') === 'reuniao-17-set-decisoes', slug('Reunião 17 set: decisões!'));
     check('nome de 60 letras corta em 40', slug('a'.repeat(60)) === 'a'.repeat(40), slug('a'.repeat(60)));
-    // O corte cai bem em cima do hifen: ele nao pode ficar pendurado no fim do nome
+    // The cut falls right on the hyphen: it must not be left hanging at the end of the name
     check('corte que cairia num hifen nao deixa hifen no fim',
       slug(`${'x'.repeat(39)} y`) === 'x'.repeat(39), slug(`${'x'.repeat(39)} y`));
     check("'---' nao deixa nada", slug('---') === '', slug('---'));
     check('nome vazio ou ausente tambem nao', slug('') === '' && slug(null) === '' && slug(undefined) === '');
 
-    // Relogio parado: o nome carrega a hora, e sem isso a checagem dependeria do segundo em que rodou
+    // Stopped clock: the name carries the time, and without this the check would depend on the second it ran in
     const Real = w.Date;
-    const FIXO = Real.parse('2026-09-19T15:30:12');
-    w.Date = function (...a) { return a.length ? new Real(...a) : new Real(FIXO); };
+    const FIXED = Real.parse('2026-09-19T15:30:12');
+    w.Date = function (...a) { return a.length ? new Real(...a) : new Real(FIXED); };
     w.Date.now = () => Real.now();
     w.Date.parse = Real.parse;
     w.Date.UTC = Real.UTC;
@@ -2801,25 +2801,25 @@ async function scenario(title, block) {
     const { App, drive, w } = await boot();
     w.URL.createObjectURL = () => 'blob:fake/local';
     const Real = w.Date;
-    const FIXO = Real.parse('2026-09-19T15:30:12');
-    w.Date = function (...a) { return a.length ? new Real(...a) : new Real(FIXO); };
+    const FIXED = Real.parse('2026-09-19T15:30:12');
+    w.Date = function (...a) { return a.length ? new Real(...a) : new Real(FIXED); };
     w.Date.now = () => Real.now();
     w.Date.parse = Real.parse;
     w.Date.UTC = Real.UTC;
 
     drive.put('media', '_media', '', [VAULT]); drive.files.get('media').mimeType = FOLDER;
     drive.put('A', 'a.md', 'linha um');
-    // A foto do mesmo minuto de OUTRO dia, que sem esta checagem seria a que o ![[...]] novo acharia
+    // The photo from the same minute of ANOTHER day, which without this check would be the one the new ![[...]] finds
     drive.put('velha', 'a-foto-153012.jpg', 'bin', ['media']); drive.files.get('velha').mimeType = 'image/jpeg';
     await App.openFile('A', 'a.md');
     App.setMode('edit');
     const ta = App.els.editorElement;
     ta.selectionStart = ta.selectionEnd = ta.value.length;
     const photo = (n) => new w.File([`bytes-${n}`], `IMG_${n}.JPG`, { type: 'image/jpeg' });
-    const nomeDe = (n) => [...drive.files.values()].find(f => f.content === `bytes-${n}`)?.name;
+    const nameOf = (n) => [...drive.files.values()].find(f => f.content === `bytes-${n}`)?.name;
 
     await App.insertPhoto(photo(1));
-    check('nome ja ocupado no _media: a foto sobe como -2', nomeDe(1) === 'a-foto-153012-2.jpg', nomeDe(1));
+    check('nome ja ocupado no _media: a foto sobe como -2', nameOf(1) === 'a-foto-153012-2.jpg', nameOf(1));
     check('e o ![[...]] da nota aponta pro nome que subiu', ta.value.includes('![[a-foto-153012-2.jpg]]'), ta.value);
 
     w.Date = Real;
@@ -2831,8 +2831,8 @@ async function scenario(title, block) {
     const { App, drive, w } = await boot();
     w.URL.createObjectURL = () => 'blob:fake/local';
     const Real = w.Date;
-    const FIXO = Real.parse('2026-09-19T15:30:12');
-    w.Date = function (...a) { return a.length ? new Real(...a) : new Real(FIXO); };
+    const FIXED = Real.parse('2026-09-19T15:30:12');
+    w.Date = function (...a) { return a.length ? new Real(...a) : new Real(FIXED); };
     w.Date.now = () => Real.now();
     w.Date.parse = Real.parse;
     w.Date.UTC = Real.UTC;
@@ -2845,27 +2845,27 @@ async function scenario(title, block) {
     const ta = App.els.editorElement;
     ta.selectionStart = ta.selectionEnd = ta.value.length;
     const photo = (n) => new w.File([`bytes-${n}`], `IMG_${n}.JPG`, { type: 'image/jpeg' });
-    const nomeDe = (n) => [...drive.files.values()].find(f => f.content === `bytes-${n}`)?.name;
-    const buscas = (nome) => drive.log.filter(l => l.startsWith('LIST ') && l.includes(`name = '${nome}'`)).length;
+    const nameOf = (n) => [...drive.files.values()].find(f => f.content === `bytes-${n}`)?.name;
+    const lookups = (name) => drive.log.filter(l => l.startsWith('LIST ') && l.includes(`name = '${name}'`)).length;
 
-    // Com o nome base ja ocupado, -2 fica com a primeira foto e a segunda tem que ir pra -3 SEM
-    // gastar uma consulta no que a leva ja distribuiu
+    // With the base name already taken, -2 goes to the first photo and the second has to go to -3 WITHOUT
+    // spending a lookup on what the batch has already handed out
     drive.log.length = 0;
     await App.insertPhotos([photo(1), photo(2)]);
     check('duas fotos no mesmo segundo viram -2 e -3',
-      nomeDe(1) === 'a-foto-153012-2.jpg' && nomeDe(2) === 'a-foto-153012-3.jpg', [nomeDe(1), nomeDe(2)]);
+      nameOf(1) === 'a-foto-153012-2.jpg' && nameOf(2) === 'a-foto-153012-3.jpg', [nameOf(1), nameOf(2)]);
     check('a segunda foto nao consulta de novo o que a leva ja deu',
-      buscas('a-foto-153012.jpg') === 1 && buscas('a-foto-153012-2.jpg') === 1 && buscas('a-foto-153012-3.jpg') === 1,
+      lookups('a-foto-153012.jpg') === 1 && lookups('a-foto-153012-2.jpg') === 1 && lookups('a-foto-153012-3.jpg') === 1,
       drive.log.filter(l => l.startsWith('LIST ')));
     check('as duas entraram na nota, uma por linha',
       ta.value === 'linha um\n![[a-foto-153012-2.jpg]]\n![[a-foto-153012-3.jpg]]\n', ta.value);
 
-    // Sem rede pra conferir, a foto sobe assim mesmo: nome repetido incomoda, foto perdida e perda
+    // With no network to check, the photo goes up anyway: a repeated name is a nuisance, a lost photo is a loss
     const real = App.driveFindByName;
     App.driveFindByName = async () => { throw new Error('sem rede'); };
     await App.insertPhoto(photo(3));
     check('busca falhando nao trava a foto: sobe com o nome sem conferir',
-      nomeDe(3) === 'a-foto-153012.jpg', nomeDe(3));
+      nameOf(3) === 'a-foto-153012.jpg', nameOf(3));
     App.driveFindByName = real;
     w.Date = Real;
   }
@@ -2889,24 +2889,24 @@ async function scenario(title, block) {
     App._embedInfo.set('x.jpg', { url: 'blob:fake/local', width: 800, height: 400 });
 
     App.confirmDialog = async () => false;
-    const naoQuis = await App.removeEmbedLine(2);
+    const declined = await App.removeEmbedLine(2);
     check('o dialogo respondendo nao deixa tudo como estava',
-      naoQuis === false && App.getContent() === 'a\n![[x.jpg]]\nb'
+      declined === false && App.getContent() === 'a\n![[x.jpg]]\nb'
       && !drive.files.get('X').trashed && App._embedInfo.has('x.jpg'), App.getContent());
 
     App.confirmDialog = async () => true;
-    const foi = await App.removeEmbedLine(2);
+    const removed = await App.removeEmbedLine(2);
     await App._saveChain;
     check('confirmando, a linha inteira sai e nao sobra quebra',
-      foi === true && App.getContent() === 'a\nb', JSON.stringify(App.getContent()));
+      removed === true && App.getContent() === 'a\nb', JSON.stringify(App.getContent()));
     check('o texto sem a linha chegou no Drive', bodyOf(drive.files.get('A').content) === 'a\nb', drive.files.get('A').content);
     check('o arquivo da foto foi pra lixeira', drive.files.get('X').trashed === true);
-    const ordem = drive.log.filter(l => /^(PATCH A|TRASH X)/.test(l));
-    check('salvou no Drive ANTES de mandar pra lixeira', ordem.join('|') === 'PATCH A|TRASH X x.jpg', ordem);
+    const order = drive.log.filter(l => /^(PATCH A|TRASH X)/.test(l));
+    check('salvou no Drive ANTES de mandar pra lixeira', order.join('|') === 'PATCH A|TRASH X x.jpg', order);
     check('a foto sai dos dois caches de decoracao',
       !App._embedUrls.has('x.jpg') && !App._embedInfo.has('x.jpg'));
 
-    // Ultima linha da nota: o que tem que sair com ela e a quebra de CIMA
+    // Last line of the note: what has to go with it is the line break ABOVE
     await App.openFile('B', 'b.md');
     App.setMode('edit');
     await App.removeEmbedLine(2);
@@ -2915,14 +2915,14 @@ async function scenario(title, block) {
       App.getContent() === 'a', JSON.stringify(App.getContent()));
     check('e a foto dela tambem foi pra lixeira', drive.files.get('Y').trashed === true);
 
-    // A lixeira falhando e a metade inofensiva: a nota ja esta certa e a tela diz o que faltou
+    // The trash failing is the harmless half: the note is already right and the screen says what was left undone
     await App.openFile('C', 'c.md');
     App.setMode('edit');
     drive.failTrash = true;
-    const meio = await App.removeEmbedLine(2);
+    const halfway = await App.removeEmbedLine(2);
     await App._saveChain;
     check('lixeira falhou: a nota continua sem a linha, e o aviso aparece',
-      meio === false && App.getContent() === 'a\nb' && bodyOf(drive.files.get('C').content) === 'a\nb'
+      halfway === false && App.getContent() === 'a\nb' && bodyOf(drive.files.get('C').content) === 'a\nb'
       && !drive.files.get('Z').trashed
       && App.els.saveStatus.textContent === 'A foto saiu da nota, mas não foi pra lixeira',
       App.els.saveStatus.textContent);
@@ -2933,21 +2933,21 @@ async function scenario(title, block) {
     check('linha que nao existe tambem nao',
       await App.removeEmbedLine(99) === false && App.getContent() === 'a\nb');
 
-    // O salvamento que virou rascunho em vez de chegar no Drive (aqui, um conflito): o Drive ainda
-    // tem a nota COM a linha, entao mandar a foto pra lixeira agora deixaria o texto de la apontando
-    // pro vazio. O aviso do proprio save ja basta, e a lixeira nao e tocada.
+    // The save that became a draft instead of reaching the Drive (here, a conflict): the Drive still
+    // has the note WITH the line, so sending the photo to the trash now would leave the text there pointing
+    // at nothing. The save's own notice is enough, and the trash is not touched.
     image('W', 'w.jpg');
     drive.put('D', 'd.md', 'a\n![[w.jpg]]\nb');
     await App.openFile('D', 'd.md');
     App.setMode('edit');
     drive.remoteEdit('D', 'mexeram no PC');
-    const semSave = await App.removeEmbedLine(2);
+    const notSaved = await App.removeEmbedLine(2);
     await App._saveChain;
     check('save que nao chegou no Drive: a foto NAO vai pra lixeira',
-      semSave === false && !drive.files.get('W').trashed
+      notSaved === false && !drive.files.get('W').trashed
       && drive.files.get('D').content === 'mexeram no PC'
       && App.els.saveStatus.textContent === 'Conflito com o Drive',
-      [semSave, drive.files.get('W').trashed, App.els.saveStatus.textContent]);
+      [notSaved, drive.files.get('W').trashed, App.els.saveStatus.textContent]);
   }
   });
 
@@ -2958,7 +2958,7 @@ async function scenario(title, block) {
     drive.put('n-old', 'antiga.md', 'x', ['d-proj']); drive.files.get('n-old').modifiedTime = '2026-01-01T00:00:00.000Z';
     drive.put('n-fora', 'fora do vault.md', 'x', ['outra-pasta']);
     drive.put('n-obs', 'workspace.md', 'x', ['d-obs']);
-    // Nota criada pelo proprio app: o Drive guarda ela como text/plain, e mesmo assim ela e do indice
+    // A note created by the app itself: the Drive stores it as text/plain, and even so it belongs in the index
     drive.put('n-plain', 'criada pelo app.md', 'x', [VAULT]); drive.files.get('n-plain').mimeType = 'text/plain';
 
     const notes = await App.noteIndex();
@@ -2972,11 +2972,11 @@ async function scenario(title, block) {
     const stored = JSON.parse(w.localStorage.getItem('drivenotes_note_index'));
     check('guardado no aparelho com a hora', Array.isArray(stored.notes) && stored.notes.length === 6 && typeof stored.builtAt === 'number');
 
-    // filtro: sem acento, sem maiuscula, comeca-com antes de contem, recente primeiro
+    // filter: no accents, no uppercase, starts-with before contains, most recent first
     check('"ab" acha Abacaxi', App.searchNoteIndex('ab').map(n => n.name).join() === 'Abacaxi.md');
     check('"emile" acha émile', App.searchNoteIndex('emile').map(n => n.name).join() === 'émile.md');
-    const nota = App.searchNoteIndex('nota').map(n => n.name);
-    check('"nota" acha nota do projeto', nota.join() === 'nota do projeto.md', nota);
+    const matches = App.searchNoteIndex('nota').map(n => n.name);
+    check('"nota" acha nota do projeto', matches.join() === 'nota do projeto.md', matches);
     drive.files.get('n-a').modifiedTime = '2026-09-01T00:00:00.000Z';
     await App.refreshNoteIndex();
     const a = App.searchNoteIndex('a').map(n => n.name);
@@ -2987,12 +2987,12 @@ async function scenario(title, block) {
       return App.searchNoteIndex('').map(n => n.id).join() === 'n-sub';
     })());
 
-    // sessao seguinte (janela nova, w2): abre da copia guardada na hora e atualiza por tras
+    // next session (new window, w2): opens from the stored copy right away and refreshes behind the scenes
     const storedIndex = w.localStorage.getItem('drivenotes_note_index');
     const { App: App2, drive: drive2, w: w2 } = await boot({ seedStorage: { drivenotes_note_index: storedIndex } });
     seedVault(drive2);
-    // A pasta onde nota nova nasce (DEFAULT_FOLDER_ID) precisa existir no Drive falso, dentro do vault,
-    // pro folderTrail dela responder quando o createOnDrive puser a nota no indice
+    // The folder where a new note is born (DEFAULT_FOLDER_ID) has to exist in the fake Drive, inside the vault,
+    // so that its folderTrail answers when createOnDrive puts the note in the index
     drive2.put(INBOX, '_inbox', '', [VAULT]); drive2.files.get(INBOX).mimeType = FOLDER;
     drive2.put('n-new', 'nova.md', 'x', [VAULT]);
     drive2.delay = 50;
@@ -3001,7 +3001,7 @@ async function scenario(title, block) {
     await sleep(300);
     check('a atualizacao por tras trouxe a nota nova', App2._noteIndex.find(n => n.id === 'n-new') && drive2.log.filter(l => l.startsWith('LIST-TYPE')).length === 2);
 
-    // o app mantem o indice em dia com o que ele mesmo faz
+    // the app keeps the index up to date with what it does itself
     App2.noteIndexRename('n-new', 'renomeada.md');
     check('renomear muda o nome no indice', App2._noteIndex.find(n => n.id === 'n-new').name === 'renomeada.md');
     App2.noteIndexRemove('n-new');
@@ -3009,19 +3009,19 @@ async function scenario(title, block) {
     await App2.noteIndexAdd({ id: 'n-add', name: 'criada.md', parents: ['d-proj'], modifiedTime: '2026-09-22T00:00:00.000Z' });
     const added = App2._noteIndex.find(n => n.id === 'n-add');
     check('nota criada entra com a pasta em texto', added && added.where === '20-projetos', added);
-    // 5 no Drive falso (4 do seedVault mais n-new), menos n-new apagada, mais n-add: 5.
-    // A contagem sozinha nao provaria nada (era 5 antes do par apagar/criar): os ids provam.
-    const guardado = JSON.parse(w2.localStorage.getItem('drivenotes_note_index')).notes;
-    check('o guardado acompanha', guardado.length === 5 && guardado.some(n => n.id === 'n-add')
-      && !guardado.some(n => n.id === 'n-new'), guardado.map(n => n.id));
+    // 5 in the fake Drive (4 from seedVault plus n-new), minus n-new deleted, plus n-add: 5.
+    // The count alone would prove nothing (it was 5 before the delete/create pair): the ids prove it.
+    const storedAfter = JSON.parse(w2.localStorage.getItem('drivenotes_note_index')).notes;
+    check('o guardado acompanha', storedAfter.length === 5 && storedAfter.some(n => n.id === 'n-add')
+      && !storedAfter.some(n => n.id === 'n-new'), storedAfter.map(n => n.id));
 
-    // nota nova salva no Drive entra sozinha
+    // a new note saved to the Drive goes in on its own
     App2.newFile(); App2.setContent('oi'); App2.markDirty();
     await App2.save({ manual: true });
     await sleep(100);
     check('createOnDrive poe a nota no indice', App2._noteIndex.find(n => n.id === App2.currentFile.id), App2.currentFile.name);
 
-    // Drive fora do ar: o indice guardado continua servindo
+    // Drive down: the stored index still serves
     const { App: App3, drive: drive3 } = await boot({ seedStorage: { drivenotes_note_index: storedIndex } });
     drive3.failReads = true;
     const third = await App3.noteIndex();
@@ -3062,7 +3062,7 @@ async function scenario(title, block) {
     check('cursor depois dos ]]', view.state.selection.main.head === App.getContent().length);
     check('lista fechada depois de escolher', completionStatus(view.state) === null);
 
-    // ]] ja presentes (o botao da barra poe): nao duplica
+    // ]] already there (the bar button puts them in): it does not duplicate
     App.setContent('a  b');
     view.dispatch({ selection: { anchor: 2 } });
     App.applyFormat('wikilink');
@@ -3076,23 +3076,23 @@ async function scenario(title, block) {
     acceptCompletion(view);
     check('nao duplica os ]] e o cursor pula pra depois deles', App.getContent() === 'a [[zebra]] b' && view.state.selection.main.head === 11, [App.getContent(), view.state.selection.main.head]);
 
-    // Enter com a lista fechada continua sendo o Enter do app (continua a lista)
+    // Enter with the list closed is still the app's Enter (it continues the list)
     App.setContent('- item');
     App.Editor.moveCaretToEnd();
-    apertarEnter(w, view);
+    pressEnter(w, view);
     check('Enter sem lista aberta segue o Enter do app', App.getContent() === '- item\n- ', JSON.stringify(App.getContent()));
 
-    // fora do [[ nada abre
+    // outside [[ nothing opens
     App.setContent('so texto');
     App.Editor.moveCaretToEnd();
     typeAtCaret(' mais');
     await sleep(200);
     check('digitar fora de [[ nao abre lista', completionStatus(view.state) === null);
 
-    // o botao voltar do Android fecha a lista, nao a nota
+    // Android's back button closes the list, not the note
     const { App: AppW, drive: driveW, w: wW } = await boot({ editor: true, watcher: true });
     seedVault(driveW);
-    driveW.put('N2', 'n2.md', 'texto ', [VAULT]); // no vault: entra no indice e nas recentes, que e o que a lista vazia mostra
+    driveW.put('N2', 'n2.md', 'texto ', [VAULT]); // in the vault: it goes into the index and the recents, which is what the empty list shows
     await AppW.navigateTo('N2', 'n2.md');
     AppW.setMode('edit');
     AppW.Editor.moveCaretToEnd();
@@ -3127,8 +3127,8 @@ async function scenario(title, block) {
       linking.map(n => n.id).sort().join() === 'L1,L2', linking.map(n => n.id));
     check('cada uma vem com o texto e o modifiedTime de antes do download',
       linking.every(n => typeof n.content === 'string' && n.modifiedTime === drive.files.get(n.id).modifiedTime));
-    // Baixadas: L1, L2, L3 (tem a palavra, sem link) e a propria zebra.md (o nome casa na busca). Fora do
-    // vault (L4), dentro do .obsidian (L5) e o json (L6) nao sao baixados.
+    // Downloaded: L1, L2, L3 (it has the word, no link) and zebra.md itself (the name matches in the search). Outside the
+    // vault (L4), inside .obsidian (L5) and the json (L6) are not downloaded.
     check('so as candidatas do vault foram baixadas',
       drive.log.filter(l => l.startsWith('GET content')).length === 4, drive.log.filter(l => l.startsWith('GET content')));
     const except = await App.findLinkingNotes('zebra.md', { exceptId: 'L1' });
@@ -3145,7 +3145,7 @@ async function scenario(title, block) {
     const d = w.document;
     await App.noteIndex();
 
-    // nota nova, ainda sem id: o botao nem aparece
+    // new note, no id yet: the button does not even show up
     App.newFile();
     App.els.fileName.click();
     check('nota sem id: modal sem o botao apagar', App.els.modal.classList.contains('visible') && d.getElementById('modal-delete').hidden);
@@ -3153,13 +3153,13 @@ async function scenario(title, block) {
 
     d.getElementById('welcome-open').click(); await sleep(80);
     [...d.querySelectorAll('.browser-item')].find(li => li.textContent.includes('zebra')).click(); await sleep(80);
-    // Tres passos atras dela: a tela inicial, a nota nova de cima e a pasta. E dessa pasta que o apagar tem que voltar.
+    // Three steps behind it: the home screen, the new note from above and the folder. It is to that folder that delete has to go back.
     check('zebra aberta', App.currentFile?.id === 'n-z' && App.navStack.length === 3
       && App.navStack[2].view === 'browse' && App.navStack[2].id === VAULT, [App.navStack.length, App.navStack]);
     App.els.fileName.click();
     check('nota do Drive: modal com o botao apagar', !d.getElementById('modal-delete').hidden);
 
-    // cancelar nao apaga
+    // cancel does not delete
     d.getElementById('modal-delete').click();
     await sleep(20);
     check('modal do nome fechou e o dialogo de confirmacao abriu',
@@ -3171,7 +3171,7 @@ async function scenario(title, block) {
     d.getElementById('confirm-cancel').click(); await sleep(20);
     check('cancelar: nada na lixeira, nota continua aberta', !drive.files.get('n-z').trashed && App.currentFile?.id === 'n-z');
 
-    // edicao pendente e apagar: o save enfileirado roda antes, e a lixeira depois; nada recria a nota
+    // pending edit and delete: the queued save runs first, and the trash after; nothing recreates the note
     App.setMode('edit'); type('mexi');
     App.els.fileName.click(); d.getElementById('modal-delete').click(); await sleep(20);
     d.getElementById('confirm-ok').click();
@@ -3186,7 +3186,7 @@ async function scenario(title, block) {
     check('os links das outras notas ficaram', drive.files.get('L1').content === 'vai [[zebra]]' && drive.files.get('L2').content === '[[zebra]] de novo');
     check('nao ha mais nota nenhuma com id n-z criada de novo', [...drive.files.values()].filter(f => f.name === 'zebra.md').length === 1);
 
-    // o Drive recusa: a nota fica
+    // the Drive refuses: the note stays
     await App.navigateTo('n-a', 'Abacaxi.md'); await sleep(50);
     drive.failTrash = true;
     App.els.fileName.click(); d.getElementById('modal-delete').click(); await sleep(20);
@@ -3214,7 +3214,7 @@ async function scenario(title, block) {
     check('nome novo com cifrao nao vira padrao de substituicao', App.relinkText('[[zebra]]', 'zebra', 'a$1b') === '[[a$1b]]');
 
     await App.openFile('n-z', 'zebra.md');
-    // L3 muda entre a busca e a gravacao: o Drive falso adianta o modifiedTime no primeiro GET de meta dela
+    // L3 changes between the search and the write: the fake Drive moves its modifiedTime forward on its first meta GET
     const realFetch = drive.fetch;
     let bumped = false;
     w.fetch = drive.fetch = async (url, opts) => {
@@ -3239,7 +3239,7 @@ async function scenario(title, block) {
     check('status conta certo', App.els.saveStatus.textContent === 'Renomeado, 2 links atualizados, 1 nota pulada', App.els.saveStatus.textContent);
     check('o indice acompanhou o nome', App._noteIndex == null || App._noteIndex.find(n => n.id === 'n-z')?.name === 'girafa.md');
 
-    // busca fora do ar: renomeia, avisa que nao procurou
+    // search down: renames, says it did not look
     w.fetch = drive.fetch = realFetch;
     await App.openFile('n-a', 'Abacaxi.md');
     drive.put('L5', 'cinco.md', '[[Abacaxi]]', [VAULT]);
@@ -3254,7 +3254,7 @@ async function scenario(title, block) {
     check('status avisa', App.els.saveStatus.textContent === 'Renomeado, não deu pra procurar os links', App.els.saveStatus.textContent);
     w.fetch = drive.fetch = okFetch;
 
-    // sem links: so "Renomeado"
+    // no links: just "Renomeado"
     await App.openFile('n-e', 'émile.md');
     await App.renameFile(App.currentFile, 'emilia');
     await App._saveChain; await sleep(50);
@@ -3266,85 +3266,85 @@ async function scenario(title, block) {
   {
     const { App, w } = await boot({ editor: true });
     const view = App.Editor._impl.view;
-    const aceso = () => w.document.body.classList.contains('has-selection');
+    const lit = () => w.document.body.classList.contains('has-selection');
 
     App.Editor.setText('uma linha\n\n   \noutra');
     App.Editor.focus();
     await sleep(30);
     view.dispatch({ selection: { anchor: 2 } });
-    check('cursor sem selecao: botao apagado', !aceso());
+    check('cursor sem selecao: botao apagado', !lit());
     view.dispatch({ selection: { anchor: 0, head: 3 } });
-    check('texto selecionado com o editor em foco: botao aceso', aceso());
+    check('texto selecionado com o editor em foco: botao aceso', lit());
     view.dispatch({ selection: { anchor: 10, head: 14 } });
-    check('selecao so de espaco e quebra de linha: apagado', !aceso());
+    check('selecao so de espaco e quebra de linha: apagado', !lit());
     check('... e o editor nao entrega trecho nenhum', App.Editor.selectedStretch() === null);
     view.dispatch({ selection: { anchor: 0, head: 3 } });
     view.contentDOM.blur();
     await sleep(50);
-    check('o editor perdeu o foco (a caixa do nome pega ele): apagado', !aceso());
+    check('o editor perdeu o foco (a caixa do nome pega ele): apagado', !lit());
 
-    // Linhas inteiras com a quebra do fim, que e como o dedo costuma selecionar
+    // Whole lines with the line break at the end, which is how a finger usually selects
     App.Editor.setText('antes\nTrecho um\nlinha dois\ndepois');
     view.dispatch({ selection: { anchor: 6, head: 27 } });
-    const trecho = App.Editor.selectedStretch();
-    check('o trecho vem sem as pontas em branco', trecho && trecho.text === 'Trecho um\nlinha dois', trecho);
+    const stretch = App.Editor.selectedStretch();
+    check('o trecho vem sem as pontas em branco', stretch && stretch.text === 'Trecho um\nlinha dois', stretch);
     view.dispatch({ changes: { from: 0, insert: 'bem ' }, userEvent: 'input.type' });
     check('texto digitado antes do trecho: a troca acompanha e acerta o lugar',
-      App.Editor.replaceStretch(trecho, '[[x]]') === true && App.Editor.getText() === 'bem antes\n[[x]]\ndepois', App.Editor.getText());
+      App.Editor.replaceStretch(stretch, '[[x]]') === true && App.Editor.getText() === 'bem antes\n[[x]]\ndepois', App.Editor.getText());
     check('o cursor fica logo depois do link', view.state.selection.main.head === 'bem antes\n[[x]]'.length, view.state.selection.main.head);
     App.Editor.undo();
     check('desfazer devolve o trecho', App.Editor.getText() === 'bem antes\nTrecho um\nlinha dois\ndepois', App.Editor.getText());
 
     view.dispatch({ selection: { anchor: 10, head: 30 } });
-    const mexido = App.Editor.selectedStretch();
+    const edited = App.Editor.selectedStretch();
     view.dispatch({ changes: { from: 17, insert: 'mexido ' }, userEvent: 'input.type' });
     check('texto mexido dentro do trecho: a troca recusa e nao mexe em nada',
-      App.Editor.replaceStretch(mexido, '[[x]]') === false
+      App.Editor.replaceStretch(edited, '[[x]]') === false
       && App.Editor.getText() === 'bem antes\nTrecho mexido um\nlinha dois\ndepois', App.Editor.getText());
 
     App.Editor.setText('um\nTrecho\ndois');
     view.dispatch({ selection: { anchor: 3, head: 9 } });
-    const trocado = App.Editor.selectedStretch();
+    const swapped = App.Editor.selectedStretch();
     App.Editor.setText('outra nota inteira');
     check('a nota trocou por baixo: a troca recusa',
-      App.Editor.replaceStretch(trocado, '[[x]]') === false && App.Editor.getText() === 'outra nota inteira');
+      App.Editor.replaceStretch(swapped, '[[x]]') === false && App.Editor.getText() === 'outra nota inteira');
 
-    const { App: semLib } = await boot();
+    const { App: withoutLib } = await boot();
     check('no textarea de reserva nao ha trecho nem troca',
-      semLib.Editor.selectedStretch() === null && semLib.Editor.replaceStretch({ text: 'x' }, 'y') === false);
+      withoutLib.Editor.selectedStretch() === null && withoutLib.Editor.replaceStretch({ text: 'x' }, 'y') === false);
   }
   });
 
   await scenario('59b. A caixa do nome pode recusar e ficar aberta dizendo por que', async () => {
   {
     const { App, w } = await boot();
-    const aviso = w.document.getElementById('modal-message');
-    let recebido = null;
-    App.showModal('Teste', 'Nome', (v) => { recebido = v; },
+    const message = w.document.getElementById('modal-message');
+    let received = null;
+    App.showModal('Teste', 'Nome', (v) => { received = v; },
       { value: 'ocupado', validate: async (v) => (v === 'ocupado' ? 'Já existe' : '') });
     await App._modalConfirm();
     check('recusado: a caixa continua aberta, com o aviso, e nada foi confirmado',
-      App.els.modal.classList.contains('visible') && !aviso.hidden && aviso.textContent === 'Já existe' && recebido === null);
+      App.els.modal.classList.contains('visible') && !message.hidden && message.textContent === 'Já existe' && received === null);
     App.els.modalInput.value = 'livre';
     await App._modalConfirm();
-    check('aceito: fecha e entrega o valor', !App.els.modal.classList.contains('visible') && recebido === 'livre');
+    check('aceito: fecha e entrega o valor', !App.els.modal.classList.contains('visible') && received === 'livre');
 
-    // Fechada no meio da conferencia, nao confirma depois
-    let tarde = null;
-    let soltar;
-    App.showModal('Teste', 'Nome', (v) => { tarde = v; }, { value: 'x', validate: () => new Promise(r => { soltar = r; }) });
-    check('abrir de novo apaga o aviso anterior', aviso.hidden && aviso.textContent === '');
-    const pendente = App._modalConfirm();
+    // Closed in the middle of the check, it does not confirm afterwards
+    let later = null;
+    let release;
+    App.showModal('Teste', 'Nome', (v) => { later = v; }, { value: 'x', validate: () => new Promise(r => { release = r; }) });
+    check('abrir de novo apaga o aviso anterior', message.hidden && message.textContent === '');
+    const pending = App._modalConfirm();
     App.hideModal();
-    soltar('');
-    await pendente;
-    check('cancelada durante a conferencia: nao confirma', tarde === null);
+    release('');
+    await pending;
+    check('cancelada durante a conferencia: nao confirma', later === null);
 
-    // O renomear, que nao passa validate, continua fechando na hora
-    let sincrono = null;
-    App.showModal('Renomear nota', 'Nome do arquivo', (v) => { sincrono = v; }, { value: 'a.md' });
+    // Rename, which passes no validate, still closes right away
+    let synchronous = null;
+    App.showModal('Renomear nota', 'Nome do arquivo', (v) => { synchronous = v; }, { value: 'a.md' });
     App._modalConfirm();
-    check('sem validate: fecha e confirma no mesmo instante', sincrono === 'a.md' && !App.els.modal.classList.contains('visible'));
+    check('sem validate: fecha e confirma no mesmo instante', synchronous === 'a.md' && !App.els.modal.classList.contains('visible'));
   }
   });
 
@@ -3376,10 +3376,10 @@ async function scenario(title, block) {
     App.setMode('edit');
     App.Editor.focus();
     await sleep(30);
-    // Linhas inteiras, com a quebra do fim, como o dedo costuma selecionar
+    // Whole lines, with the line break at the end, the way a finger usually selects
     view.dispatch({ selection: { anchor: original.indexOf('## Ideia'), head: original.indexOf('depois') } });
     check('com o trecho selecionado o botao acende', d.body.classList.contains('has-selection'));
-    // O toque pelo caminho do mouse no bindToolbarButton: prova a ligacao do botao
+    // The tap through bindToolbarButton's mouse path: proves the button's wiring
     d.querySelector('.toolbar-btn[data-extract]').click();
     await sleep(150);
     check('o toque abre a caixa com o nome sugerido', App.els.modal.classList.contains('visible')
@@ -3388,20 +3388,20 @@ async function scenario(title, block) {
     await App._modalConfirm();
     await sleep(150); await App._saveChain; await sleep(50); await App._saveChain;
 
-    const nova = [...drive.files.values()].find(f => f.name === 'ideia-de-home.md');
-    check('a nota nova foi criada na pasta da original', nova && nova.parents[0] === 'd-proj', nova);
+    const newNote = [...drive.files.values()].find(f => f.name === 'ideia-de-home.md');
+    check('a nota nova foi criada na pasta da original', newNote && newNote.parents[0] === 'd-proj', newNote);
     check('com as datas de nota nova em cima e o trecho inteiro embaixo',
-      nova && /^---\ncreated: \d{4}-\d{2}-\d{2}\nupdated: \d{4}-\d{2}-\d{2}\n---\n\n## Ideia de home\nlinha dois$/.test(nova.content), nova && nova.content);
+      newNote && /^---\ncreated: \d{4}-\d{2}-\d{2}\nupdated: \d{4}-\d{2}-\d{2}\n---\n\n## Ideia de home\nlinha dois$/.test(newNote.content), newNote && newNote.content);
     check('no editor o trecho virou link numa linha propria, e a linha seguinte ficou inteira',
       bodyOf(App.getContent()) === 'antes\n[[ideia-de-home]]\ndepois', App.getContent());
     check('o cursor ficou logo depois do link',
       view.state.selection.main.head === App.getContent().indexOf('[[ideia-de-home]]') + '[[ideia-de-home]]'.length);
     check('a original foi salva sem esperar os 30 segundos',
       bodyOf(drive.files.get('O').content) === 'antes\n[[ideia-de-home]]\ndepois' && !App.isDirty, drive.files.get('O').content);
-    const criou = drive.log.findIndex(l => l.startsWith('POST') && l.includes('ideia-de-home.md'));
-    check('a criacao veio antes do salvar da original', criou >= 0 && criou < drive.log.lastIndexOf('PATCH O'), drive.log);
+    const created = drive.log.findIndex(l => l.startsWith('POST') && l.includes('ideia-de-home.md'));
+    check('a criacao veio antes do salvar da original', created >= 0 && created < drive.log.lastIndexOf('PATCH O'), drive.log);
     check('a nota nova esta nas recentes e no indice',
-      App.getRecents().some(r => r.id === nova.id) && App._noteIndex.some(n => n.id === nova.id));
+      App.getRecents().some(r => r.id === newNote.id) && App._noteIndex.some(n => n.id === newNote.id));
     check('o cabecalho diz Nota criada', App.els.saveStatus.textContent === 'Nota criada', App.els.saveStatus.textContent);
     App.Editor.undo();
     check('desfazer devolve o trecho pra original',
@@ -3414,41 +3414,41 @@ async function scenario(title, block) {
     const { App, drive, w } = await boot({ editor: true });
     seedVault(drive);
     const view = App.Editor._impl.view;
-    const texto = 'um\nTrecho que sai\ndois';
-    drive.put('O', 'origem.md', texto, [VAULT]);
+    const text = 'um\nTrecho que sai\ndois';
+    drive.put('O', 'origem.md', text, [VAULT]);
     await App.openFile('O', 'origem.md');
     App.setMode('edit');
     App.Editor.focus();
-    const selecionarTrecho = () => {
-      const de = App.getContent().indexOf('Trecho');
-      view.dispatch({ selection: { anchor: de, head: de + 'Trecho que sai'.length } });
+    const selectStretch = () => {
+      const from = App.getContent().indexOf('Trecho');
+      view.dispatch({ selection: { anchor: from, head: from + 'Trecho que sai'.length } });
     };
 
-    // Nome repetido digitado: a caixa fica aberta, avisa, e nada e criado
-    selecionarTrecho();
+    // A repeated name typed: the box stays open, says so, and nothing is created
+    selectStretch();
     await App.promptExtract();
     check('a sugestao sai da primeira linha', App.els.modalInput.value === 'trecho-que-sai', App.els.modalInput.value);
     App.els.modalInput.value = 'Zebra';
     await App._modalConfirm();
-    const aviso = w.document.getElementById('modal-message');
+    const message = w.document.getElementById('modal-message');
     check('nome repetido: a caixa continua aberta e diz por que',
-      App.els.modal.classList.contains('visible') && !aviso.hidden && aviso.textContent === 'Já existe uma nota com esse nome', aviso.textContent);
+      App.els.modal.classList.contains('visible') && !message.hidden && message.textContent === 'Já existe uma nota com esse nome', message.textContent);
     check('... e nada foi criado', drive.count('POST') === 0, drive.log);
     App.hideModal();
 
-    // O Drive recusa a criacao: a original fica como estava, sem nenhuma escrita
+    // The Drive refuses the creation: the original stays as it was, with no write at all
     drive.failWrites = true;
-    selecionarTrecho();
+    selectStretch();
     await App.promptExtract();
     await App._modalConfirm();
     await sleep(100); await App._saveChain;
-    check('criacao recusada: o trecho continua na original', App.getContent() === texto && !App.isDirty, App.getContent());
+    check('criacao recusada: o trecho continua na original', App.getContent() === text && !App.isDirty, App.getContent());
     check('... nenhuma escrita na original', drive.count('PATCH') === 0, drive.log);
     check('... e o status diz', App.els.saveStatus.textContent === 'Erro ao criar a nota, o trecho ficou', App.els.saveStatus.textContent);
     drive.failWrites = false;
 
-    // O trecho muda enquanto a nota nova esta a caminho: ela fica, e a original nao e tocada
-    selecionarTrecho();
+    // The stretch changes while the new note is on its way: the new note stays, and the original is not touched
+    selectStretch();
     await App.promptExtract();
     drive.delay = 60;
     await App._modalConfirm();
@@ -3462,18 +3462,18 @@ async function scenario(title, block) {
       App.els.saveStatus.textContent === 'Nota criada, o trecho ficou aqui também', App.els.saveStatus.textContent);
     drive.delay = 5;
 
-    // Sem login: nada e criado e o trecho fica
-    const { App: semLogin, drive: driveSemLogin } = await boot({ editor: true, auth: false });
-    semLogin.newFile();
-    semLogin.setContent(texto);
-    const de = texto.indexOf('Trecho');
-    semLogin.Editor._impl.view.dispatch({ selection: { anchor: de, head: de + 'Trecho que sai'.length } });
-    await semLogin.promptExtract();
-    await semLogin._modalConfirm();
+    // No login: nothing is created and the stretch stays
+    const { App: noLogin, drive: noLoginDrive } = await boot({ editor: true, auth: false });
+    noLogin.newFile();
+    noLogin.setContent(text);
+    const from = text.indexOf('Trecho');
+    noLogin.Editor._impl.view.dispatch({ selection: { anchor: from, head: from + 'Trecho que sai'.length } });
+    await noLogin.promptExtract();
+    await noLogin._modalConfirm();
     await sleep(50);
     check('sem login: nada criado, o trecho fica, e o status pede login',
-      driveSemLogin.count('POST') === 0 && semLogin.getContent() === texto
-      && semLogin.els.saveStatus.textContent === 'Faça login pra extrair', [driveSemLogin.log, semLogin.els.saveStatus.textContent]);
+      noLoginDrive.count('POST') === 0 && noLogin.getContent() === text
+      && noLogin.els.saveStatus.textContent === 'Faça login pra extrair', [noLoginDrive.log, noLogin.els.saveStatus.textContent]);
   }
   });
 
@@ -3491,33 +3491,33 @@ async function scenario(title, block) {
     await S.remove('A');
     check('apagar tira', await S.get('A') === null);
 
-    // O limite: passou dele, sai a aberta ha mais tempo. Pequeno aqui pra nao gravar 101 notas
+    // The limit: past it, the one opened longest ago goes. Small here so as not to write 101 notes
     S.LIMIT = 3;
     for (const id of ['n1', 'n2', 'n3']) await S.put({ id, name: `${id}.md`, modifiedTime: 't', content: id });
-    await S.put({ id: 'n1', name: 'n1.md', modifiedTime: 't', content: 'n1 de novo' }); // reaberta: agora e a mais recente
+    await S.put({ id: 'n1', name: 'n1.md', modifiedTime: 't', content: 'n1 de novo' }); // reopened: now it is the most recent
     await S.put({ id: 'n4', name: 'n4.md', modifiedTime: 't', content: 'n4' });
     check('passou do limite: sai a aberta ha mais tempo (n2), e a reaberta fica',
       await S.get('n2') === null && !!(await S.get('n1')) && !!(await S.get('n3')) && !!(await S.get('n4')));
     S.LIMIT = 100;
 
-    // O app aberto de novo ve o que ficou no aparelho
+    // The app opened again sees what was left on the device
     const { App: App2 } = await boot({ idb });
     check('outra sessao, mesmo aparelho: a entrada esta la', (await App2.NoteStore.get('n4'))?.content === 'n4');
 
-    // Sem IndexedDB (o boot padrao dos testes, e o celular quando o banco falha): responde vazio, nao estoura
-    const { App: semBanco } = await boot();
-    let estourou = false;
+    // No IndexedDB (the tests' default boot, and the phone when the database fails): answers empty, does not throw
+    const { App: noDb } = await boot();
+    let threw = false;
     try {
-      await semBanco.NoteStore.put({ id: 'x', name: 'x.md', modifiedTime: 't', content: 'x' });
-      check('sem banco: get responde null', await semBanco.NoteStore.get('x') === null);
-      await semBanco.NoteStore.remove('x');
-    } catch { estourou = true; }
-    check('sem banco: nada estoura', !estourou);
+      await noDb.NoteStore.put({ id: 'x', name: 'x.md', modifiedTime: 't', content: 'x' });
+      check('sem banco: get responde null', await noDb.NoteStore.get('x') === null);
+      await noDb.NoteStore.remove('x');
+    } catch { threw = true; }
+    check('sem banco: nada estoura', !threw);
 
-    // Banco que falha ao abrir (aba anonima, navegador que recusa): mesma coisa
-    const { App: quebrado, w: wq } = await boot();
+    // A database that fails to open (incognito tab, a browser that refuses): same thing
+    const { App: broken, w: wq } = await boot();
     wq.indexedDB = { open() { throw new Error('SecurityError'); } };
-    check('banco que falha ao abrir: null, sem estourar', await quebrado.NoteStore.get('x') === null);
+    check('banco que falha ao abrir: null, sem estourar', await broken.NoteStore.get('x') === null);
   }
   });
 
@@ -3532,13 +3532,13 @@ async function scenario(title, block) {
     check('abrir do Drive guarda a nota no aparelho', (await App.NoteStore.get('A'))?.content === 'texto de A');
 
     drive.log.length = 0;
-    drive.delay = 200; // um Drive lento: o que aparecer antes de 200ms nao veio dele
-    const aberta = App.openFile('A', 'a.md');
+    drive.delay = 200; // a slow Drive: whatever shows up before 200ms did not come from it
+    const opening = App.openFile('A', 'a.md');
     await sleep(60);
     check('A na tela, no modo leitura, antes de o Drive responder',
       App.currentFile?.id === 'A' && App.getContent() === 'texto de A' && w.document.body.dataset.view === 'preview',
       [App.currentFile?.id, App.getContent()]);
-    await aberta;
+    await opening;
     await sleep(300);
     check('uma pergunta ao Drive e nenhum download', drive.count('GET meta') === 1 && drive.count('GET content') === 0, drive.log);
     check('nada mudou: nenhum aviso', App.els.saveStatus.textContent === '', App.els.saveStatus.textContent);
@@ -3546,15 +3546,15 @@ async function scenario(title, block) {
       App._log.some(l => /cached a\.md \d+ms/.test(l)) && App._log.some(l => /checked a\.md same \d+ms/.test(l)), App._log.slice(-4));
     drive.delay = 5;
 
-    // O app aberto de novo (o Android matou): o aparelho ainda tem A
+    // The app opened again (Android killed it): the device still has A
     const { App: App2, drive: drive2 } = await boot({ idb });
     drive2.put('A', 'a.md', 'texto de A');
     drive2.files.get('A').modifiedTime = (await App2.NoteStore.get('A')).modifiedTime;
     drive2.delay = 200;
-    const reaberta = App2.openFile('A', 'a.md');
+    const reopening = App2.openFile('A', 'a.md');
     await sleep(60);
     check('app aberto de novo: A aparece na hora, do aparelho', App2.getContent() === 'texto de A', App2.getContent());
-    await reaberta;
+    await reopening;
     await sleep(300);
     check('... e a pergunta ao Drive disse que nao mudou', drive2.count('GET content') === 0, drive2.log);
   }
@@ -3569,13 +3569,13 @@ async function scenario(title, block) {
     await App.openFile('B', 'b.md');
     await sleep(30);
 
-    // Mudou no Drive (o PC): a guardada aparece, depois troca
+    // Changed on the Drive (the PC): the stored one shows up, then it gets swapped
     drive.remoteEdit('A', 'versao do PC');
     drive.delay = 100;
-    const aberta = App.openFile('A', 'a.md');
+    const opening = App.openFile('A', 'a.md');
     await sleep(30);
     check('primeiro aparece a guardada', App.getContent() === 'versao 1', App.getContent());
-    await aberta;
+    await opening;
     await sleep(400);
     check('depois troca pela do Drive, na leitura tambem',
       App.getContent() === 'versao do PC' && App.els.previewContainer.textContent.includes('versao do PC'), App.getContent());
@@ -3586,7 +3586,7 @@ async function scenario(title, block) {
     await sleep(30);
     check('e a entrada guardada tambem virou a nova', (await App.NoteStore.get('A'))?.content === 'versao do PC');
 
-    // So a data mudou (um renomear, o Obsidian tocando no arquivo): baixa, ve que e igual, nao avisa
+    // Only the date changed (a rename, Obsidian touching the file): downloads, sees it is the same, does not say anything
     await App.openFile('B', 'b.md');
     drive.files.get('A').modifiedTime = drive.tick();
     await App.openFile('A', 'a.md');
@@ -3595,16 +3595,16 @@ async function scenario(title, block) {
       App.els.saveStatus.textContent === '' && App.currentFile.modifiedTime === drive.files.get('A').modifiedTime,
       [App.els.saveStatus.textContent, App.currentFile.modifiedTime]);
 
-    // Mudou no Drive e ela ja escreveu: nao troca, e o salvar acha o conflito
+    // Changed on the Drive and she has already written: no swap, and the save finds the conflict
     await App.openFile('B', 'b.md');
     await sleep(30);
     drive.remoteEdit('A', 'de novo no PC');
     drive.delay = 100;
-    const outra = App.openFile('A', 'a.md');
+    const secondOpening = App.openFile('A', 'a.md');
     await sleep(30);
     App.setMode('edit');
     type('versao do PC com o que ela escreveu');
-    await outra;
+    await secondOpening;
     await sleep(400);
     check('nao trocou por baixo do que ela escreveu', App.getContent() === 'versao do PC com o que ela escreveu' && App.isDirty, App.getContent());
     drive.delay = 5;
@@ -3623,7 +3623,7 @@ async function scenario(title, block) {
     await App.openFile('B', 'b.md');
     await sleep(30);
 
-    // Salvar atualiza a entrada: editar A, sair, voltar nao baixa nada
+    // Saving updates the entry: edit A, leave, come back and nothing is downloaded
     await App.openFile('A', 'a.md');
     await sleep(50);
     App.setMode('edit');
@@ -3638,17 +3638,17 @@ async function scenario(title, block) {
       App.getContent() === 'versao 1 editada' && drive.count('GET content') === 0 && App.els.saveStatus.textContent === '',
       [App.getContent(), drive.log]);
 
-    // Rascunho ganha do guardado
+    // The draft beats the stored one
     await App.openFile('B', 'b.md');
     w.localStorage.setItem('drivenotes_draft_A', JSON.stringify({ fileId: 'A', name: 'a.md', content: 'rascunho de A',
       baseModifiedTime: drive.files.get('A').modifiedTime, timestamp: Date.now() }));
     await App.openFile('A', 'a.md');
     check('com rascunho, abre o rascunho e nao o guardado', App.getContent() === 'rascunho de A' && App.isDirty, App.getContent());
-    // Sai sem salvar o rascunho, pra nao mudar A no Drive falso
+    // Leaves without saving the draft, so as not to change A on the fake Drive
     App.isDirty = false;
     w.localStorage.removeItem('drivenotes_draft_A');
 
-    // Sem rede: a guardada, com o aviso
+    // No network: the stored one, with the notice
     await App.openFile('B', 'b.md');
     await sleep(30);
     drive.failReads = true;
@@ -3659,15 +3659,15 @@ async function scenario(title, block) {
       [App.getContent(), App.els.saveStatus.textContent]);
     drive.failReads = false;
 
-    // Sem login: a guardada, com o outro aviso
-    const { App: semLogin } = await boot({ idb, auth: false });
-    await semLogin.openFile('A', 'a.md');
+    // No login: the stored one, with the other notice
+    const { App: noLogin } = await boot({ idb, auth: false });
+    await noLogin.openFile('A', 'a.md');
     await sleep(80);
     check('sem login: a guardada na tela, com o aviso',
-      semLogin.getContent() === 'versao 1 editada' && semLogin.els.saveStatus.textContent === 'Sem login: versão guardada',
-      [semLogin.getContent(), semLogin.els.saveStatus.textContent]);
+      noLogin.getContent() === 'versao 1 editada' && noLogin.els.saveStatus.textContent === 'Sem login: versão guardada',
+      [noLogin.getContent(), noLogin.els.saveStatus.textContent]);
 
-    // Recarregar do Drive, no conflito, vai ao Drive e nao ao guardado
+    // Reloading from the Drive, in the conflict, goes to the Drive and not to the stored one
     await App.openFile('B', 'b.md');
     await App.openFile('A', 'a.md');
     await sleep(80);
@@ -3681,7 +3681,7 @@ async function scenario(title, block) {
     check('recarregar trouxe a do Drive na hora, baixando',
       App.getContent() === 'mexi no PC' && drive.count('GET content') === 1, [App.getContent(), drive.log]);
 
-    // Apagar tira a entrada
+    // Deleting removes the entry
     await App.deleteFile(App.currentFile);
     await sleep(50);
     check('apagar a nota tira ela do aparelho', await App.NoteStore.get('A') === null);
@@ -3690,9 +3690,9 @@ async function scenario(title, block) {
 
   await scenario('67. A propria nota reaberta com texto por salvar (link pra ela mesma): fica o que esta na tela', async () => {
   {
-    // Achado na revisao do Opus: com o caminho rapido, tocar em [[a#Secao]] dentro de `a` logo depois de
-    // escrever punha a versao guardada, mais velha, no lugar do texto dela, e a edicao seguinte abria um
-    // conflito falso. A nota na tela ja e a versao mais nova que existe: reabrir so rola ate o titulo.
+    // Found in Opus's review: with the fast path, tapping [[a#Secao]] inside `a` right after
+    // writing put the stored version, older, in place of her text, and the next edit opened a
+    // false conflict. The note on screen is already the newest version there is: reopening only scrolls to the heading.
     const { App, drive, type } = await boot({ idb: true });
     drive.put('A', 'a.md', 'versao 1\n\n## Secao');
     await App.openFile('A', 'a.md');
@@ -3700,12 +3700,12 @@ async function scenario(title, block) {
     App.setMode('edit');
     type('versao 1 com o que ela escreveu\n\n## Secao');
     App.setMode('preview');
-    const naTela = App.currentFile;
+    const onScreen = App.currentFile;
     drive.log.length = 0;
     await App.openFile('A', 'a.md', { heading: 'Secao' });
     check('o texto dela continua na tela, por salvar',
       App.getContent() === 'versao 1 com o que ela escreveu\n\n## Secao' && App.isDirty, App.getContent());
-    check('... na mesma nota, sem ir ao Drive', App.currentFile === naTela && drive.log.length === 0, drive.log);
+    check('... na mesma nota, sem ir ao Drive', App.currentFile === onScreen && drive.log.length === 0, drive.log);
     await App.save({ manual: true });
     check('e o salvar sobe o texto dela, sem conflito falso',
       !App.currentFile.conflict && drive.files.get('A').content === 'versao 1 com o que ela escreveu\n\n## Secao',
@@ -4219,7 +4219,7 @@ async function scenario(title, block) {
       return drive;
     };
 
-    // Um link, pra uma nota de captura que termina em lista
+    // A link, to a capture note that ends in a list
     {
       const drive = inbox();
       const idb = new IDBFactory();
@@ -4246,7 +4246,7 @@ async function scenario(title, block) {
       check('a tela fechou', !App.els.arrivalOverlay.classList.contains('visible'));
     }
 
-    // Voltar com a lista na tela: descarta, sem gravar nada
+    // Back with the list on screen: discards, without writing anything
     {
       const drive = inbox();
       const idb = new IDBFactory();
@@ -4262,7 +4262,7 @@ async function scenario(title, block) {
         && w.document.body.dataset.view === 'welcome');
     }
 
-    // Nota nova, com texto de duas linhas
+    // New note, with two lines of text
     {
       const drive = inbox();
       const idb = new IDBFactory();
@@ -4280,7 +4280,7 @@ async function scenario(title, block) {
         [drive.log.filter((l) => /^(POST|PATCH)/.test(l)), App.isDirty]);
     }
 
-    // Nota nova com o Drive recusando a criacao: o item so sai da caixa depois de estar num rascunho do aparelho
+    // New note with the Drive refusing the creation: the item only leaves the box after it is in a draft on the device
     {
       const drive = inbox();
       const idb = new IDBFactory();
@@ -4296,7 +4296,7 @@ async function scenario(title, block) {
         [draft, App.isDirty]);
     }
 
-    // So uma foto, pra uma nota que termina em paragrafo
+    // Only a photo, to a note that ends in a paragraph
     {
       const drive = inbox();
       const idb = new IDBFactory();
@@ -4316,7 +4316,7 @@ async function scenario(title, block) {
       check('... e saiu da caixa', (await App.ArrivalBox.get('a4')) === null);
     }
 
-    // Login vencido: botao Entrar antes da lista; voltar nao descarta
+    // Expired login: the Entrar button before the list; back does not discard
     {
       const drive = inbox();
       const idb = new IDBFactory();
@@ -4330,14 +4330,14 @@ async function scenario(title, block) {
       await sleep(50);
       check('... voltar fecha, mas o que chegou fica na caixa', !App.els.arrivalOverlay.classList.contains('visible') && (await App.ArrivalBox.get('a5'))?.id === 'a5');
 
-      // Abrir o app de novo (mesmo aparelho, mesma caixa), sem parametro: a tela volta
+      // Opening the app again (same device, same box), with no parameter: the screen comes back
       const again = await boot({ drive, idb, editor: true, watcher: true, auth: false });
       await until(() => again.App.els.arrivalOverlay.classList.contains('visible'));
       check('abertura normal com algo na caixa: a tela Guardar em… volta', again.App.els.arrivalOverlay.classList.contains('visible')
         && again.App.els.arrivalWhat.textContent === 'guardar');
     }
 
-    // A lista nao abre (Drive falhando): mensagem, e o que chegou fica
+    // The list does not open (Drive failing): message, and what arrived stays
     {
       const drive = inbox();
       drive.failReads = true;
@@ -4355,7 +4355,7 @@ async function scenario(title, block) {
       check('... e voltar nao descarta', (await App.ArrivalBox.get('a6'))?.id === 'a6');
     }
 
-    // Atalho Anotar em…: a mesma lista, sem nada chegando; a nota abre no fim, sem mudar nada
+    // The "Anotar em…" shortcut: the same list, with nothing arriving; the note opens at the end, without changing anything
     {
       const drive = inbox();
       const { App, w } = await boot({ url: 'http://localhost:8000/index.html?atalho=anotar', drive, idb: true, editor: true, watcher: true, seedStorage: TOKEN });
@@ -4432,7 +4432,7 @@ async function scenario(title, block) {
     const photo = { name: 'IMG_1.jpg', type: 'image/jpeg', bytes };
     const got = ['title:text(0)', 'text:text(8)', 'url:text(0)', 'photos:file(image/jpeg,13,named)'];
 
-    // Na hora de compartilhar: a mensagem e a nota nova; cancelar deixa na caixa
+    // At the moment of sharing: the message and the new note; cancel leaves it in the box
     const idb = new IDBFactory();
     await seedArrival(idb, { id: 'o1', at: 1, title: '', text: 'sem rede', url: '', photos: [photo], got });
     {
@@ -4449,7 +4449,7 @@ async function scenario(title, block) {
       check('... voltar fecha, e o que chegou fica na caixa, inteiro',
         !visible(App) && (await App.ArrivalBox.get('o1'))?.text === 'sem rede' && (await App.ArrivalBox.get('o1'))?.photos.length === 1);
     }
-    // Abrir de novo sem rede: nao cai na tela; com rede, cai
+    // Opening again without a network: it does not land on the screen; with a network, it does
     {
       const { App } = await boot({ drive, idb, watcher: true, seedStorage: TOKEN, beforeApp: offline });
       await sleep(200);
@@ -4462,7 +4462,7 @@ async function scenario(title, block) {
         App.els.arrivalWhat.textContent);
     }
 
-    // Nota nova sem rede: o texto vai pra nota (rascunho do aparelho), as fotos ficam na caixa, nenhum envio tentado
+    // New note without a network: the text goes into the note (a draft on the device), the photos stay in the box, no upload attempted
     {
       const idb = new IDBFactory();
       await seedArrival(idb, { id: 'o2', at: 1, title: '', text: 'sem rede', url: '', photos: [photo], got });
@@ -4485,7 +4485,7 @@ async function scenario(title, block) {
       check('... e o log diz pra onde foi e o que ficou', logged(App, 'arrival -> new photos=1') && logged(App, 'arrival done sent=0/1 offline, photos kept'), App._log);
     }
 
-    // Registro de versao anterior, sem `got`, e chegada que nao esta mais na caixa: o log nao quebra
+    // A record from an earlier version, without `got`, and an arrival no longer in the box: the log does not break
     {
       const idb = new IDBFactory();
       await seedArrival(idb, { id: 'o3', at: 1, title: '', text: 'antigo', url: '', photos: [] });
@@ -4497,7 +4497,7 @@ async function scenario(title, block) {
       check('chegada que nao esta na caixa: o log diz', logged(gone.App, 'arrival not in box'), gone.App._log);
     }
 
-    // So foto, sem rede: nota nova nasceria vazia, entao a tela so avisa e cancelar guarda
+    // Only a photo, without a network: a new note would be born empty, so the screen only warns and cancel keeps it
     {
       const idb = new IDBFactory();
       await seedArrival(idb, { id: 'o4', at: 1, title: '', text: '', url: '', photos: [photo], got: ['photos:file(image/jpeg,13,named)'] });
@@ -4517,7 +4517,7 @@ async function scenario(title, block) {
   await scenario('76. Sumario: segurar o nome da nota na leitura lista os titulos e pula ate o tocado', async () => {
   {
     const { App, drive, w } = await boot({ watcher: true });
-    // O jsdom nao tem Touch: o evento de toque se monta na mao, com a lista de dedos
+    // jsdom has no Touch: the touch event is built by hand, with the list of fingers
     const touch = (el, type, x = 10, y = 10) => {
       const e = new w.Event(type, { bubbles: true, cancelable: true });
       Object.defineProperty(e, 'touches', { value: type === 'touchend' || type === 'touchcancel' ? [] : [{ clientX: x, clientY: y, target: el }] });
@@ -4558,26 +4558,26 @@ async function scenario(title, block) {
     App.els.tocOverlay.click();
     check('tocar no fundo fecha', !App.els.tocOverlay.classList.contains('visible'));
 
-    // Fechar tambem fecha; e a leitura nao rolou em nenhum dos tres
+    // Fechar also closes; and the reading view did not scroll in any of the three
     scrolledTo = null;
     await hold(App.els.fileName);
     App.els.tocOverlay.querySelector('[data-dismiss]').click();
     check('Fechar fecha, e nenhum dos tres jeitos de fechar rola a leitura', !App.els.tocOverlay.classList.contains('visible') && scrolledTo === null);
 
-    // O clique de soltar cai no que abriu por cima (o fundo do sumario), nao no nome: engolido igual
-    // (medido no Edge: sem isso o sumario fechava no mesmo gesto que o abriu)
+    // The click on release lands on what opened on top (the table of contents' backdrop), not on the name: swallowed all the same
+    // (measured on Edge: without this the table of contents closed in the same gesture that opened it)
     await hold(App.els.fileName, { click: false });
     App.els.tocOverlay.click();
     check('o clique de soltar, caindo no fundo do sumario, e engolido: o sumario fica', App.els.tocOverlay.classList.contains('visible'));
     App.closeToc();
 
-    // Um toque longo sem clique depois (o navegador nem sempre manda): o toque seguinte, em outro lugar, passa
+    // A long press with no click after it (the browser does not always send one): the next tap, somewhere else, goes through
     await hold(App.els.fileName, { click: false });
     touch(App.els.tocOverlay, 'touchstart'); touch(App.els.tocOverlay, 'touchend');
     App.els.tocOverlay.click();
     check('sem clique depois do toque longo, o proximo toque em outro lugar nao e engolido', !App.els.tocOverlay.classList.contains('visible'));
 
-    // O botao voltar do Android nao e toque na tela: sem clique de soltar, o primeiro voltar ainda fecha
+    // Android's back button is not a tap on the screen: with no click on release, the first back still closes
     await hold(App.els.fileName, { click: false });
     w.__back();
     check('sem clique de soltar, o voltar do celular fecha o sumario na primeira vez', !App.els.tocOverlay.classList.contains('visible'));
@@ -4621,7 +4621,7 @@ async function scenario(title, block) {
   await scenario('77. Espiar: segurar um link interno mostra a nota do outro lado num cartao, sem sair do lugar', async () => {
   {
     const { App, drive, w } = await boot({ watcher: true, idb: true });
-    // Os mesmos toques do cenario 76: o jsdom nao tem Touch
+    // The same touches as scenario 76: jsdom has no Touch
     const touch = (el, type, x = 10, y = 10) => {
       const e = new w.Event(type, { bubbles: true, cancelable: true });
       Object.defineProperty(e, 'touches', { value: type === 'touchend' || type === 'touchcancel' ? [] : [{ clientX: x, clientY: y, target: el }] });
@@ -4645,7 +4645,7 @@ async function scenario(title, block) {
     drive.put('B2', 'Nota B.md', '---\ncreated: 2026-09-01\n---\n\n# Topo\n\n![[foto.jpg]]\n\n- [ ] tarefa\n\n## Alvo\n\naqui [[Nota C]]', ['folderA']);
     drive.put('C', 'Nota C.md', 'C', ['folderA']);
     drive.put('X', 'Planilha.xlsx', 'bin', ['folderA']); drive.files.get('X').mimeType = 'application/vnd.ms-excel';
-    drive.remoteEdit('B1', 'B de outra pasta'); // B1 mais recente: sem a regra da pasta, ganharia
+    drive.remoteEdit('B1', 'B de outra pasta'); // B1 more recent: without the folder rule, it would win
     await App.navigateTo('A', 'a.md');
     App.setMode('preview');
     const before = App.els.previewContainer.innerHTML;
@@ -4654,7 +4654,7 @@ async function scenario(title, block) {
     const embedsBefore = App._embedUrls.size;
     const placesBefore = w.localStorage.getItem('drivenotes_places');
 
-    // O menu do link do Chrome: cancelado so nos links de nota
+    // Chrome's link menu: cancelled only on note links
     const ctx = (el) => { const e = new w.Event('contextmenu', { bubbles: true, cancelable: true }); el.dispatchEvent(e); return e.defaultPrevented; };
     check('menu do Chrome desligado no link de nota, ligado no link de fora e no texto',
       ctx(links()[0]) && ctx(links()[3]) && !ctx(links()[4]) && !ctx(App.els.previewContainer.querySelector('p')));
@@ -4671,14 +4671,14 @@ async function scenario(title, block) {
     check('... e a leitura de baixo intacta', App.els.previewContainer.innerHTML === before && App.navStack.length === stackBefore
       && App._previewOf === previewOfBefore && App._embedUrls.size === embedsBefore
       && w.localStorage.getItem('drivenotes_places') === placesBefore);
-    // (sem o toque longo do app ali, o Chrome e que fica com o dedo: nao ha clique de soltar)
+    // (without the app's long press there, Chrome is the one that keeps the finger: there is no click on release)
     await hold(App.els.peekBody.querySelector('a.wikilink'), { click: false });
     await sleep(50);
     check('segurar um link DENTRO do cartao nao abre outro cartao (nem navega)', visible() && App.els.peekTitle.textContent === 'Nota B' && App.currentFile.id === 'A');
     w.__back();
     check('o voltar fecha o cartao e fica na nota', !visible() && App.currentFile.id === 'A');
 
-    // O clique de soltar cai no fundo do cartao, que ja esta por cima: engolido, o cartao fica
+    // The click on release lands on the card's backdrop, which is already on top: swallowed, the card stays
     await hold(links()[0], { click: false });
     App.els.peekOverlay.click();
     check('o clique de soltar, caindo no fundo do cartao, e engolido: o cartao fica', visible());
@@ -4718,12 +4718,12 @@ async function scenario(title, block) {
     await hold(links()[4]);
     check('link de fora nao espia (e o toque segue abrindo fora)', !visible() && opened === 'https://exemplo.com', opened);
 
-    // Um dedo que anda e rolagem: o navegador nem manda o clique
+    // A finger that moves is a scroll: the browser does not even send the click
     await hold(links()[0], { move: 30, click: false });
     check('dedo que anda nao espia', !visible() && App.currentFile.id === 'A');
     await sleep(50);
 
-    // Cartao fechado antes de a nota chegar: resposta atrasada nao preenche nem reabre
+    // Card closed before the note arrives: a late answer neither fills nor reopens it
     drive.delay = 150;
     touch(links()[0], 'touchstart'); await sleep(App.LONG_PRESS_MS + 30); touch(links()[0], 'touchend');
     check('(o cartao abriu, carregando)', visible() && App.els.peekMessage.textContent === 'Carregando…', App.els.peekMessage.textContent);
@@ -4731,7 +4731,7 @@ async function scenario(title, block) {
     await sleep(500);
     check('fechado antes de chegar: nada reabre nem preenche', !visible() && !App.els.peekBody.textContent.includes('aqui'));
 
-    // Um segundo espiar por cima do primeiro: a resposta do primeiro, que chega depois, nao preenche o segundo
+    // A second peek on top of the first: the first one's answer, which arrives later, does not fill the second
     App.openPeek({ target: 'Nota B', heading: '' });
     await sleep(20);
     App.openPeek({ target: 'Sumida', heading: '' });
@@ -4742,7 +4742,7 @@ async function scenario(title, block) {
     App.closePeek();
     drive.delay = 5;
 
-    // Copia guardada no aparelho: na tela na hora, trocada pela do Drive quando ela chega
+    // A copy stored on the device: on screen right away, swapped for the Drive's when it arrives
     await App.NoteStore.put({ id: 'B2', name: 'Nota B.md', parents: ['folderA'], modifiedTime: 'x', content: '# Velho\n\nguardado' });
     drive.delay = 150;
     await hold(links()[0]);
@@ -4755,7 +4755,7 @@ async function scenario(title, block) {
     App.closePeek();
     check('... e nada disso mexeu na leitura', App.els.previewContainer.innerHTML === before);
 
-    // Sem rede: sempre "Sem rede", mesmo com copia guardada
+    // No network: always "Sem rede", even with a stored copy
     Object.defineProperty(w.navigator, 'onLine', { configurable: true, get: () => false });
     await hold(links()[0]); await sleep(50);
     check('sem rede: o aviso', visible() && App.els.peekMessage.textContent === 'Sem rede.', App.els.peekMessage.textContent);
@@ -4796,7 +4796,7 @@ async function scenario(title, block) {
     const c = App.els.previewContainer;
     const heads = [...c.querySelectorAll('h2.kanban-col-head')];
     const names = heads.map(h => h.textContent.trim());
-    // As contagens esperadas saem da propria amostra: cards de uma linha por coluna
+    // The expected counts come from the sample itself: one-line cards per column
     const expected = board.split(/^## /m).slice(1).map(s => (s.split('\n%%')[0].match(/^- \[[ x]\] /gm) || []).length);
     check('o quadro: uma coluna por titulo ##', c.classList.contains('kanban') && names.length === expected.length
       && JSON.stringify(names) === JSON.stringify(board.match(/^## .+$/gm).map(s => s.slice(3))), names);
@@ -4846,8 +4846,8 @@ async function scenario(title, block) {
       && App.getContent().split('\n').filter(l => l.startsWith('- [x] ')).length === board.split('\n').filter(l => l.startsWith('- [x] ')).length + 1,
       App.getContent().split('\n')[firstCard - 1]);
 
-    // Ler e Editar numa nota kanban: o topo de um cai no mesmo trecho do outro (modelo: cenario 70),
-    // com uma coluna recolhida acima do trecho e a configuracao escondida no fim
+    // Ler and Editar on a kanban note: the top of one lands on the same stretch of the other (model: scenario 70),
+    // with a folded column above the stretch and the settings hidden at the end
     const shown = [];
     App.Editor.showLine = (at) => shown.push(at);
     const col = (name) => [...c.querySelectorAll('h2.kanban-col-head')].find(h => h.textContent === name);
@@ -4885,7 +4885,7 @@ async function scenario(title, block) {
       App.mode === 'preview' && w.__top() === col('Descartados') && col('Descartados').classList.contains('collapsed'),
       [App.mode, w.__top()?.textContent, c.scrollTop]);
 
-    // O espiar desenha a nota sem o quadro: uma lista comum, sem quebrar
+    // The peek draws the note without the board: a plain list, without breaking
     App.openPeek({ target: 'quadro', heading: '' });
     const end = Date.now() + 3000;
     while (!App.els.peekBody.textContent.includes('Card 1') && Date.now() < end) await sleep(10);
@@ -4963,7 +4963,7 @@ async function scenario(title, block) {
     fallback?.click();
     check('... e o texto abre o link fora', opened === 'https://m.youtube.com/watch?feature=share&v=ABCDEFGHIJK', opened);
 
-    // No cartao do espiar: a mesma capa, e o toque sai do app pelo onPeekClick
+    // In the peek card: the same cover, and the tap leaves the app through onPeekClick
     App.openPeek({ target: 'video', heading: '' });
     const end = Date.now() + 3000;
     while (!App.els.peekBody.textContent.includes('antes') && Date.now() < end) await sleep(10);

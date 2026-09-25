@@ -31,7 +31,7 @@ const SETUP = `
   const FOLDER = 'application/vnd.google-apps.folder';
   const folders = ['_archive', '_inbox', '_media', '00-meta', '10-areas', '20-projetos'];
   const notes = ['00-estado-projeto.md', '01-core.md', 'guia-voz-geral.md', 'Uma nota com um nome bem comprido pra ver como a linha quebra no celular.md', 'voz-blue.md'];
-  // A pasta de cada nota: é ela que a lista do [[ mostra em letra menor debaixo do nome
+  // Each note's folder: it is what the [[ list shows in smaller type under the name
   const notesIn = ['ROOT', 'd5', 'd4', 'd3', 'd5'];
   window.fetch = async (url) => {
     const u = new URL(url); const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
@@ -92,8 +92,8 @@ const SETUP = `
     await js(`__App.els.browserSearch.value = ''; __App.onSearchInput(); 'ok'`);
     await js(`__App.navigateTo('N', 'Relatório semanal.md').then(() => 'ok')`);
     await shot('3-leitura');
-    // O aviso de versao nova, que so aparece fora da home (na home a pagina recarrega sozinha).
-    // Some de novo em seguida, pra nao sobrar nas telas seguintes
+    // The new version notice, which only shows up outside the home screen (on the home screen the page reloads by itself).
+    // It goes away again right after, so it is not left over on the next screens
     await js(`__App.els.updateBar.classList.remove('hidden'); 'ok'`);
     await shot('3b-versao-nova');
     await js(`__App.els.updateBar.classList.add('hidden'); 'ok'`);
@@ -101,12 +101,12 @@ const SETUP = `
     await shot('4-leitura-propriedades');
     await js(`__App.els.previewContainer.scrollTop = 1e6; 'ok'`);
     await shot('4b-leitura-imagem');
-    // O sumario (segurar o nome da nota na leitura): os titulos da nota de exemplo, um passo pra dentro por nivel
+    // The table of contents (holding the note's name in the reading view): the sample note's headings, one step in per level
     await js(`__App.openToc(); 'ok'`);
     await shot('4c-sumario');
     await js(`__App.closeToc(); 'ok'`);
-    // Espiar (segurar um link de nota na leitura): o cartao com a nota do outro lado, aberto no titulo do
-    // link. A busca e o conteudo sao trocados so aqui, e voltam ao que eram depois do print
+    // Peek (holding a note link in the reading view): the card with the note on the other side, open at the link's
+    // heading. The lookup and the content are swapped only here, and go back to what they were after the screenshot
     const PEEK_NOTE = [
       '---', 'created: 2026-09-17', '---', '', '# Reunião 17 set', '', 'Pauta curta, com **três** pontos e um link pra [[Plano de ação]].', '',
       '![[quadro-branco.jpg]]', '', '## Presentes', '', '- Agatha', '- Time de produto', '',
@@ -123,20 +123,20 @@ const SETUP = `
     await sleep(400);
     await shot('4e-espiar');
     await js(`__App.closePeek(); __App.findLinkedNote = window.__peekOrig.find; __App.driveGetFileContent = window.__peekOrig.get; 'ok'`);
-    // Nota com muitos titulos: a lista rola dentro do painel e o Fechar fica a vista
+    // A note with many headings: the list scrolls inside the panel and Fechar stays in view
     await js(`__App.setContent(${JSON.stringify(Array.from({ length: 30 }, (_, i) => `${'#'.repeat(1 + (i % 3))} Titulo ${i + 1}\n\ntexto`).join('\n\n'))});
       __App.setMode('preview'); __App.openToc(); 'ok'`);
     await shot('4d-sumario-longo');
     await js(`__App.closeToc(); 'ok'`);
-    // Quadro kanban (so leitura): a amostra do backlog dos testes, colunas empilhadas com a contagem,
-    // Descartados recolhida como no Obsidian e o bloco de configuracao escondido
+    // Kanban board (reading only): the tests' backlog sample, columns stacked with their count,
+    // Descartados folded as in Obsidian and the settings block hidden
     const BOARD = fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'kanban-backlog.md'), 'utf8').replace(/\r\n/g, '\n');
     await js(`__App.setContent(${JSON.stringify(BOARD)}); __App.setMode('preview'); __App.els.previewContainer.scrollTop = 0; 'ok'`);
     await shot('4f-kanban');
     await js(`__App.els.previewContainer.scrollTop = 1e6; 'ok'`);
     await shot('4g-kanban-fim');
-    // Video do YouTube (![](link)): a capa com o play, e embaixo uma capa que nao carregou, que volta a
-    // ser o texto do link. A primeira vem da rede (i.ytimg.com); sem rede ela tambem vira texto
+    // YouTube video (![](link)): the cover with the play mark, and below it a cover that did not load, which goes back to
+    // being the link's text. The first one comes from the network (i.ytimg.com); without a network it becomes text too
     const VIDEO = ['# Aula gravada', '', 'Antes do vídeo, um parágrafo.', '', '![Me at the zoo](https://www.youtube.com/watch?v=jNQXAC9IVRw)', '',
       'Depois do vídeo, outro parágrafo.', '', '![](https://youtu.be/a1b2c3d4e5f?si=xyz)', '', 'Fim.'].join('\n');
     await js(`__App.setContent(${JSON.stringify(VIDEO)}); __App.setMode('preview'); __App.els.previewContainer.scrollTop = 0;
@@ -153,24 +153,24 @@ const SETUP = `
     await js(`__App.setContent(${JSON.stringify(NOTE)}); __App.setMode('preview'); 'ok'`);
     await js(`__App.setMode('edit'); 'ok'`);
     await shot('5-edicao');
-    // Pelo fim da nota, que e onde mora a foto: quem rola por dentro e o .cm-scroller, e o caminho
-    // da fachada (cursor no fim + rolar ate ele) evita depender de qual elemento do CM6 e esse.
-    // O foco e parte do caminho: desde 21 set 2026 a fachada so persegue o cursor com o editor em
-    // foco, pra tela nao pular sozinha pra quem abriu a nota so pra ler
+    // Through the end of the note, which is where the photo lives: what scrolls inside is .cm-scroller, and the facade's
+    // path (cursor at the end + scroll to it) avoids depending on which CM6 element that is.
+    // The focus is part of the path: since 21 Sep 2026 the facade only follows the cursor with the editor
+    // focused, so the screen does not jump on its own for someone who opened the note just to read
     await js(`__App.Editor.focus(); __App.Editor.moveCaretToEnd(); __App.Editor.scrollToCaret(); 'ok'`);
     await shot('5b-edicao-imagem');
-    // A lista de notas do [[: o cursor no fim do parágrafo, e o texto entra pelo caminho do teclado
-    // (é o `input` do navegador que aciona a lista, como no celular)
+    // The [[ note list: the cursor at the end of the paragraph, and the text goes in through the keyboard path
+    // (it is the browser's `input` that triggers the list, as on the phone)
     await js(`__App.Editor.focus();
       (() => { const view = __App.Editor._impl.view; const line = view.state.doc.line(8);
         view.dispatch({ selection: { anchor: line.to }, scrollIntoView: true }); })(); 'ok'`);
     await send('Input.insertText', { text: ' [[vo' });
     await sleep(900);
     await shot('5c-link-list');
-    // A nota volta ao que era, pra lista não sobrar nas telas seguintes
+    // The note goes back to what it was, so the list is not left over on the next screens
     await js(`__App.Editor.closeLinkList(); __App.setContent(${JSON.stringify(NOTE)}); 'ok'`);
-    // O botao de extrair, que so existe com texto selecionado, e a caixa que ele abre. A selecao vai
-    // de "## Resumo" ate o fim do primeiro callout, entao a sugestao de nome e "resumo"
+    // The extract button, which only exists with text selected, and the box it opens. The selection goes
+    // from "## Resumo" to the end of the first callout, so the suggested name is "resumo"
     await js(`__App.Editor.focus();
       (() => { const view = __App.Editor._impl.view;
         view.dispatch({ selection: { anchor: view.state.doc.line(10).from, head: view.state.doc.line(13).to }, scrollIntoView: true }); })(); 'ok'`);
@@ -178,12 +178,12 @@ const SETUP = `
     await js(`__App.promptExtract().then(() => 'ok')`);
     await shot('5e-extrair-caixa');
     await js(`__App.hideModal(); 'ok'`);
-    // O modal do nome numa nota que ja esta no Drive: e por ele que se apaga, e por isso o Apagar
-    // aparece aqui, discreto e do outro lado dos dois botoes de sempre
+    // The name dialog on a note that is already on the Drive: it is through it that a note is deleted, which is why Apagar
+    // shows up here, discreet and on the other side of the two usual buttons
     await js(`__App.promptRename(); 'ok'`);
     await shot('6-renomear');
-    // O dialogo de apagar. O nome vem de uma nota que as outras apontam, pra contagem de links
-    // (que chega depois de o dialogo abrir) sair no print
+    // The delete dialog. The name comes from a note the others point to, so that the link count
+    // (which arrives after the dialog opens) shows up in the screenshot
     await js(`__App.promptDelete({ id: 'n1', name: 'Plano de ação.md' }); 'ok'`);
     await sleep(600);
     await shot('6b-delete-dialog');
