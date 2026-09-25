@@ -3412,7 +3412,9 @@ const App = {
     this.reloadPage();
   },
 
-  /** The bar: the open note goes to the Drive first, then the reload, coming back to the same view */
+  /** The bar: the open note goes to the Drive first, then the reload, coming back to the same view. In
+      edit mode the package also carries the editor's top line (editorLine): the editor may have been
+      scrolled far from where the reading was when Editar was tapped. */
   async applyUpdate() {
     if (this._reloading) return;
     this._reloading = true;
@@ -3425,13 +3427,18 @@ const App = {
       return;
     }
     try {
-      sessionStorage.setItem(this.REOPEN_KEY, JSON.stringify({
-        view: this.viewState(), mode: this.mode, navStack: this.navStack, fwdStack: this.fwdStack,
-      }));
+      const view = this.viewState();
+      const kept = { view, mode: this.mode, navStack: this.navStack, fwdStack: this.fwdStack };
+      // Read only with the editor on screen and showing that note: hidden, CodeMirror's geometry means nothing
+      if (this.mode === 'edit' && view.view === 'file' && view.id === this.currentFile?.id && document.body.dataset.view === 'edit') {
+        kept.editorLine = this.Editor.topLine();
+      }
+      sessionStorage.setItem(this.REOPEN_KEY, JSON.stringify(kept));
     } catch (e) {
       console.warn('View not kept for the reload:', e);
     }
-    // Where the reading was comes back with the note's own opening (landInNote)
+    // Where the reading was comes back with the note's own opening (landInNote). In edit mode it keeps
+    // nothing, on purpose: the reading's place stays the one kept when Editar was tapped.
     this.rememberPlace();
     this.log('reload: new version, from the bar');
     this.reloadPage();
@@ -3442,7 +3449,10 @@ const App = {
 
   /** Right after the reload from the bar: back to the view it was tapped on, in the same mode, and with
       "back" going where it went before. The reading view comes back where it was, as in any opening
-      (landInNote), and the editor opens on that same stretch (editAtReading). */
+      (landInNote). The editor comes back on the line it had (the package's editorLine), also for a note
+      that reopens straight into the editor with its draft. A package without editorLine was written by
+      a version before it (the page that taps the bar is the old one): the editor then opens on the
+      stretch the reading view is on (editAtReading). */
   async reopenAfterUpdate() {
     let kept = null;
     try {
@@ -3465,8 +3475,14 @@ const App = {
       this.armWatcher();
       return;
     }
-    if (kept.mode === 'edit' && kept.view.view === 'file' && this.currentFile?.id === kept.view.id && this.mode === 'preview') {
-      this.editAtReading();
+    if (kept.mode === 'edit' && kept.view.view === 'file' && this.currentFile?.id === kept.view.id) {
+      if (typeof kept.editorLine === 'number') {
+        // On screen first: CodeMirror scrolls in its measuring pass, and hidden it can only guess line heights
+        if (this.mode !== 'edit') this.setMode('edit');
+        this.Editor.showLine(kept.editorLine);
+      } else if (this.mode === 'preview') {
+        this.editAtReading();
+      }
     }
   },
 

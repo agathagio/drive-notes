@@ -3908,12 +3908,15 @@ async function seedArrival(factory, record) {
 
   {
     // The reopening after a new version, in edit mode: the fallback textarea's own showLine this time,
-    // spied through its scroll (jsdom gives it no height, so one is lent here)
+    // spied through its scroll (jsdom gives it no height, so one is lent here). Its scrollTop reads back
+    // the last value written, like a real one: scrolling it by hand is writing it.
     const withTextareaHeight = (w) => {
       layout(w);
       w.__taScroll = [];
+      let top = 0;
       Object.defineProperty(w.HTMLTextAreaElement.prototype, 'scrollHeight', { configurable: true, get: () => 1000 });
-      Object.defineProperty(w.HTMLTextAreaElement.prototype, 'scrollTop', { configurable: true, get: () => 0, set: (v) => w.__taScroll.push(v) });
+      Object.defineProperty(w.HTMLTextAreaElement.prototype, 'scrollTop', { configurable: true, get: () => top,
+        set: (v) => { top = v; w.__taScroll.push(v); } });
     };
     const LONG = '# Titulo\n\n' + Array.from({ length: 30 }, (_, i) => `paragrafo ${i}`).join('\n\n');
     const drive = makeDrive();
@@ -3929,11 +3932,60 @@ async function seedArrival(factory, record) {
     // The screen, not App.mode: the mode starts out as 'edit' before any note is open
     await until(() => App.currentFile?.id === 'A' && w.document.body.dataset.view === 'edit');
     // Block 12 is "paragrafo 11", line 25 of 61, and the top is read 16px into it (VIEW_INSET, 16 of its
-    // 100px): line 25.16, and the textarea scrolls to (25.16 - 1) / 61 of its height
+    // 100px): line 25.16, and the textarea scrolls to (25.16 - 1) / 61 of its height.
+    // The package above is the one a version before v58 writes, with no editorLine: the tap on the bar
+    // happens on the old page, so the first reload after a deploy still brings one like it.
     const expected = Math.round((24.16 / 61) * 1000);
     const scrolled = w.__taScroll.map(Math.round);
     check('recarregado pela faixa em modo edicao: o editor abre no trecho em que a leitura estava',
       App.mode === 'edit' && scrolled.some(v => Math.abs(v - expected) <= 2), [scrolled, expected]);
+
+    // From v58 the package also carries the editor's own top line: after Editar the editor may have been
+    // scrolled far from where the reading was (read up to paragraph 3, Editar, scrolled down to 60)
+    const token = { drivenotes_token: 'fake', drivenotes_token_expires: String(Date.now() + 3600e3) };
+    let marker = null;
+    let editorLine = null;
+    {
+      const { App: App2, w: w2 } = await boot({ beforeApp: withTextareaHeight, drive, watcher: true });
+      await App2.navigateTo('A', 'a.md');
+      App2.togglePreview();
+      await until(() => w2.document.body.dataset.view === 'edit');
+      // Scrolled by hand to 70% of its height: line 1 + 0.7 * 61 = 43.7
+      App2.els.editorElement.scrollTop = 700;
+      editorLine = App2.Editor.topLine();
+      App2.reloadPage = () => {};
+      await App2.applyUpdate();
+      marker = w2.sessionStorage.getItem('drivenotes_reopen');
+      const kept = JSON.parse(marker || 'null');
+      check('tocar na faixa em modo edicao guarda a linha do topo do editor',
+        kept?.mode === 'edit' && typeof kept.editorLine === 'number' && Math.abs(kept.editorLine - editorLine) < 0.01,
+        [kept, editorLine]);
+    }
+    // Where the textarea scrolls for that line
+    const editorScroll = Math.round(((editorLine - 1) / 61) * 1000);
+    {
+      // Reading place kept at block 12, as above: the editor must not go there
+      const { App: App3, w: w3 } = await boot({ beforeApp: withTextareaHeight, drive, watcher: true,
+        seedStorage: { ...token, drivenotes_places: JSON.stringify([{ id: 'A', block: 12, into: 0 }]) },
+        seedSession: { drivenotes_reopen: marker } });
+      await until(() => App3.currentFile?.id === 'A' && w3.document.body.dataset.view === 'edit');
+      const scrolled3 = w3.__taScroll.map(Math.round);
+      check('... e depois de recarregar o editor volta nessa linha, e nao no trecho em que a leitura estava',
+        App3.mode === 'edit' && scrolled3.some(v => Math.abs(v - editorScroll) <= 2) && !scrolled3.some(v => Math.abs(v - expected) <= 2),
+        [scrolled3, editorScroll, expected]);
+    }
+    {
+      // A draft that differs from the Drive opens the note straight into the editor: no reading to go by
+      const draft = { fileId: 'A', name: 'a.md', content: LONG + ' editado', baseModifiedTime: drive.files.get('A').modifiedTime, timestamp: Date.now() };
+      const { App: App4, w: w4 } = await boot({ beforeApp: withTextareaHeight, drive, watcher: true,
+        seedStorage: { ...token, drivenotes_draft_A: JSON.stringify(draft) },
+        seedSession: { drivenotes_reopen: marker } });
+      await until(() => App4.currentFile?.id === 'A' && w4.document.body.dataset.view === 'edit');
+      const scrolled4 = w4.__taScroll.map(Math.round);
+      check('nota que reabre no rascunho, direto no editor: tambem volta na linha do editor',
+        App4.isDirty && App4.getContent() === draft.content && scrolled4.some(v => Math.abs(v - editorScroll) <= 2),
+        [App4.isDirty, scrolled4, editorScroll]);
+    }
   }
 
   console.log('71. Entradas: o que chega vira um item de lista no formato das notas de captura');

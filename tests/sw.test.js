@@ -5,11 +5,12 @@
 // What it proves: a new version reaches the screen in one opening (the home screen reloads on its own,
 // once), coming back from the background looks for one, and a note with text not on the Drive yet is
 // never reloaded: the bar offers the update, and tapping it saves, reloads and reopens the same note,
-// back on the same paragraph of the reading view.
+// back on the same paragraph of the reading view, or on the same line of the editor.
 //
 // SW_COMMIT=<commit> serves the app as it was in that commit instead of the working tree. It is the
 // control: against dba1d23 (v46, before the card "Versão nova numa abertura só") scenarios 2 to 4 must
-// fail, and against 7bed916 (v47, before "Retomar a nota onde parou") scenario 5 must, or they prove nothing.
+// fail, against 7bed916 (v47, before "Retomar a nota onde parou") scenario 5 must, and against f76e959
+// (v57, when the bar reopened the editor where the reading was) scenario 9 must, or they prove nothing.
 const { execSync } = require('child_process');
 const fs = require('fs');
 const http = require('http');
@@ -342,6 +343,37 @@ const EVERY_DOCUMENT = `(() => {
         (s.got[0] || []).filter((g) => g.startsWith('texts:file(text/plain,')).length === 2, s.got);
       await js(`document.getElementById('arrival-cancel').click(); 'ok'`, false);
       await sleep(300);
+    }
+
+    console.log('9. Nota longa rolada no editor: o aviso recarrega e o editor volta na mesma linha, e nao onde a leitura estava');
+    {
+      // In this wide window a short paragraph is a single line: 200 of them (399 lines) give the editor room to scroll
+      const long = Array.from({ length: 200 }, (_, i) => `linha ${i}`).join('\n\n');
+      await js(`const d = JSON.parse(localStorage.getItem('__drive'));
+        d.E = { id: 'E', name: 'editada.md', parents: [${JSON.stringify(VAULT)}], modifiedTime: '2026-09-22T12:00:00.000Z', content: ${JSON.stringify(long)} };
+        localStorage.setItem('__drive', JSON.stringify(d)); 'ok'`, false);
+      await js(`App.navigateTo('E', 'editada.md')`);
+      await esperar(`App.currentFile?.id === 'E' && document.body.dataset.view === 'preview'`, 5000);
+      // Editar with the reading at the top of the note, then the editor scrolled by hand far below it
+      await js(`App.togglePreview(); 'ok'`);
+      await esperar(`document.body.dataset.view === 'edit'`, 5000);
+      await js(`App.Editor._impl.view.scrollDOM.scrollTop = 5000; 'ok'`);
+      await sleep(500);
+      const left = await js(`App.Editor.topLine()`, false);
+      check('(o editor rolado pra longe do topo, com a leitura deixada no topo)', left > 100, left);
+
+      deploy(6);
+      await resume();
+      const offered = await esperar(`document.getElementById('update-bar')?.classList.contains('hidden') === false`, 20000);
+      await sleep(2000);
+      check('a versao 6 assumiu, e o aviso apareceu', offered, await state());
+      await js(`document.getElementById('update-bar')?.click(); 'ok'`);
+      const reopened = await esperar(`window.__servedVersion === 6 && App.currentFile?.id === 'E' && document.body.dataset.view === 'edit'`, 20000);
+      await sleep(500);
+      const back = await js(`App.Editor.topLine()`, false);
+      console.log('     linha do topo do editor, antes e depois:', JSON.stringify({ left, back }));
+      check('tocar no aviso: recarregou, na versao 6, e reabriu a mesma nota no editor', reopened, await state());
+      check('... na mesma linha do editor, a ate uma linha de onde estava', Math.abs(back - left) <= 1, { left, back });
     }
   } finally {
     browser.close();
