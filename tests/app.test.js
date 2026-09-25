@@ -4853,8 +4853,8 @@ async function seedArrival(factory, record) {
   {
     const { App, w, drive, type } = await boot();
     const TEXT = 'Este conteúdo foi gerado por IA.\n\nTranscrição da reunião: ação, coração e pé.';
-    const be = Buffer.from('﻿' + TEXT, 'utf16le').swap16();
-    const le = Buffer.from('﻿' + TEXT, 'utf16le');
+    const be = Buffer.from('\ufeff' + TEXT, 'utf16le').swap16();
+    const le = Buffer.from('\ufeff' + TEXT, 'utf16le');
     const u8bom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(TEXT, 'utf8')]);
     check('(o arquivo UTF-16BE comeca com FE FF, o UTF-16LE com FF FE)', be[0] === 0xfe && be[1] === 0xff && le[0] === 0xff && le[1] === 0xfe,
       [be.subarray(0, 2), le.subarray(0, 2)]);
@@ -4890,7 +4890,7 @@ async function seedArrival(factory, record) {
       [drive.log.filter(l => l.startsWith('PATCH')), JSON.stringify(String(saved.content).slice(0, 12))]);
     const up = Buffer.from(String(saved.content), 'utf8');
     check('... e o que sobe e UTF-8 limpo: nem FE FF, nem FF FE, nem EF BB BF no comeco',
-      !saved.content.startsWith('﻿') && !(up[0] === 0xef && up[1] === 0xbb) && up[0] !== 0xfe && up[0] !== 0xff, up.subarray(0, 4));
+      !saved.content.startsWith('\ufeff') && !(up[0] === 0xef && up[1] === 0xbb) && up[0] !== 0xfe && up[0] !== 0xff, up.subarray(0, 4));
   }
 
   done();
