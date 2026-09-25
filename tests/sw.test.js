@@ -15,7 +15,7 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
-const { ROOT, LIBS, sleep, tmpDir, launch, reporter } = require('./helpers');
+const { ROOT, LIBS, sleep, tmpDir, launch, reporter, appSource } = require('./helpers');
 
 const { check, done } = reporter();
 const COMMIT = process.env.SW_COMMIT || '';
@@ -24,7 +24,7 @@ if (COMMIT) console.log(`(controle: servindo o app do commit ${COMMIT})`);
 const DEBUG_PORT = 9336;
 const PORT = 8336;
 const ORIGIN = `http://127.0.0.1:${PORT}`;
-const VAULT = /VAULT_FOLDER_ID: '([^']+)'/.exec(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8'))[1];
+const VAULT = /VAULT_FOLDER_ID: '([^']+)'/.exec(appSource())[1];
 
 // The version the server is publishing. A deploy is changing this number.
 let version = 1;
@@ -61,8 +61,10 @@ function serve(pathname) {
       .replace(/https:\/\/fonts\.googleapis\.com\/css2[^']*/, `${ORIGIN}/cdn/fonts.css`)
       .replace(/const CACHE_NAME = '[^']+';/, `const CACHE_NAME = 'drivenotes-test-${version}';`);
     if (!text.includes(`drivenotes-test-${version}`)) throw new Error('CACHE_NAME not found in sw.js');
-  } else if (pathname === '/app.js') {
-    // Which version's files the page is running: the proof that the new one reached the screen
+  } else if (pathname === '/app.js' || pathname === '/app/core.js') {
+    // Which version's files the page is running: the proof that the new one reached the screen.
+    // /app.js until the split of the app, /app/core.js after it; both, so that a SW_COMMIT control
+    // serving an old commit keeps proving what it proves
     text += `\nwindow.__servedVersion = ${version};\n`;
   }
   return text;

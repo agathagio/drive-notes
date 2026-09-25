@@ -4,7 +4,7 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { ROOT, LIBS, sleep, buildPage, launch, reporter } = require('./helpers');
+const { ROOT, LIBS, sleep, appSource, buildPage, launch, reporter } = require('./helpers');
 
 const { check, done } = reporter();
 
@@ -45,7 +45,10 @@ const FAKE_DRIVE = `
   const browser = await launch(9334);
   const { send, js, open, esperar } = browser;
   try {
-    const currentApp = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+    const currentApp = appSource();
+    // The index.html of an old commit, for a control that runs that commit's app: buildPage needs it
+    // to find the app.js tag of the time (the working tree's index.html loads app/*.js instead)
+    const indexAt = (commit) => execSync(`git -C "${ROOT}" show ${commit}:index.html`, { encoding: 'utf8', maxBuffer: 1e7, stdio: ['ignore', 'pipe', 'ignore'] });
 
     // O elemento editavel do CodeMirror, o que o TinyMDE chamava de `editor.e`
     const CONTEUDO = `document.querySelector('.cm-content')`;
@@ -92,14 +95,16 @@ const FAKE_DRIVE = `
     const expected = 'linha um\nNão consigo ditar minhas notas';
 
     let buggyApp = null;
+    let buggyHtml = null;
     try {
       buggyApp = execSync(`git -C "${ROOT}" show ${COMMIT_WITH_DICTATION_BUG}:app.js`, { encoding: 'utf8', maxBuffer: 1e7, stdio: ['ignore', 'pipe', 'ignore'] });
+      buggyHtml = indexAt(COMMIT_WITH_DICTATION_BUG);
     } catch { /* shallow clone or no git: the control is skipped */ }
     // O app antigo e TinyMDE puro: sem a biblioteca ele cai no textarea de reserva e o helper
     // legado estoura, derrubando o cenario e a suite junto. Pulado e melhor que vermelho falso.
     const temTinyMDE = fs.existsSync(LIBS.tinymde);
     if (buggyApp && temTinyMDE) {
-      const before = await dictate(buildPage('dictation-before', buggyApp, { tinymde: true }), true);
+      const before = await dictate(buildPage('dictation-before', buggyApp, { tinymde: true, html: buggyHtml }), true);
       console.log('     versao com o bug:', JSON.stringify(before.content));
       check('controle: o bug se reproduz na versao antiga (texto duplicado)', before.content !== expected);
     } else {
@@ -958,8 +963,8 @@ const FAKE_DRIVE = `
     const abrirLonga = () => js(`__App.openFile('N3', 'longa.md'); 'ok'`);
 
     // Abre, espera a foto, e deixa o paragrafo 30 no topo. Devolve o que estava no topo ao sair.
-    const lerAteOMeio = async (app) => {
-      await open(buildPage('retomar', app));
+    const lerAteOMeio = async (app, html) => {
+      await open(buildPage('retomar', app, { html }));
       await js(`localStorage.clear(); 'ok'`);
       await js(APAGAR_BANCO);
       await js(DRIVE_DA_FOTO);
@@ -1003,11 +1008,13 @@ const FAKE_DRIVE = `
 
     // Controle: o app de antes do card abre a mesma nota no topo, senao este cenario nao prova nada
     let appAntesDoRetomar = null;
+    let htmlAntesDoRetomar = null;
     try {
       appAntesDoRetomar = execSync(`git -C "${ROOT}" show 7bed916:app.js`, { encoding: 'utf8', maxBuffer: 1e7, stdio: ['ignore', 'pipe', 'ignore'] });
+      htmlAntesDoRetomar = indexAt('7bed916');
     } catch { /* shallow clone or no git: the control is skipped */ }
     if (appAntesDoRetomar) {
-      await lerAteOMeio(appAntesDoRetomar);
+      await lerAteOMeio(appAntesDoRetomar, htmlAntesDoRetomar);
       await js(`__App.goHome(); 'ok'`);
       await abrirLonga();
       await sleep(300);
@@ -1075,8 +1082,8 @@ const FAKE_DRIVE = `
       c.scrollTop += p.getBoundingClientRect().top - (c.getBoundingClientRect().top + 16) + ${px};
       return 'ok';
     })()`);
-    const abrirTrecho = async (app) => {
-      await open(buildPage('trecho', app));
+    const abrirTrecho = async (app, html) => {
+      await open(buildPage('trecho', app, { html }));
       await js(APAGAR_BANCO);
       await js(DRIVE_DO_TRECHO);
       await js(`__App.openFile('N4', 'trecho.md').then(() => 'ok')`);
@@ -1128,11 +1135,13 @@ const FAKE_DRIVE = `
 
     // Controle: a v48 abre o editor no topo da nota
     let appDaV48 = null;
+    let htmlDaV48 = null;
     try {
       appDaV48 = execSync(`git -C "${ROOT}" show cf8d4f1:app.js`, { encoding: 'utf8', maxBuffer: 1e7, stdio: ['ignore', 'pipe', 'ignore'] });
+      htmlDaV48 = indexAt('cf8d4f1');
     } catch { /* shallow clone or no git: the control is skipped */ }
     if (appDaV48) {
-      await abrirTrecho(appDaV48);
+      await abrirTrecho(appDaV48, htmlDaV48);
       await leituraEm('paragrafo 30 ');
       await tocarNoBotao();
       const naV48 = await editor();

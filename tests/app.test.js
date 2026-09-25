@@ -1,4 +1,4 @@
-// Runs the real app.js inside jsdom against an in-memory fake Drive: saving, conflicts, drafts,
+// Runs the real app (the scripts index.html loads, joined) inside jsdom against an in-memory fake Drive: saving, conflicts, drafts,
 // reading view, navigation, rename, login, formatting and the file browser.
 //   npm test
 // The editor here is the fallback textarea, except where a scenario asks for boot({ editor: true }),
@@ -8,7 +8,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { JSDOM } = require('jsdom');
-const { ROOT, LIBS, sleep, cdnVersions, installedVersions, reporter } = require('./helpers');
+const { ROOT, LIBS, sleep, cdnVersions, installedVersions, appScripts, appSource, reporter } = require('./helpers');
 
 const { check, done } = reporter();
 
@@ -16,9 +16,9 @@ const FOLDER = 'application/vnd.google-apps.folder';
 // A note saved inside the vault goes up with its dates (scenario 26); the other scenarios look at the text under them
 const bodyOf = (content) => content.replace(/^---\n[\s\S]*?\n---\n\n?/, '');
 // The browser and the attachment folder hang off whatever vault the app is configured with
-const VAULT = /VAULT_FOLDER_ID: '([^']+)'/.exec(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8'))[1];
+const VAULT = /VAULT_FOLDER_ID: '([^']+)'/.exec(appSource())[1];
 // Where a new note is born: the note index puts it in only if the folder answers a trail
-const INBOX = /DEFAULT_FOLDER_ID: '([^']+)'/.exec(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8'))[1];
+const INBOX = /DEFAULT_FOLDER_ID: '([^']+)'/.exec(appSource())[1];
 
 function makeDrive() {
   const drive = {
@@ -219,7 +219,9 @@ async function boot({ auth = true, seedStorage = {}, seedSession = {}, watcher =
   w.eval(fs.readFileSync(LIBS.purify, 'utf8'));
   // Whatever has to be in place before the app's own init runs (it may open a note by itself)
   if (beforeApp) beforeApp(w);
-  w.eval(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8') + ';window.__App = App; window.__CONFIG = CONFIG;');
+  // One eval for the whole app: a `const` declared inside an indirect eval lives in that eval only,
+  // so evaluating the app's files one by one would leave App undefined for the second file
+  w.eval(appSource() + ';window.__App = App; window.__CONFIG = CONFIG;');
   await new Promise(r => w.document.readyState === 'complete' ? r() : w.addEventListener('load', r));
   const App = w.__App;
   if (auth) {
@@ -314,8 +316,22 @@ async function seedArrival(factory, record) {
   });
 }
 
+/**
+ * One scenario, on its own: prints the title, runs the block, and an exception inside it becomes one
+ * failed check instead of the end of the suite. Before this, an exception in scenario 30 took every
+ * scenario after it down, and the output could not say which of those would have passed.
+ */
+async function scenario(title, block) {
+  console.log(title);
+  try {
+    await block();
+  } catch (e) {
+    check('o cenario terminou sem estourar', false, String((e && e.stack) || e).split('\n').slice(0, 3).join(' | '));
+  }
+}
+
 (async () => {
-  console.log('0. Os testes usam as mesmas versoes de biblioteca que o app publicado');
+  await scenario('0. Os testes usam as mesmas versoes de biblioteca que o app publicado', async () => {
   {
     const cdn = cdnVersions();
     const local = installedVersions();
@@ -353,8 +369,9 @@ async function seedArrival(factory, record) {
       check(`${name}: tag com crossorigin="anonymous"`, attrs.includes('crossorigin="anonymous"'));
     }
   }
+  });
 
-  console.log('1. Trocar de arquivo com edicao pendente salva o arquivo anterior');
+  await scenario('1. Trocar de arquivo com edicao pendente salva o arquivo anterior', async () => {
   {
     const { App, drive, type } = await boot();
     drive.put('A', 'a.md', 'conteudo A');
@@ -375,8 +392,9 @@ async function seedArrival(factory, record) {
     check('nova nota com B sujo: B salvo', drive.files.get('B').content === 'B editado');
     check('nova nota criada uma vez', drive.count('POST') === 1, drive.log);
   }
+  });
 
-  console.log('2. Abrir sem editar nao gera escrita');
+  await scenario('2. Abrir sem editar nao gera escrita', async () => {
   {
     const { App, drive } = await boot();
     drive.put('A', 'a.md', 'linha\r\ncom crlf\r\n');
@@ -386,8 +404,9 @@ async function seedArrival(factory, record) {
     await App._saveChain;
     check('zero PATCH', drive.count('PATCH') === 0, drive.log);
   }
+  });
 
-  console.log('3. Conflito: Drive mudou depois de abrir');
+  await scenario('3. Conflito: Drive mudou depois de abrir', async () => {
   {
     const { App, drive, type, w } = await boot();
     drive.put('A', 'a.md', 'original');
@@ -412,8 +431,9 @@ async function seedArrival(factory, record) {
     check('rascunho limpo', App.listDrafts().length === 0, App.listDrafts());
     check('dialogo fechado', !App.els.conflict.classList.contains('visible'));
   }
+  });
 
-  console.log('4. Conflito: sobrescrever / recarregar / decidir depois');
+  await scenario('4. Conflito: sobrescrever / recarregar / decidir depois', async () => {
   {
     const { App, drive, type, w } = await boot();
     drive.put('A', 'a.md', 'original');
@@ -442,8 +462,9 @@ async function seedArrival(factory, record) {
     check('recarregar: editor tem a versao do Drive', App.getContent() === 'PC de novo' && !App.isDirty, App.getContent());
     check('Drive intacto, sem rascunho', drive.files.get('A').content === 'PC de novo' && App.listDrafts().length === 0);
   }
+  });
 
-  console.log('5. Nota nova sem login, depois com login: um arquivo so, sem rascunho orfao');
+  await scenario('5. Nota nova sem login, depois com login: um arquivo so, sem rascunho orfao', async () => {
   {
     const { App, drive, type } = await boot({ auth: false });
     App.newFile();
@@ -459,8 +480,9 @@ async function seedArrival(factory, record) {
     await App.save();
     check('save seguinte e PATCH, nao outro POST', drive.count('POST') === 1 && drive.count('PATCH') === 1, drive.log);
   }
+  });
 
-  console.log('6. Corrida: criar em andamento + saves simultaneos + app indo pro fundo');
+  await scenario('6. Corrida: criar em andamento + saves simultaneos + app indo pro fundo', async () => {
   {
     const { App, drive, type } = await boot();
     drive.delay = 40;
@@ -476,8 +498,9 @@ async function seedArrival(factory, record) {
     check('conteudo final e o mais novo', bodyOf(all[0].content) === 't1 t2', all[0].content);
     check('limpo, sem rascunho', !App.isDirty && App.listDrafts().length === 0, App.listDrafts());
   }
+  });
 
-  console.log('7. Rascunho escrito durante o create ganha o ID (nao duplica ao reabrir)');
+  await scenario('7. Rascunho escrito durante o create ganha o ID (nao duplica ao reabrir)', async () => {
   {
     const a = await boot();
     a.drive.delay = 40;
@@ -494,8 +517,9 @@ async function seedArrival(factory, record) {
     check('salvar o rascunho faz PATCH, nao um segundo POST', a.drive.count('POST') === 1 && bodyOf(a.drive.files.get('new1').content) === 'texto', a.drive.log);
     check('rascunho limpo', a.App.listDrafts().length === 0);
   }
+  });
 
-  console.log('8. Falha do Drive: texto vira rascunho, aparece na tela inicial, volta ao reabrir');
+  await scenario('8. Falha do Drive: texto vira rascunho, aparece na tela inicial, volta ao reabrir', async () => {
   {
     const { App, drive, type, w } = await boot();
     drive.put('A', 'a.md', 'original');
@@ -513,8 +537,9 @@ async function seedArrival(factory, record) {
     await App.save();
     check('sincroniza sem conflito (Drive nao mudou)', drive.files.get('A').content === 'sem rede' && App.listDrafts().length === 0);
   }
+  });
 
-  console.log('9. Texto digitado durante o save nao e marcado como salvo');
+  await scenario('9. Texto digitado durante o save nao e marcado como salvo', async () => {
   {
     const { App, drive, type } = await boot();
     drive.put('A', 'a.md', 'x');
@@ -529,8 +554,9 @@ async function seedArrival(factory, record) {
     await App.save();
     check('segundo save leva o resto', !App.isDirty && drive.files.get('A').content === 'x12');
   }
+  });
 
-  console.log('10. Falha ao carregar nao troca o arquivo atual');
+  await scenario('10. Falha ao carregar nao troca o arquivo atual', async () => {
   {
     const { App, drive, type } = await boot();
     drive.put('A', 'a.md', 'A');
@@ -544,8 +570,9 @@ async function seedArrival(factory, record) {
     await App.save();
     check('save vai pro A, B intacto', drive.files.get('A').content === 'A2' && drive.files.get('B').content === 'B');
   }
+  });
 
-  console.log('11. Tela inicial e rascunhos de versoes antigas');
+  await scenario('11. Tela inicial e rascunhos de versoes antigas', async () => {
   {
     const empty = await boot();
     check('sem rascunho: secao escondida', empty.w.document.getElementById('drafts-list').classList.contains('hidden'));
@@ -567,8 +594,9 @@ async function seedArrival(factory, record) {
     ld.getElementById('confirm-ok').click(); await sleep(10);
     check('descartar remove da lista e do storage', legacy.w.document.querySelectorAll('#drafts-ul li').length === 0 && legacy.w.localStorage.getItem('drivenotes_draft_new') === null);
   }
+  });
 
-  console.log('12. Preview sanitizado');
+  await scenario('12. Preview sanitizado', async () => {
   {
     const { App, drive, w } = await boot();
     drive.put('A', 'a.md', '# Titulo\n\n<img src=x onerror="window.__pwned=1">\n\n<script>window.__pwned=2</script>\n\n[ok](https://example.com) **negrito**');
@@ -582,16 +610,18 @@ async function seedArrival(factory, record) {
     check('sem DOMPurify: texto puro, nenhum HTML', App.els.previewContainer.children.length === 0 && App.els.previewContainer.textContent.includes('<img'));
     w.DOMPurify = saved;
   }
+  });
 
-  console.log('13. login_hint');
+  await scenario('13. login_hint', async () => {
   {
     const { App, w } = await boot();
     check('sem hint: so prompt', JSON.stringify(App.tokenRequest('')) === '{"prompt":""}');
     w.localStorage.setItem('drivenotes_login_hint', 'x@example.com');
     check('com hint guardado', App.tokenRequest('consent').login_hint === 'x@example.com');
   }
+  });
 
-  console.log('14. Abre em leitura; nota nova abre em edicao');
+  await scenario('14. Abre em leitura; nota nova abre em edicao', async () => {
   {
     const { App, drive, w } = await boot();
     const view = () => w.document.body.dataset.view;
@@ -607,8 +637,9 @@ async function seedArrival(factory, record) {
     check('nota nova em edicao', view() === 'edit');
     await App._saveChain;
   }
+  });
 
-  console.log('15. Frontmatter');
+  await scenario('15. Frontmatter', async () => {
   {
     const { App, drive } = await boot();
     drive.put('A', 'a.md', '---\ntitle: Minha nota\ntags: [a, b]\n---\n\n# Corpo\n\ntexto\n\n---\n\nfim');
@@ -623,8 +654,9 @@ async function seedArrival(factory, record) {
     await App.openFile('B', 'b.md');
     check('nota sem frontmatter: sem bloco', !c.querySelector('.frontmatter') && c.querySelectorAll('hr').length === 1);
   }
+  });
 
-  console.log('16. Wikilinks: renderizacao');
+  await scenario('16. Wikilinks: renderizacao', async () => {
   {
     const { App, drive } = await boot();
     drive.put('A', 'a.md', [
@@ -647,8 +679,9 @@ async function seedArrival(factory, record) {
     await sleep(60);
     check('embed de imagem que nao existe no Drive vira rotulo', !c.querySelector('img') && c.querySelector('.wikilink-file')?.textContent === 'foto.png', c.innerHTML.slice(0, 300));
   }
+  });
 
-  console.log('16b. Imagem embutida: ![[foto.jpg]] carrega do Drive');
+  await scenario('16b. Imagem embutida: ![[foto.jpg]] carrega do Drive', async () => {
   {
     const { App, drive, w } = await boot();
     const made = [];
@@ -686,8 +719,9 @@ async function seedArrival(factory, record) {
     await sleep(60);
     check('sem login: nao procura nem abre popup, fica o rotulo', drive.count('LIST') === lists && c.querySelector('.wikilink-file')?.textContent === 'outra.jpg', c.innerHTML);
   }
+  });
 
-  console.log('16c. Foto na nota: sobe pro _media e so depois entra o ![[...]]');
+  await scenario('16c. Foto na nota: sobe pro _media e so depois entra o ![[...]]', async () => {
   {
     const { App, drive, w } = await boot();
     w.URL.createObjectURL = () => 'blob:fake/local';
@@ -743,8 +777,9 @@ async function seedArrival(factory, record) {
     await App.insertPhoto(photo());
     check('sem pasta _media no vault: avisa e nao sobe', uploaded().length === 2 && /_media/.test(App.els.saveStatus.textContent), App.els.saveStatus.textContent);
   }
+  });
 
-  console.log('16d. Galeria: varias fotos de uma vez, em fila');
+  await scenario('16d. Galeria: varias fotos de uma vez, em fila', async () => {
   {
     const { App, drive, w } = await boot();
     w.URL.createObjectURL = () => 'blob:fake/local';
@@ -834,8 +869,9 @@ async function seedArrival(factory, record) {
       && ta.value === `${kept}![[${uploaded().pop().name}]]\n` && App.els.saveStatus.textContent === 'Erro ao enviar a foto', ta.value);
     w.fetch = real;
   }
+  });
 
-  console.log('17. Wikilinks: navegacao e voltar');
+  await scenario('17. Wikilinks: navegacao e voltar', async () => {
   {
     const { App, drive, w } = await boot();
     const view = () => w.document.body.dataset.view;
@@ -876,8 +912,9 @@ async function seedArrival(factory, record) {
     check('voltar de novo: tela inicial com recentes', view() === 'welcome' && App.currentFile === null && w.document.querySelectorAll('#recents-ul li').length >= 2 && App.els.fileName.textContent === 'Drive Notes');
     check('nada foi escrito no Drive', drive.count('PATCH') === 0 && drive.count('POST') === 0);
   }
+  });
 
-  console.log('18. Voltar com edicao pendente salva antes');
+  await scenario('18. Voltar com edicao pendente salva antes', async () => {
   {
     const { App, drive, type, w } = await boot();
     drive.put('A', 'a.md', 'A');
@@ -887,8 +924,9 @@ async function seedArrival(factory, record) {
     check('salvou no Drive', drive.files.get('A').content === 'A editado');
     check('tela inicial, sem "Nao sincronizados" sobrando', w.document.body.dataset.view === 'welcome' && w.document.getElementById('drafts-list').classList.contains('hidden'));
   }
+  });
 
-  console.log('19. Callouts, tabelas, tarefas, links');
+  await scenario('19. Callouts, tabelas, tarefas, links', async () => {
   {
     const { App, drive, w } = await boot();
     drive.put('A', 'a.md', [
@@ -916,8 +954,9 @@ async function seedArrival(factory, record) {
     as[1].click(); await sleep(80);
     check('link relativo .md abre a nota', App.currentFile.id === 'O', App.currentFile);
   }
+  });
 
-  console.log('20. Navegacao: toque nos recentes, falha de carregamento, nota nova');
+  await scenario('20. Navegacao: toque nos recentes, falha de carregamento, nota nova', async () => {
   {
     const { App, drive, w } = await boot({ seedStorage: {
       drivenotes_recents: JSON.stringify([{ id: 'A', name: 'a.md', timestamp: Date.now() }]),
@@ -942,8 +981,9 @@ async function seedArrival(factory, record) {
     w.history.back(); await sleep(80);
     check('voltar de novo: tela inicial', w.document.body.dataset.view === 'welcome' && App.currentFile === null);
   }
+  });
 
-  console.log('21. Renomear');
+  await scenario('21. Renomear', async () => {
   {
     const { App, drive, type, w } = await boot();
     drive.put('A', 'a.md', 'A');
@@ -978,8 +1018,9 @@ async function seedArrival(factory, record) {
     await b.App.save();
     check('nota ainda nao criada: nasce ja com o nome novo', [...b.drive.files.values()][0]?.name === 'Ideia boa.md' && b.drive.count('RENAME') === 0, b.drive.log);
   }
+  });
 
-  console.log('22. Login expirado');
+  await scenario('22. Login expirado', async () => {
   {
     const { App, drive, type, w } = await boot();
     drive.put('A', 'a.md', 'A');
@@ -997,8 +1038,9 @@ async function seedArrival(factory, record) {
     check('salvar manual: renova o login e sincroniza', popups === 1 && App.accessToken === 'novo' && drive.files.get('A').content === 'digitado com login vencido');
     check('limpo, rascunho removido', !App.isDirty && App.listDrafts().length === 0);
   }
+  });
 
-  console.log('23. Formatacao (editor de fallback)');
+  await scenario('23. Formatacao (editor de fallback)', async () => {
   {
     const { App } = await boot();
     const t = (line, p) => App.toggleLinePrefix(line, p);
@@ -1026,6 +1068,7 @@ async function seedArrival(factory, record) {
     check('negrito envolve a selecao', ta.value.startsWith('- **primeira** linha'), ta.value);
     await App._saveChain;
   }
+  });
 
   const seedVault = (drive) => {
     const dir = (id, name, parent) => { drive.put(id, name, '', [parent]); drive.files.get(id).mimeType = FOLDER; };
@@ -1037,7 +1080,7 @@ async function seedArrival(factory, record) {
     drive.put('n-sub', 'nota do projeto.md', '# dentro', ['d-proj']);
   };
 
-  console.log('24. Navegador de pastas');
+  await scenario('24. Navegador de pastas', async () => {
   {
     const { App, drive, w } = await boot();
     seedVault(drive);
@@ -1067,8 +1110,9 @@ async function seedArrival(factory, record) {
     drive.failReads = false;
     check('nada escrito no Drive', drive.count('PATCH') === 0 && drive.count('POST') === 0);
   }
+  });
 
-  console.log('25. Botao voltar do sistema via CloseWatcher');
+  await scenario('25. Botao voltar do sistema via CloseWatcher', async () => {
   {
     const { App, drive, type, w } = await boot({ watcher: true });
     seedVault(drive);
@@ -1115,8 +1159,9 @@ async function seedArrival(factory, record) {
     w.__back(); await sleep(20);
     check('voltar fecha o painel', !d.getElementById('debug-overlay').classList.contains('visible'));
   }
+  });
 
-  console.log('26. created e updated: nota nova nasce com as duas, salvar troca o updated');
+  await scenario('26. created e updated: nota nova nasce com as duas, salvar troca o updated', async () => {
   {
     const { App, drive, type } = await boot();
     const now = new Date();
@@ -1201,8 +1246,9 @@ async function seedArrival(factory, record) {
     check('CRLF e preservado', App.stampDates('---\r\nupdated: 2026-01-03\r\n---\r\nx', today, false) === `---\r\nupdated: ${today}\r\n---\r\nx`);
     check('nota criada agora sem created ganha as duas', App.stampDates('ideia', today, true) === `---\ncreated: ${today}\nupdated: ${today}\n---\n\nideia`);
   }
+  });
 
-  console.log('27. Salvar a partir da leitura, e o botao de salvar sem roubar o foco');
+  await scenario('27. Salvar a partir da leitura, e o botao de salvar sem roubar o foco', async () => {
   {
     const { App, drive, type, w } = await boot();
     const d = w.document;
@@ -1228,8 +1274,9 @@ async function seedArrival(factory, record) {
     check('toque no salvar: o comeco do toque e cancelado (teclado fica) e o fim salva', start.defaultPrevented && drive.files.get('A').content === 'texto editado 2', drive.files.get('A').content);
     check('um toque, uma escrita', drive.count('PATCH') === 2, drive.log);
   }
+  });
 
-  console.log('28. Busca: filtra a pasta aberta e procura no vault inteiro');
+  await scenario('28. Busca: filtra a pasta aberta e procura no vault inteiro', async () => {
   {
     const { App, drive, w } = await boot();
     seedVault(drive);
@@ -1299,8 +1346,9 @@ async function seedArrival(factory, record) {
     search('inexistente'); await sleep(10); search('inexistentes'); await sleep(200);
     check('nada encontrado: diz que nao achou', /nada/i.test(d.querySelector('.browser-message')?.textContent || ''), d.getElementById('browser-list').textContent);
   }
+  });
 
-  console.log('29. Desenho: a caixa de recorte sai dos tracos, nao da tela');
+  await scenario('29. Desenho: a caixa de recorte sai dos tracos, nao da tela', async () => {
   {
     const { App } = await boot();
     const line = (width, points, erase = false) => ({ color: '#8b6cef', width, erase, points });
@@ -1321,8 +1369,9 @@ async function seedArrival(factory, record) {
     const edge = App.sketchBounds([line(3, [{ x: 2, y: 2 }])]);
     check('traco na borda deixa a caixa entrar no negativo', edge.x === 2 - 1.5 - 16 && edge.y === 2 - 1.5 - 16, edge);
   }
+  });
 
-  console.log('30. Desenho: a tela abre a partir da edicao e fecha sem mexer na nota');
+  await scenario('30. Desenho: a tela abre a partir da edicao e fecha sem mexer na nota', async () => {
   {
     const { App, drive, w } = await boot();
     w.devicePixelRatio = 3;
@@ -1359,8 +1408,9 @@ async function seedArrival(factory, record) {
     App.sketchClose();
     check('fechar tira a tela e o estado, sem tocar na nota', !App.sketch && !screen.classList.contains('visible') && App.getContent() === before && !App.isDirty);
   }
+  });
 
-  console.log('31. Desenho: traco, borracha e desfazer');
+  await scenario('31. Desenho: traco, borracha e desfazer', async () => {
   {
     const { App, drive, w } = await boot();
     drive.put('A', 'a.md', 'linha um');
@@ -1412,8 +1462,9 @@ async function seedArrival(factory, record) {
 
     App.sketchClose();
   }
+  });
 
-  console.log('32. Desenho: o voltar do sistema fecha a tela, e nao joga fora sem perguntar');
+  await scenario('32. Desenho: o voltar do sistema fecha a tela, e nao joga fora sem perguntar', async () => {
   {
     const { App, drive, w } = await boot({ watcher: true });
     drive.put('A', 'a.md', 'linha um');
@@ -1449,8 +1500,9 @@ async function seedArrival(factory, record) {
     await sleep(10);
     check('descartar fecha a tela e nao mexe na nota', !App.sketch && App.getContent() === 'linha um' && !App.isDirty);
   }
+  });
 
-  console.log('33. Desenho: o pronto recorta, sobe pro _media e so entao entra na nota');
+  await scenario('33. Desenho: o pronto recorta, sobe pro _media e so entao entra na nota', async () => {
   {
     const { App, drive, w } = await boot();
     w.URL.createObjectURL = () => 'blob:fake/sketch';
@@ -1502,8 +1554,9 @@ async function seedArrival(factory, record) {
     await App.sketchFinish();
     check('tentar de novo com a rede de volta sobe o mesmo desenho', uploaded().length === 2 && !App.sketch && /!\[\[a-desenho-/.test(ta.value));
   }
+  });
 
-  console.log('34. Desenho: toque repetido no pronto nao sobe o desenho varias vezes');
+  await scenario('34. Desenho: toque repetido no pronto nao sobe o desenho varias vezes', async () => {
   {
     const { App, drive, w } = await boot();
     w.URL.createObjectURL = () => 'blob:fake/sketch';
@@ -1556,8 +1609,9 @@ async function seedArrival(factory, record) {
     await App.sketchFinish();
     check('e dai da pra tentar de novo', uploaded().length === 3 && embeds() === 3 && !App.sketch);
   }
+  });
 
-  console.log('35. Tarefa: tocar na caixa no modo leitura marca no texto da nota');
+  await scenario('35. Tarefa: tocar na caixa no modo leitura marca no texto da nota', async () => {
   {
     const { App, drive, w } = await boot();
     const note = [
@@ -1591,8 +1645,9 @@ async function seedArrival(factory, record) {
     await App.openFile('B', 'b.md');
     check('contagem que nao bate: caixas ficam desligadas', boxes().length === 1 && boxes()[0].disabled, boxes().map(b => b.disabled));
   }
+  });
 
-  console.log('36. Deslizar da borda: a esquerda volta, a direita avanca');
+  await scenario('36. Deslizar da borda: a esquerda volta, a direita avanca', async () => {
   {
     const { App, drive, w } = await boot({ watcher: true });
     seedVault(drive);
@@ -1692,8 +1747,9 @@ async function seedArrival(factory, record) {
     await swipe(5, 150);
     check('na tela de desenho nao volta nem fecha o desenho', !!App.sketch && App.currentFile?.id === 'n-z');
   }
+  });
 
-  console.log('38. Navegar de novo antes de a nota anterior carregar nao suja a pilha do voltar');
+  await scenario('38. Navegar de novo antes de a nota anterior carregar nao suja a pilha do voltar', async () => {
   {
     // Do log do aparelho em 19 set 2026: dois "avancar" com 1s de intervalo, rede lenta, e depois o voltar
     // parou tres vezes na mesma pasta. A tela que fica pra tras era lida enquanto a nota ainda carregava.
@@ -1767,8 +1823,9 @@ async function seedArrival(factory, record) {
     check('dois voltar seguidos: da nota do link direto pra pasta',d.body.dataset.view === 'browse' && App.currentFile === null && stack().join(' > ') === 'welcome', [d.body.dataset.view, App.currentFile?.id, stack()]);
     drive.delay = 5;
   }
+  });
 
-  console.log('37. Deslizar da borda sem CloseWatcher: anda no historico do navegador');
+  await scenario('37. Deslizar da borda sem CloseWatcher: anda no historico do navegador', async () => {
   {
     const { App, drive, w } = await boot();
     drive.put('A', 'a.md', 'A');
@@ -1786,8 +1843,9 @@ async function seedArrival(factory, record) {
     await swipe(w.innerWidth - 5, w.innerWidth - 150);
     check('direita avanca pra nota', App.currentFile?.id === 'A', App.currentFile);
   }
+  });
 
-  console.log('39. Leitura: linha em branco entre itens separa grupos, em vez de espacar a lista toda');
+  await scenario('39. Leitura: linha em branco entre itens separa grupos, em vez de espacar a lista toda', async () => {
   {
     const { App, drive, w } = await boot();
     const c = App.els.previewContainer;
@@ -1831,8 +1889,9 @@ async function seedArrival(factory, record) {
     await App.openFile('G', 'g.md');
     check('item com wikilink continua virando link', c.querySelectorAll('li a.wikilink').length === 2 && c.querySelector('li.gap a.wikilink').textContent === 'texto', c.innerHTML);
   }
+  });
 
-  console.log('39b. Infra: o CodeMirror 6 sobe no jsdom');
+  await scenario('39b. Infra: o CodeMirror 6 sobe no jsdom', async () => {
   {
     const { w } = await boot({ editor: true });
     check('o pacote expos o window.CM6', !!w.CM6 && !!w.CM6.EditorView);
@@ -1857,8 +1916,9 @@ async function seedArrival(factory, record) {
     })());
     view.destroy();
   }
+  });
 
-  console.log('39c. Fachada: o app fala com o Editor, nao com a lib');
+  await scenario('39c. Fachada: o app fala com o Editor, nao com a lib', async () => {
   {
     const { App } = await boot();
     check('sem lib carregada a fachada cai no textarea', App.Editor.kind() === 'textarea');
@@ -1894,8 +1954,9 @@ async function seedArrival(factory, record) {
       App.cm6Type === undefined && App.cm6Digitar === undefined);
     check('... e o fonte tambem nao o traz', !/cm6Type|cm6Digitar/.test(fonteDoApp));
   }
+  });
 
-  console.log('39d. CM6: texto, desfazer e a marca de cursor');
+  await scenario('39d. CM6: texto, desfazer e a marca de cursor', async () => {
   {
     const { App } = await boot({ editor: true });
     check('o editor ativo e o CM6', App.Editor.kind() === 'cm6', App.Editor.kind());
@@ -2002,8 +2063,9 @@ async function seedArrival(factory, record) {
     check('... e o texto da nota aberta fica intacto',
       App.Editor.getText() === 'outra nota, aberta da lista', App.Editor.getText());
   }
+  });
 
-  console.log('39e. Nota longa: os colchetes comuns acompanham o que esta na tela');
+  await scenario('39e. Nota longa: os colchetes comuns acompanham o que esta na tela', async () => {
   {
     // A decoracao que devolve [[wikilink]] e [!note] ao texto comum percorria a arvore de sintaxe
     // INTEIRA, e so quando o documento mudava. Numa nota grande isso custava uma varredura da nota
@@ -2043,8 +2105,9 @@ async function seedArrival(factory, record) {
       [...w.document.querySelectorAll('.plain-brackets')].some((el) => el.textContent === '[fim]'),
       [...w.document.querySelectorAll('.cm-line')].map((el) => el.className));
   }
+  });
 
-  console.log('40. Edicao: Enter numa tarefa continua a lista de tarefas');
+  await scenario('40. Edicao: Enter numa tarefa continua a lista de tarefas', async () => {
   {
     const { App, w } = await boot({ editor: true });
     const view = App.Editor._impl.view;
@@ -2117,8 +2180,9 @@ async function seedArrival(factory, record) {
     r = enter('paragrafo', 9);
     check('paragrafo comum nao ganha marcador', r.text === 'paragrafo\n' && r.at === '1:0', r);
   }
+  });
 
-  console.log('41. Barra de formatacao no CM6');
+  await scenario('41. Barra de formatacao no CM6', async () => {
   {
     const { App } = await boot({ editor: true });
     const view = App.Editor._impl.view;
@@ -2250,8 +2314,9 @@ async function seedArrival(factory, record) {
       && linhaFinal.number === 3 && selFinal.head - linhaFinal.from === 3,
       { texto: App.Editor.getText(), anchor: selFinal.anchor, head: selFinal.head });
   }
+  });
 
-  console.log('41b. O teclado do celular sobe a primeira letra da frase');
+  await scenario('41b. O teclado do celular sobe a primeira letra da frase', async () => {
   {
     const { App } = await boot({ editor: true });
     const contentDOM = App.Editor._impl.view.contentDOM;
@@ -2261,8 +2326,9 @@ async function seedArrival(factory, record) {
       contentDOM.getAttribute('autocapitalize') === 'sentences',
       contentDOM.getAttribute('autocapitalize'));
   }
+  });
 
-  console.log('42. Foto desenhada na linha, no CM6');
+  await scenario('42. Foto desenhada na linha, no CM6', async () => {
   {
     const { App, w } = await boot({ editor: true });
     App._embedInfo.set('foto.png', { url: 'blob:x', width: 800, height: 400 });
@@ -2320,8 +2386,9 @@ async function seedArrival(factory, record) {
     check('sem embed, nenhuma linha decorada',
       w.document.querySelectorAll('.cm-line.embed-line').length === 0);
   }
+  });
 
-  console.log('42b. A tela so volta pro cursor com o editor em foco');
+  await scenario('42b. A tela so volta pro cursor com o editor em foco', async () => {
   {
     // O scrollCaretIntoView antigo so rolava quando a selecao do DOM estava dentro do editor, ou
     // seja, com o editor em foco. Sem essa guarda: abrir uma nota longa, tocar em Editar sem tocar
@@ -2357,8 +2424,9 @@ async function seedArrival(factory, record) {
     check('com foco, a linha que mudou de altura continua perseguindo o cursor', rolagens === 1, rolagens);
     view.dispatch = dispatchDeVerdade;
   }
+  });
 
-  console.log('43. Botoes de desfazer e refazer na barra');
+  await scenario('43. Botoes de desfazer e refazer na barra', async () => {
   {
     const { App, w } = await boot({ editor: true });
     App.Editor.setText('base');
@@ -2371,8 +2439,9 @@ async function seedArrival(factory, record) {
     refazer.dispatchEvent(new w.Event('click', { bubbles: true }));
     check('o botao refez', App.Editor.getText() === 'base mais', App.Editor.getText());
   }
+  });
 
-  console.log('43b. Desfazer sem nada pra desfazer nao suja a nota');
+  await scenario('43b. Desfazer sem nada pra desfazer nao suja a nota', async () => {
   {
     // Nota recem aberta: a pilha esta vazia. Sem olhar o retorno de undo(), o botao marcava a
     // nota como suja de qualquer jeito, e trinta segundos depois o autosave gravava no Drive com o
@@ -2414,8 +2483,9 @@ async function seedArrival(factory, record) {
     check('desfazer na nota B nao traz pedaco da nota A', App.Editor.getText() === NOTA_B, App.Editor.getText());
     check('... e a nota B continua limpa, entao o autosave nao tem o que gravar', App.isDirty === false);
   }
+  });
 
-  console.log('44. Edicao: Enter continua a citacao, e a linha de citacao vazia encerra na hora');
+  await scenario('44. Edicao: Enter continua a citacao, e a linha de citacao vazia encerra na hora', async () => {
   {
     const { App, w } = await boot({ editor: true });
     const view = App.Editor._impl.view;
@@ -2483,8 +2553,9 @@ async function seedArrival(factory, record) {
     r = enter('paragrafo', 9);
     check('paragrafo comum nao ganha marcador', r.text === 'paragrafo\n' && r.at === '1:0', r);
   }
+  });
 
-  console.log('45. A barra rola com o dedo em cima dos botoes');
+  await scenario('45. A barra rola com o dedo em cima dos botoes', async () => {
   {
     const { App, w } = await boot({ editor: true });
     const d = w.document;
@@ -2555,8 +2626,9 @@ async function seedArrival(factory, record) {
     toque(galeria, 'touchend', 360, 700);
     check('arrastar em cima do botao da galeria nao abre o seletor', abriu === 1, abriu);
   }
+  });
 
-  console.log('46. Painel de diagnostico: a versao do cache e o editor em uso');
+  await scenario('46. Painel de diagnostico: a versao do cache e o editor em uso', async () => {
   {
     const { App, w } = await boot();
     const d = w.document;
@@ -2578,8 +2650,9 @@ async function seedArrival(factory, record) {
     await App.readVersion();
     check('primeira abertura, sem cache ainda: o painel diz isso', App._version === 'sem cache', App._version);
   }
+  });
 
-  console.log('47. A barra de formatacao: 18 botoes, todos desenhados');
+  await scenario('47. A barra de formatacao: 18 botoes, todos desenhados', async () => {
   {
     const { w } = await boot();
     const botoes = [...w.document.querySelectorAll('.toolbar .toolbar-btn')];
@@ -2599,8 +2672,9 @@ async function seedArrival(factory, record) {
     const semNome = botoes.filter(b => !(b.getAttribute('aria-label') || '').trim());
     check('todo botao se anuncia pro leitor de tela', semNome.length === 0, semNome.map(b => b.title));
   }
+  });
 
-  console.log('48. Botoes de link entre notas e de tag');
+  await scenario('48. Botoes de link entre notas e de tag', async () => {
   {
     const { App } = await boot({ editor: true });
     const view = App.Editor._impl.view;
@@ -2630,8 +2704,9 @@ async function seedArrival(factory, record) {
     check('sem selecao a tag deixa #texto com "texto" selecionado',
       App.Editor.getText() === '#texto' && sel() === '1,6', { texto: App.Editor.getText(), sel: sel() });
   }
+  });
 
-  console.log('49. Lista numerada na barra');
+  await scenario('49. Lista numerada na barra', async () => {
   {
     // A numerada entra pela tabela FORMATS como qualquer outro marcador de linha: quem faz o
     // trabalho e o linePrefixChange, e e ele que segura o cursor onde a escrita estava
@@ -2655,8 +2730,9 @@ async function seedArrival(factory, record) {
     check('numerada vira lista com um toque, sem virar duas linhas de marcador',
       App.Editor.getText() === '- a' && cursor() === 3, { texto: App.Editor.getText(), cursor: cursor() });
   }
+  });
 
-  console.log('50. O leitor entende marca-texto e riscado');
+  await scenario('50. O leitor entende marca-texto e riscado', async () => {
   {
     const { App } = await boot();
     const ler = (texto) => { App.setContent(texto); App.setMode('preview'); return App.els.previewContainer.innerHTML; };
@@ -2669,8 +2745,9 @@ async function seedArrival(factory, record) {
     check('== x == com espaco encostado fica texto', !ler('== x ==').includes('<mark'), ler('== x =='));
     check('~~x~~ continua saindo riscado pelo GFM', ler('~~x~~').includes('<del>x</del>'), ler('~~x~~'));
   }
+  });
 
-  console.log('51. Foto e desenho nascem com o nome da nota, sem a data');
+  await scenario('51. Foto e desenho nascem com o nome da nota, sem a data', async () => {
   {
     const { App, drive, w } = await boot();
     const slug = (nome) => App.slugForMedia(nome);
@@ -2709,8 +2786,9 @@ async function seedArrival(factory, record) {
       App.mediaName(jpeg, null, 'foto') === 'foto-2026-09-19-153012.jpg', App.mediaName(jpeg, null, 'foto'));
     w.Date = Real;
   }
+  });
 
-  console.log('52. Sem a data no nome, o Drive e quem diz se ele esta livre');
+  await scenario('52. Sem a data no nome, o Drive e quem diz se ele esta livre', async () => {
   {
     const { App, drive, w } = await boot();
     w.URL.createObjectURL = () => 'blob:fake/local';
@@ -2738,8 +2816,9 @@ async function seedArrival(factory, record) {
 
     w.Date = Real;
   }
+  });
 
-  console.log('52b. Leva de fotos no mesmo segundo: -2 e -3, sem consultar o que a leva ja deu');
+  await scenario('52b. Leva de fotos no mesmo segundo: -2 e -3, sem consultar o que a leva ja deu', async () => {
   {
     const { App, drive, w } = await boot();
     w.URL.createObjectURL = () => 'blob:fake/local';
@@ -2782,8 +2861,9 @@ async function seedArrival(factory, record) {
     App.driveFindByName = real;
     w.Date = Real;
   }
+  });
 
-  console.log('53. Tocar na foto: sai da nota e vai pra lixeira do Drive');
+  await scenario('53. Tocar na foto: sai da nota e vai pra lixeira do Drive', async () => {
   {
     const { App, drive, w } = await boot({ editor: true });
     w.URL.createObjectURL = () => 'blob:fake/local';
@@ -2861,8 +2941,9 @@ async function seedArrival(factory, record) {
       && App.els.saveStatus.textContent === 'Conflito com o Drive',
       [semSave, drive.files.get('W').trashed, App.els.saveStatus.textContent]);
   }
+  });
 
-  console.log('54. Indice de titulos: monta do Drive, guarda no aparelho, filtra e ordena');
+  await scenario('54. Indice de titulos: monta do Drive, guarda no aparelho, filtra e ordena', async () => {
   {
     const { App, drive, w } = await boot();
     seedVault(drive);
@@ -2939,8 +3020,9 @@ async function seedArrival(factory, record) {
     await sleep(50);
     check('sem Drive, a copia guardada serve e nada estoura', third.length === 6 && App3._noteIndex.length === 6);
   }
+  });
 
-  console.log('55. Lista de notas ao digitar [[ (autocompletar no CodeMirror)');
+  await scenario('55. Lista de notas ao digitar [[ (autocompletar no CodeMirror)', async () => {
   {
     const { App, drive, w } = await boot({ editor: true });
     seedVault(drive);
@@ -3013,8 +3095,9 @@ async function seedArrival(factory, record) {
     check('voltar fecha a lista e fica na nota', wW.__back() === 'handled' && wW.CM6.completionStatus(viewW.state) === null && AppW.currentFile?.id === 'N2');
     check('proximo voltar sai da nota', wW.__back() === 'handled' && (await sleep(80), AppW.currentFile == null || AppW.currentFile.id !== 'N2'));
   }
+  });
 
-  console.log('56. Quem aponta pra esta nota: busca no Drive, conferida no texto');
+  await scenario('56. Quem aponta pra esta nota: busca no Drive, conferida no texto', async () => {
   {
     const { App, drive } = await boot();
     seedVault(drive);
@@ -3043,8 +3126,9 @@ async function seedArrival(factory, record) {
     const except = await App.findLinkingNotes('zebra.md', { exceptId: 'L1' });
     check('exceptId deixa a propria nota de fora', except.map(n => n.id).join() === 'L2');
   }
+  });
 
-  console.log('57. Apagar a nota aberta: lixeira do Drive, some das recentes e do indice, volta a tela');
+  await scenario('57. Apagar a nota aberta: lixeira do Drive, some das recentes e do indice, volta a tela', async () => {
   {
     const { App, drive, w, type } = await boot({ watcher: true });
     seedVault(drive);
@@ -3104,8 +3188,9 @@ async function seedArrival(factory, record) {
       && App.els.saveStatus.textContent === 'Erro ao apagar', App.els.saveStatus.textContent);
     drive.failTrash = false;
   }
+  });
 
-  console.log('58. Renomear conserta os [[links]] nas outras notas');
+  await scenario('58. Renomear conserta os [[links]] nas outras notas', async () => {
   {
     const { App, drive, w } = await boot();
     seedVault(drive);
@@ -3167,8 +3252,9 @@ async function seedArrival(factory, record) {
     await App._saveChain; await sleep(50);
     check('sem links, status curto', App.els.saveStatus.textContent === 'Renomeado', App.els.saveStatus.textContent);
   }
+  });
 
-  console.log('59. Extrair trecho: o editor entrega o trecho selecionado e so troca o que conferiu');
+  await scenario('59. Extrair trecho: o editor entrega o trecho selecionado e so troca o que conferiu', async () => {
   {
     const { App, w } = await boot({ editor: true });
     const view = App.Editor._impl.view;
@@ -3219,8 +3305,9 @@ async function seedArrival(factory, record) {
     check('no textarea de reserva nao ha trecho nem troca',
       semLib.Editor.selectedStretch() === null && semLib.Editor.replaceStretch({ text: 'x' }, 'y') === false);
   }
+  });
 
-  console.log('59b. A caixa do nome pode recusar e ficar aberta dizendo por que');
+  await scenario('59b. A caixa do nome pode recusar e ficar aberta dizendo por que', async () => {
   {
     const { App, w } = await boot();
     const aviso = w.document.getElementById('modal-message');
@@ -3251,8 +3338,9 @@ async function seedArrival(factory, record) {
     App._modalConfirm();
     check('sem validate: fecha e confirma no mesmo instante', sincrono === 'a.md' && !App.els.modal.classList.contains('visible'));
   }
+  });
 
-  console.log('60. Extrair trecho: o nome sugerido vem da primeira linha, livre no vault');
+  await scenario('60. Extrair trecho: o nome sugerido vem da primeira linha, livre no vault', async () => {
   {
     const { App, drive } = await boot();
     seedVault(drive);
@@ -3266,8 +3354,9 @@ async function seedArrival(factory, record) {
     check('a comparacao ignora maiuscula, como o link do Obsidian', await App.suggestNoteName('Zebra') === 'zebra-2');
     check('linha so de simbolos cai no nome de data', /^\d{4}-\d{2}-\d{2}-\d{4}$/.test(await App.suggestNoteName('***\ntexto')));
   }
+  });
 
-  console.log('61. Extrair trecho: a nota nova nasce no Drive, e so entao o trecho vira link');
+  await scenario('61. Extrair trecho: a nota nova nasce no Drive, e so entao o trecho vira link', async () => {
   {
     const { App, drive, w } = await boot({ editor: true });
     seedVault(drive);
@@ -3310,8 +3399,9 @@ async function seedArrival(factory, record) {
     check('desfazer devolve o trecho pra original',
       bodyOf(App.getContent()) === 'antes\n## Ideia de home\nlinha dois\ndepois', App.getContent());
   }
+  });
 
-  console.log('62. Extrair trecho: quando algo da errado, o texto fica, nunca some');
+  await scenario('62. Extrair trecho: quando algo da errado, o texto fica, nunca some', async () => {
   {
     const { App, drive, w } = await boot({ editor: true });
     seedVault(drive);
@@ -3377,8 +3467,9 @@ async function seedArrival(factory, record) {
       driveSemLogin.count('POST') === 0 && semLogin.getContent() === texto
       && semLogin.els.saveStatus.textContent === 'Faça login pra extrair', [driveSemLogin.log, semLogin.els.saveStatus.textContent]);
   }
+  });
 
-  console.log('63. Notas guardadas no aparelho: guarda, devolve, apaga, e nunca estoura');
+  await scenario('63. Notas guardadas no aparelho: guarda, devolve, apaga, e nunca estoura', async () => {
   {
     const { App, idb } = await boot({ idb: true });
     const S = App.NoteStore;
@@ -3420,8 +3511,9 @@ async function seedArrival(factory, record) {
     wq.indexedDB = { open() { throw new Error('SecurityError'); } };
     check('banco que falha ao abrir: null, sem estourar', await quebrado.NoteStore.get('x') === null);
   }
+  });
 
-  console.log('64. Nota ja vista abre na hora, do aparelho, e so pergunta ao Drive se mudou');
+  await scenario('64. Nota ja vista abre na hora, do aparelho, e so pergunta ao Drive se mudou', async () => {
   {
     const { App, drive, w, idb } = await boot({ idb: true });
     drive.put('A', 'a.md', 'texto de A');
@@ -3458,8 +3550,9 @@ async function seedArrival(factory, record) {
     await sleep(300);
     check('... e a pergunta ao Drive disse que nao mudou', drive2.count('GET content') === 0, drive2.log);
   }
+  });
 
-  console.log('65. Mudou no Drive: troca sozinha; mudou so a data: fica quieto; ela ja escreveu: nao troca');
+  await scenario('65. Mudou no Drive: troca sozinha; mudou so a data: fica quieto; ela ja escreveu: nao troca', async () => {
   {
     const { App, drive, type } = await boot({ idb: true });
     drive.put('A', 'a.md', 'versao 1');
@@ -3511,8 +3604,9 @@ async function seedArrival(factory, record) {
     check('o salvar acha o conflito, com o dialogo de sempre',
       App.currentFile.conflict === true && drive.files.get('A').content === 'de novo no PC', drive.files.get('A').content);
   }
+  });
 
-  console.log('66. Nota guardada: salvar atualiza, rascunho ganha, sem rede, sem login, recarregar e apagar');
+  await scenario('66. Nota guardada: salvar atualiza, rascunho ganha, sem rede, sem login, recarregar e apagar', async () => {
   {
     const { App, drive, w, type, idb } = await boot({ idb: true });
     drive.put('A', 'a.md', 'versao 1');
@@ -3584,8 +3678,9 @@ async function seedArrival(factory, record) {
     await sleep(50);
     check('apagar a nota tira ela do aparelho', await App.NoteStore.get('A') === null);
   }
+  });
 
-  console.log('67. A propria nota reaberta com texto por salvar (link pra ela mesma): fica o que esta na tela');
+  await scenario('67. A propria nota reaberta com texto por salvar (link pra ela mesma): fica o que esta na tela', async () => {
   {
     // Achado na revisao do Opus: com o caminho rapido, tocar em [[a#Secao]] dentro de `a` logo depois de
     // escrever punha a versao guardada, mais velha, no lugar do texto dela, e a edicao seguinte abria um
@@ -3608,8 +3703,9 @@ async function seedArrival(factory, record) {
       !App.currentFile.conflict && drive.files.get('A').content === 'versao 1 com o que ela escreveu\n\n## Secao',
       drive.files.get('A').content);
   }
+  });
 
-  console.log('68. Versao nova: a home recarrega sozinha, fora dela o aviso, e texto por salvar nunca recarrega');
+  await scenario('68. Versao nova: a home recarrega sozinha, fora dela o aviso, e texto por salvar nunca recarrega', async () => {
   {
     // Stand-in for navigator.serviceWorker: takeOver() is a new version taking this page over. The real
     // service worker, end to end, is `npm run test:sw`; here it is the decision the page makes.
@@ -3753,6 +3849,7 @@ async function seedArrival(factory, record) {
         [App.folder, w.document.body.dataset.view]);
     }
   }
+  });
 
   // jsdom has no layout. Stand-in for the reading view: every block is 100px tall, stacked from the top of
   // the container, which sits at 50px on screen. Installed before the app runs (boot's beforeApp), so it
@@ -3773,7 +3870,7 @@ async function seedArrival(factory, record) {
     w.__at = () => ({ block: Math.floor(scroll / 100), into: scroll % 100 });
   };
 
-  console.log('69. Retomar a nota onde parou: a leitura reabre no bloco em que ficou');
+  await scenario('69. Retomar a nota onde parou: a leitura reabre no bloco em que ficou', async () => {
   {
     // 31 blocks: the title, then paragraph i at block i + 1
     const LONG = '# Titulo\n\n' + Array.from({ length: 30 }, (_, i) => `paragrafo ${i}`).join('\n\n');
@@ -3879,8 +3976,9 @@ async function seedArrival(factory, record) {
         App2.mode === 'preview' && w2.__at().block === 18 && w2.__at().into === 40, [App2.mode, w2.__at()]);
     }
   }
+  });
 
-  console.log('70. Ler e Editar no mesmo trecho: o que esta no topo de um fica no topo do outro');
+  await scenario('70. Ler e Editar no mesmo trecho: o que esta no topo de um fica no topo do outro', async () => {
   {
     // Lines:  1-4 properties, 6 title, 8-9 paragraph, 11 comment, 13-15 list, 17-19 code, 21 iframe, 23 last
     const NOTE = '---\ncreated: 2026-09-01\nupdated: 2026-09-01\n---\n\n# Titulo\n\nprimeiro paragrafo\ncontinua aqui\n\n'
@@ -4002,8 +4100,9 @@ async function seedArrival(factory, record) {
         [App4.isDirty, scrolled4, editorScroll]);
     }
   }
+  });
 
-  console.log('71. Entradas: o que chega vira um item de lista no formato das notas de captura');
+  await scenario('71. Entradas: o que chega vira um item de lista no formato das notas de captura', async () => {
   {
     const { App } = await boot();
     const e = (a) => App.arrivalEntry(a);
@@ -4033,8 +4132,9 @@ async function seedArrival(factory, record) {
     check('resumo: uma foto', s({ photos: [{}] }) === '1 foto');
     check('resumo: texto e duas fotos', s({ text: 'oi', photos: [{}, {}] }) === 'oi + 2 fotos');
   }
+  });
 
-  console.log('72. Abrir pelo atalho do icone: le o parametro, tira da URL e age');
+  await scenario('72. Abrir pelo atalho do icone: le o parametro, tira da URL e age', async () => {
   {
     const TOKEN = { drivenotes_token: 'fake', drivenotes_token_expires: String(Date.now() + 3600e3) };
     const until = async (cond, limit = 3000) => {
@@ -4090,8 +4190,9 @@ async function seedArrival(factory, record) {
       check('a caixa: a mais antiga primeiro, e o apagar tira so ela', oldest?.id === 'x0' && after?.id === 'x1', [oldest?.id, after?.id]);
     }
   }
+  });
 
-  console.log('73. Guardar em…: o que chegou entra no fim da nota escolhida, sobe na hora e sai da caixa');
+  await scenario('73. Guardar em…: o que chegou entra no fim da nota escolhida, sobe na hora e sai da caixa', async () => {
   {
     const TOKEN = { drivenotes_token: 'fake', drivenotes_token_expires: String(Date.now() + 3600e3) };
     const { IDBFactory } = require('fake-indexeddb');
@@ -4261,8 +4362,9 @@ async function seedArrival(factory, record) {
         view.state.selection.main.head === view.state.doc.length && !App.isDirty && !drive.log.includes('PATCH I1'));
     }
   }
+  });
 
-  console.log('74. Manifest: compartilhar e atalhos dentro do endereco do app, icones PNG do tamanho declarado');
+  await scenario('74. Manifest: compartilhar e atalhos dentro do endereco do app, icones PNG do tamanho declarado', async () => {
   {
     const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
     const base = 'https://agathagio.github.io/drive-notes/manifest.json';
@@ -4292,8 +4394,9 @@ async function seedArrival(factory, record) {
       }
     }
   }
+  });
 
-  console.log('75. Compartilhar sem rede: a tela oferece nota nova, as fotos esperam, e abrir sem rede nao cai na tela');
+  await scenario('75. Compartilhar sem rede: a tela oferece nota nova, as fotos esperam, e abrir sem rede nao cai na tela', async () => {
   {
     const TOKEN = { drivenotes_token: 'fake', drivenotes_token_expires: String(Date.now() + 3600e3), drivenotes_media_folder: 'media' };
     const { IDBFactory } = require('fake-indexeddb');
@@ -4401,8 +4504,9 @@ async function seedArrival(factory, record) {
       check('... e voltar deixa a foto na caixa', !visible(App) && (await App.ArrivalBox.get('o4'))?.photos.length === 1);
     }
   }
+  });
 
-  console.log('76. Sumario: segurar o nome da nota na leitura lista os titulos e pula ate o tocado');
+  await scenario('76. Sumario: segurar o nome da nota na leitura lista os titulos e pula ate o tocado', async () => {
   {
     const { App, drive, w } = await boot({ watcher: true });
     // O jsdom nao tem Touch: o evento de toque se monta na mao, com a lista de dedos
@@ -4493,8 +4597,9 @@ async function seedArrival(factory, record) {
       && App.els.tocEmpty.textContent === 'Esta nota não tem títulos.' && items().length === 0);
     App.closeToc();
   }
+  });
 
-  console.log('77. Espiar: segurar um link interno mostra a nota do outro lado num cartao, sem sair do lugar');
+  await scenario('77. Espiar: segurar um link interno mostra a nota do outro lado num cartao, sem sair do lugar', async () => {
   {
     const { App, drive, w } = await boot({ watcher: true, idb: true });
     // Os mesmos toques do cenario 76: o jsdom nao tem Touch
@@ -4637,8 +4742,9 @@ async function seedArrival(factory, record) {
     check('sem rede: o aviso', visible() && App.els.peekMessage.textContent === 'Sem rede.', App.els.peekMessage.textContent);
     App.closePeek();
   }
+  });
 
-  console.log('78. Quadro kanban: colunas empilhadas com contagem, recolhidas como no Obsidian, e o um pra um da leitura intacto');
+  await scenario('78. Quadro kanban: colunas empilhadas com contagem, recolhidas como no Obsidian, e o um pra um da leitura intacto', async () => {
   {
     // The layout stand-in of scenarios 69 and 70, but hidden blocks take no room, as in the browser:
     // a display:none element measures 0 everywhere, and the visible ones close up, 100px each
@@ -4783,8 +4889,9 @@ async function seedArrival(factory, record) {
     check('nota sem kanban-plugin nao vira quadro, e o %% dela fica como esta', !c.classList.contains('kanban')
       && !c.querySelector('.kanban-col-head, .kanban-col-body, .kanban-settings, [hidden]') && c.textContent.includes('%% comentario %%'));
   }
+  });
 
-  console.log('79. YouTube: embed vira capa com play, toque abre fora, capa que falha vira o link');
+  await scenario('79. YouTube: embed vira capa com play, toque abre fora, capa que falha vira o link', async () => {
   {
     const { App, drive, w } = await boot({ watcher: true });
     const note = [
@@ -4848,8 +4955,9 @@ async function seedArrival(factory, record) {
       && App.currentFile.id === 'Y', [opened, App.els.peekBody.innerHTML]);
     App.closePeek();
   }
+  });
 
-  console.log('80. Transcricao do gravador (.txt em UTF-16 com marca) abre com o texto certo, e salvar grava em UTF-8');
+  await scenario('80. Transcricao do gravador (.txt em UTF-16 com marca) abre com o texto certo, e salvar grava em UTF-8', async () => {
   {
     const { App, w, drive, type } = await boot();
     const TEXT = 'Este conteúdo foi gerado por IA.\n\nTranscrição da reunião: ação, coração e pé.';
@@ -4892,6 +5000,7 @@ async function seedArrival(factory, record) {
     check('... e o que sobe e UTF-8 limpo: nem FE FF, nem FF FE, nem EF BB BF no comeco',
       !saved.content.startsWith('\ufeff') && !(up[0] === 0xef && up[1] === 0xbb) && up[0] !== 0xfe && up[0] !== 0xff, up.subarray(0, 4));
   }
+  });
 
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });

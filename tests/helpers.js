@@ -64,30 +64,56 @@ function findBrowser() {
 }
 
 /**
- * A page with the real index.html and the given app.js source, the libraries served from node_modules,
+ * The app's own scripts, in the order index.html loads them: `app.js` today, `app/*.js` once the app
+ * is split. Never vendor/codemirror.js, which is a library. `html` is the index.html to read, the one
+ * in the working tree by default; a historical control passes the one of its commit.
+ */
+function appScripts(html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8')) {
+  return [...html.matchAll(/<script src="(app\.js|app\/[^"]+)"><\/script>/g)].map(m => m[1]);
+}
+
+/** The app as one script: the files of appScripts() joined in order, which is what the browser runs */
+function appSource() {
+  return appScripts().map(src => fs.readFileSync(path.join(ROOT, src), 'utf8')).join('\n');
+}
+
+/**
+ * A page with the real index.html and the given app source, the libraries served from node_modules,
  * and no Google script or service worker. Returns its file:// URL.
  *
+ * The app's own script tags (one app.js, or the run of app/*.js) become one tag with `source`. `html`
+ * is the index.html to build from: the working tree's by default. A historical control, which runs
+ * the app of an old commit, passes that commit's index.html too; without it the app.js tag would not
+ * be found, and the page would run the current app without anyone noticing.
+ *
  * O CodeMirror 6 nao precisa de troca nenhuma: o index.html carrega `vendor/codemirror.js` por
- * caminho relativo, e o <base> acima resolve isso dentro do proprio repositorio. Ja o TinyMDE saiu
- * do index.html na tarefa 4, entao a linha que o injetava virou letra morta (a regex do unpkg nao
- * casava mais com nada). Agora ele entra por pedido, `{ tinymde: true }`, e quem pede e o controle
- * historico do cenario 1 da suite de navegador: ele roda o app de um commit anterior a troca de
- * editor, que e TinyMDE puro e sem a biblioteca cai no textarea de reserva.
+ * caminho relativo, e o <base> acima resolve isso dentro do proprio repositorio. O TinyMDE entra
+ * por pedido, `{ tinymde: true }`, e quem pede e o controle historico do ditado (cenario 1 da suite
+ * de navegador): ele roda o app de um commit anterior a troca de editor, que e TinyMDE puro e sem a
+ * biblioteca cai no textarea de reserva. O index.html daquele commit carrega a lib do unpkg, e essa
+ * tag vira a copia local do node_modules (ou sai, se ninguem pediu). Um index.html sem essa tag,
+ * como o da arvore de hoje, recebe a copia local no fim do head quando ela e pedida.
  */
-function buildPage(name, appSource, { tinymde = false } = {}) {
+function buildPage(name, source, { tinymde = false, html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8') } = {}) {
   const dir = tmpDir();
   const url = (file) => pathToFileURL(file).href;
-  fs.writeFileSync(path.join(dir, `${name}-app.js`), appSource);
-  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8')
+  fs.writeFileSync(path.join(dir, `${name}-app.js`), source);
+  const APP_TAGS = /(?:[ \t]*<script src="(?:app\.js|app\/[^"]+)"><\/script>\r?\n)+/;
+  if (!APP_TAGS.test(html)) throw new Error('buildPage: no app script tag in the index.html given');
+  const page = html
     .replace('<head>', `<head><base href="${url(ROOT)}/">`)
-    .replace('</head>', tinymde ? `<script src="${url(LIBS.tinymde)}"></script></head>` : '</head>')
+    // The TinyMDE, only for the control that runs the app of before the editor swap: that commit's
+    // index.html (2d8b20b) loads it from unpkg, so the tag becomes the local copy when asked for and
+    // goes otherwise; an index.html without the tag gets the local copy injected at the end of head
+    .replace(/<script src="https:\/\/unpkg\.com\/tiny-markdown-editor[^>]*><\/script>/, tinymde ? `<script src="${url(LIBS.tinymde)}"></script>` : '')
+    .replace('</head>', tinymde && !/unpkg\.com\/tiny-markdown-editor/.test(html) ? `<script src="${url(LIBS.tinymde)}"></script></head>` : '</head>')
     .replace(/<script src="https:\/\/cdn\.jsdelivr\.net\/npm\/marked[^>]*><\/script>/, `<script src="${url(LIBS.marked)}"></script>`)
     .replace(/<script src="https:\/\/cdn\.jsdelivr\.net\/npm\/dompurify[^>]*><\/script>/, `<script src="${url(LIBS.purify)}"></script>`)
     .replace(/<script[^>]*src="https:\/\/(apis\.google|accounts\.google)[^>]*><\/script>/g, '')
-    .replace('<script src="app.js"></script>', `<script src="${url(path.join(dir, `${name}-app.js`))}"></script><script>window.__App = App;</script>`)
+    .replace(APP_TAGS, `  <script src="${url(path.join(dir, `${name}-app.js`))}"></script><script>window.__App = App;</script>\n`)
     .replace(/<script>\s*if \('serviceWorker'[\s\S]*?<\/script>/, '');
   const file = path.join(dir, `${name}.html`);
-  fs.writeFileSync(file, html);
+  fs.writeFileSync(file, page);
   return url(file);
 }
 
@@ -173,4 +199,4 @@ function reporter() {
   };
 }
 
-module.exports = { ROOT, LIBS, sleep, tmpDir, cdnVersions, installedVersions, buildPage, launch, reporter };
+module.exports = { ROOT, LIBS, sleep, tmpDir, cdnVersions, installedVersions, appScripts, appSource, buildPage, launch, reporter };

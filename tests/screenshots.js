@@ -3,7 +3,7 @@
 //   npm run screenshots         (writes PNGs to tests/.tmp/screens/)
 const fs = require('fs');
 const path = require('path');
-const { ROOT, sleep, tmpDir, buildPage, launch } = require('./helpers');
+const { ROOT, sleep, tmpDir, appSource, buildPage, launch } = require('./helpers');
 
 const NOTE = [
   '---', 'projeto: exemplo', 'tags: [trabalho, revisao]', '---', '',
@@ -73,7 +73,7 @@ const SETUP = `
   const { send, js, open } = browser;
   try {
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
-    await open(buildPage('current', fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8')));
+    await open(buildPage('current', appSource()));
     await js(SETUP);
 
     const shot = async (name) => {
