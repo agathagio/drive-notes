@@ -64,8 +64,9 @@ function findBrowser() {
 }
 
 /**
- * The app's own scripts, in the order index.html loads them: `app.js` today, `app/*.js` once the app
- * is split. Never vendor/codemirror.js, which is a library. `html` is the index.html to read, the one
+ * The app's own scripts, in the order index.html loads them: `app/*.js` in the working tree, `app.js`
+ * in the commits from before the split (the historical controls). Never vendor/codemirror.js, which
+ * is a library. `html` is the index.html to read, the one
  * in the working tree by default; a historical control passes the one of its commit.
  */
 function appScripts(html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8')) {

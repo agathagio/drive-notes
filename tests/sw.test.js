@@ -45,7 +45,17 @@ function serve(pathname) {
   if (pathname === '/cdn/purify.min.js') return fs.readFileSync(LIBS.purify);
   if (pathname === '/cdn/fonts.css') return '';
   const file = path.join(ROOT, pathname === '/' ? 'index.html' : pathname);
-  if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return null;
+  // A control serves a commit, so a file exists when that commit has it: the working tree has no app.js
+  // since the split, and the index.html of an older commit still asks for it
+  const inCommit = () => {
+    try {
+      execSync(`git cat-file -e ${COMMIT}:${path.relative(ROOT, file).replace(/\\/g, '/')}`, { cwd: ROOT, stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (!file.startsWith(ROOT) || !(COMMIT ? inCommit() : fs.existsSync(file) && !fs.statSync(file).isDirectory())) return null;
   const encoding = file.endsWith('.png') ? 'buffer' : 'utf8';
   let text = COMMIT
     ? execSync(`git show ${COMMIT}:${path.relative(ROOT, file).replace(/\\/g, '/')}`, { cwd: ROOT, encoding, maxBuffer: 1 << 26 })

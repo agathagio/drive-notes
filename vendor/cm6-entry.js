@@ -7,7 +7,7 @@
 // highlighting: weight and unwanted behavior on a phone.
 // ViewPlugin: what turns [[wikilink]] and [!note] back into plain text is a view plugin, not a
 // state field, so that it decorates only the visible window and redoes the work as the parser
-// moves on. See the plainLinks comment in app.js.
+// moves on. See the plainLinks comment in app/editor-cm6.js.
 import { EditorView, ViewPlugin, drawSelection, keymap } from '@codemirror/view';
 // Transaction comes for the addToHistory annotation: it is what says that swapping the whole text
 // (opening a note) is not an edit by the user and does not enter the undo stack.

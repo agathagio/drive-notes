@@ -177,7 +177,7 @@
   <!-- Spacer to compensate for fixed toolbar -->
   <div class="toolbar-spacer"></div>
 
-  <!-- ── Tela de desenho (por cima do editor). As cores nascem do SKETCH_COLORS do app.js ── -->
+  <!-- ── Tela de desenho (por cima do editor). As cores nascem do SKETCH_COLORS do app/sketch.js ── -->
   <div id="sketch-screen" class="sketch-screen">
     <div class="sketch-top">
       <button id="sketch-cancel" class="btn btn-icon" title="Sair" aria-label="Sair do desenho">&#10005;</button>
@@ -298,8 +298,23 @@
   <!-- ── Edge swipe: the arrow that follows the finger (left = back, right = forward) ── -->
   <div id="swipe-hint" class="swipe-hint" aria-hidden="true"></div>
 
-  <!-- App logic -->
-  <script src="app.js"></script>
+  <!-- App logic: app/core.js declares App, the other files extend it with Object.assign, so core comes
+       first and the rest may come in any order. All of them before the inline script below, which needs
+       App.watchVersions (app/navigation.js). Classic scripts on purpose: they share the global scope. -->
+  <script src="app/core.js"></script>
+  <script src="app/editor.js"></script>
+  <script src="app/editor-cm6.js"></script>
+  <script src="app/auth.js"></script>
+  <script src="app/folders.js"></script>
+  <script src="app/drive.js"></script>
+  <script src="app/note.js"></script>
+  <script src="app/note-actions.js"></script>
+  <script src="app/reading.js"></script>
+  <script src="app/navigation.js"></script>
+  <script src="app/arrivals.js"></script>
+  <script src="app/media.js"></script>
+  <script src="app/sketch.js"></script>
+  <script src="app/markdown.js"></script>
 
   <!-- Register Service Worker, and bring a new version to the screen in one opening. Read here,
        before anything else runs: whether a service worker was already in charge of this page. -->

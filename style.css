@@ -24,7 +24,7 @@
   --button-hover: #3a3644;
   /* Fundo do código, na leitura e no editor. Branco transparente, e não um cinza fixo, pra
      funcionar por cima de qualquer uma das camadas escuras. Quem usa no editor é o realce de
-     sintaxe do CodeMirror, montado no app.js: ele lê esta variável, não um hex próprio. */
+     sintaxe do CodeMirror, montado no app/editor-cm6.js: ele lê esta variável, não um hex próprio. */
   --code-bg: rgba(255,255,255,0.08);
   /* Marca-texto (==texto== na nota). O mesmo roxo do accent, transparente: por cima do fundo
      escuro ele fica discreto o bastante para o texto continuar legível, e acompanha a paleta
@@ -38,7 +38,7 @@
      do sistema assume, e o layout não muda de tamanho porque as métricas são parecidas. */
   --font-ui: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Fira Code", monospace;
-  /* Roxo da paleta de desenho: os outros cinco hexes vivem no SKETCH_COLORS do app.js */
+  /* Roxo da paleta de desenho: os outros cinco hexes vivem no SKETCH_COLORS do app/sketch.js */
   --sketch-purple: #8b6cef;
   /* Respiro entre grupos de uma lista na leitura: uma linha em branco, do tamanho de uma linha de
      texto (o line-height do .preview-container). Mudou o line-height de lá, mude este junto. */
@@ -244,7 +244,7 @@ textarea {
    o trabalho: quem entra no flex é o .cm-editor, quem rola por dentro é o .cm-scroller (e é nele
    que o CM6 espera as regras de fonte), e o recuo do texto é do .cm-content.
    Fonte, tamanho, entrelinha, recuo e fundo são os mesmos que o editor tinha antes da troca, de
-   propósito. As cores do texto vêm do syntaxHighlighting no app.js, não daqui.
+   propósito. As cores do texto vêm do syntaxHighlighting no app/editor-cm6.js, não daqui.
    Uma ressalva no recuo: os 16px do .cm-content são os de sempre, mas o tema de fábrica do CM6 põe
    `padding: 0 2px 0 6px` na .cm-line, então o texto começa a 22px da borda e termina a 18px, e não
    a 16px dos dois lados. Fica assim de propósito: esses 6px são o que impede o cursor na coluna 0
@@ -275,7 +275,7 @@ textarea {
   overscroll-behavior: contain;
 }
 
-/* The 50vh at the bottom is the typewriter scrolling's room (see scrollMargins in app.js): without
+/* The 50vh at the bottom is the typewriter scrolling's room (see scrollMargins in app/editor-cm6.js): without
    it the last line of the note cannot be lifted up to the middle, because there is nothing below
    it to scroll into. Half the screen is always at least half the writing area. */
 .cm-editor .cm-content {
@@ -297,7 +297,7 @@ textarea {
 }
 
 /* O bloco de propriedades (`---` ... `---` no começo da nota) e os colchetes que não são link.
-   Quem marca as linhas e os trechos é o campo de decoração do implCM6, no app.js: o parser de
+   Quem marca as linhas e os trechos é o campo de decoração do createCM6Editor, no app/editor-cm6.js: o parser de
    markdown do CM6 lê o bloco como título setext de nível 2, e lê `[[wikilink]]`, `[!note]` e
    `tags: [a, b]` como link de referência sem destino. Sem estas duas regras, as propriedades saem
    grandes, roxas e em negrito na primeira tela de toda nota, e os três colchetes saem sublinhados.
@@ -441,10 +441,10 @@ textarea {
 .preview-container p { margin: 0.6em 0; }
 .preview-container a { color: var(--accent-hover); }
 .preview-container li { margin: 0.2em 0; }
-/* The item that follows a blank line in the note: the only place where a list opens up (see app.js) */
+/* The item that follows a blank line in the note: the only place where a list opens up (see app/markdown.js) */
 .preview-container li.gap { margin-top: var(--list-gap); }
 
-/* Marca-texto: ==texto== na nota (ver markExtension no app.js) */
+/* Marca-texto: ==texto== na nota (ver markExtension no app/markdown.js) */
 mark {
   background: var(--mark-bg);
   color: inherit;
@@ -485,7 +485,7 @@ mark {
   transform: scale(1.15);
 }
 
-/* Kanban board, read only (decorateKanban in app.js): the columns stacked, each ## heading a bar with its
+/* Kanban board, read only (decorateKanban in app/reading.js): the columns stacked, each ## heading a bar with its
    count, a tap folds it. Blocks are only marked and hidden, never wrapped; the hidden attribute must win
    over any display a block gets elsewhere. The count is data-count, drawn here, out of the heading's text. */
 .preview-container.kanban > [hidden] {
@@ -1063,7 +1063,7 @@ body.has-selection .toolbar-btn.toolbar-extract {
 }
 
 /* Table of contents: the recents rows, a finger tall, each level one step in (the step is inline, from
-   app.js). A long note has many headings: the list scrolls inside the sheet, Fechar stays in view */
+   app/reading.js). A long note has many headings: the list scrolls inside the sheet, Fechar stays in view */
 .toc-list {
   max-width: none;
   max-height: 60vh;

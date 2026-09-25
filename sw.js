@@ -1,5 +1,5 @@
 // Drive Notes: Service Worker
-const CACHE_NAME = 'drivenotes-v59';
+const CACHE_NAME = 'drivenotes-v60';
 
 // Renderer and sanitizer come from CDNs; without them offline the reading view falls back to
 // plain text. Must match the script tags in index.html, hash included (scenario 0 of
@@ -27,11 +27,26 @@ const CDN_ASSETS = [
 ];
 const CDN_HOSTS = ['cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 
-// Static assets to cache for offline use
+// Static assets to cache for offline use. Every app/*.js index.html loads has to be here: scenario 0 of
+// tests/app.test.js fails when one is missing, because a file out of this list never reaches the phone
+// offline and the app opens by half
 const STATIC_ASSETS = [
   './index.html',
   './style.css',
-  './app.js',
+  './app/core.js',
+  './app/editor.js',
+  './app/editor-cm6.js',
+  './app/auth.js',
+  './app/folders.js',
+  './app/drive.js',
+  './app/note.js',
+  './app/note-actions.js',
+  './app/reading.js',
+  './app/navigation.js',
+  './app/arrivals.js',
+  './app/media.js',
+  './app/sketch.js',
+  './app/markdown.js',
   './vendor/codemirror.js',
   './manifest.json',
   './icon-192.png',
@@ -80,7 +95,7 @@ const network = (request) => CDN_SCRIPTS[request.url]
 
 // Something shared from another app (manifest share_target) arrives as a POST, which GitHub Pages cannot
 // take. It goes into the arrival box, and the app opens pointing at it. The box is the same database
-// as App.ArrivalBox in app.js (name, store and record: keep the two in step). Kept here, before the page
+// as App.ArrivalBox in app/arrivals.js (name, store and record: keep the two in step). Kept here, before the page
 // opens, so an expired login or no network at that moment loses nothing.
 const ARRIVALS_DB = 'drivenotes-arrivals';
 const ARRIVALS_STORE = 'arrivals';
@@ -101,7 +116,7 @@ function keepArrival(record) {
 }
 
 /** The words of a shared .txt: UTF-8, unless a byte order mark says UTF-16. TextDecoder drops the mark.
-    App.decodeText in app.js is a copy of it, for notes read from the Drive: change both together. */
+    App.decodeText in app/drive.js is a copy of it, for notes read from the Drive: change both together. */
 function readText(bytes) {
   const [a, b] = new Uint8Array(bytes, 0, Math.min(2, bytes.byteLength));
   const encoding = a === 0xff && b === 0xfe ? 'utf-16le' : a === 0xfe && b === 0xff ? 'utf-16be' : 'utf-8';

@@ -50,7 +50,7 @@ API key e Project Number não são mais necessários (eram só do Google Picker)
 
 ## 5. Configurar o app
 
-Abra o arquivo `app.js` e substitua os valores no topo:
+Abra o arquivo `app/core.js` e substitua os valores no topo:
 
 ```javascript
 const CONFIG = {
@@ -69,7 +69,7 @@ const CONFIG = {
 2. Navegue até a pasta
 3. Olhe a URL: ela terá algo como `drive.google.com/drive/folders/XXXXX`
 4. Copie o ID da pasta (o `XXXXX`)
-5. Cole no campo correspondente no `app.js`
+5. Cole no campo correspondente no `app/core.js`
 
 ## 7. Deploy no GitHub Pages
 

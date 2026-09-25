@@ -352,6 +352,13 @@ async function scenario(title, block) {
     check('todo arquivo nosso que o index.html carrega esta no STATIC_ASSETS do sw.js',
       nossos.length > 0 && nossos.every(src => estaticos.includes(`'./${src}'`)),
       { nossos, faltando: nossos.filter(src => !estaticos.includes(`'./${src}'`)) });
+    // A file in app/ that index.html does not load is dead code that looks alive, and a src that does
+    // not exist is a 404 on the phone. core.js comes first because it is the one that declares App.
+    const loaded = appScripts(html);
+    const inFolder = fs.readdirSync(path.join(ROOT, 'app')).filter(f => f.endsWith('.js')).map(f => `app/${f}`);
+    check('todo app/*.js da pasta esta no index.html', inFolder.every(f => loaded.includes(f)), { sobrando: inFolder.filter(f => !loaded.includes(f)) });
+    check('todo script do app que o index.html carrega existe', loaded.every(f => fs.existsSync(path.join(ROOT, f))), { faltando: loaded.filter(f => !fs.existsSync(path.join(ROOT, f))) });
+    check('o primeiro script do app e o app/core.js, que declara o App', loaded[0] === 'app/core.js', loaded);
 
     // The CDN scripts carry an integrity hash: the browser refuses a file that does not match it,
     // and a wrong hash shows up on the phone as a reading view with no formatting. jsDelivr serves
@@ -1930,21 +1937,22 @@ async function scenario(title, block) {
     App.Editor.insertOnOwnLine('![[foto.png]]', marca);
     check('inseriu em linha propria', App.Editor.getText().includes('![[foto.png]]'), App.Editor.getText());
 
-    // A lib do editor tem que ficar atras da fachada: quem esta fora da secao `Editor` fala com
-    // App.Editor e mais nada. A secao e delimitada pelos dois marcadores de comentario (o dela e o
-    // da secao seguinte), e o que sobra dos dois lados e onde moram os chamadores. O vocabulario
-    // procurado e o do CM6; `\.dispatch\(` nao pega o `dispatchEvent(` que o app usa no DOM.
-    const fonteDoApp = require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
-    const foraDaFachada = fonteDoApp.split('// ── Editor ──')[0]
-      + fonteDoApp.split('// ── Google Auth ──').slice(1).join('');
+    // A lib do editor tem que ficar atras da fachada: quem esta fora dela fala com App.Editor e mais
+    // nada. A fachada sao dois arquivos, app/editor.js (a fachada e o textarea de reserva) e
+    // app/editor-cm6.js (a implementacao); todo outro arquivo do app e onde moram os chamadores.
+    // O vocabulario procurado e o do CM6; `\.dispatch\(` nao pega o `dispatchEvent(` que o app usa no DOM.
+    const FACADE = ['app/editor.js', 'app/editor-cm6.js'];
+    const sourceOf = (files) => files.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
+    const outsideFacade = sourceOf(appScripts().filter(f => !FACADE.includes(f)));
     // `Editor\._impl` fecha a fuga mais obvia: um chamador que pegasse a implementacao pela
     // fachada (`App.Editor._impl.view.focus()`) nao casaria com nenhum dos outros pedacos
     const VOCABULARIO_DA_LIB = /window\.CM6|EditorView|view\.state|\.dispatch\(|doc\.line|Editor\._impl/;
     check('nenhum chamador fora da fachada toca a lib',
-      !VOCABULARIO_DA_LIB.test(foraDaFachada), VOCABULARIO_DA_LIB.exec(foraDaFachada)?.[0]);
+      !VOCABULARIO_DA_LIB.test(outsideFacade), VOCABULARIO_DA_LIB.exec(outsideFacade)?.[0]);
     // ... e a checagem acima so vale se ela souber achar a lib quando ela aparece de verdade
     check('a checagem acima enxerga a lib: dentro da fachada o vocabulario esta la',
-      VOCABULARIO_DA_LIB.test(fonteDoApp.split('// ── Editor ──')[1].split('// ── Google Auth ──')[0]));
+      VOCABULARIO_DA_LIB.test(sourceOf(FACADE)));
+    check('os dois arquivos da fachada existem com esse nome no index.html', FACADE.every(f => appScripts().includes(f)));
 
     // O app nao carrega ajudante que so o teste usa. O cm6Type (cm6Digitar, no nome de antes da
     // traducao) vivia aqui dentro por ser codigo de teste morando no app: ele alcancava
@@ -1952,7 +1960,7 @@ async function scenario(title, block) {
     // nao olha. Agora e uma funcao do proprio arquivo de teste
     check('o app nao expoe ajudante que so o teste usa',
       App.cm6Type === undefined && App.cm6Digitar === undefined);
-    check('... e o fonte tambem nao o traz', !/cm6Type|cm6Digitar/.test(fonteDoApp));
+    check('... e o fonte tambem nao o traz', !/cm6Type|cm6Digitar/.test(sourceOf(appScripts())));
   }
   });
 

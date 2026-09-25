@@ -56,12 +56,12 @@ Foi a parte que mais deu trabalho, e a que mais importa num app de notas.
 
 ## Como é feito
 
-- **JavaScript puro, sem framework e sem build no deploy.** Cinco arquivos publicados: `app.js`, `index.html`, `style.css`, `sw.js` e o `vendor/codemirror.js`, o único gerado (por esbuild, uma vez, e commitado). Push na `main` é deploy, via GitHub Pages.
+- **JavaScript puro, sem framework e sem build no deploy.** O que se publica: `index.html`, `style.css`, `sw.js`, os catorze `app/*.js` (um por área; `app/core.js` declara o app e os outros o estendem) e o `vendor/codemirror.js`, o único gerado (por esbuild, uma vez, e commitado). Push na `main` é deploy, via GitHub Pages.
 - **PWA:** instala na tela inicial do celular, abre em tela cheia, e o service worker guarda o app e as bibliotecas pra abrir sem rede.
 - **Google Drive API com OAuth** (Google Identity Services). Não tem servidor: o navegador fala direto com o Drive, e o token fica só no aparelho.
 - **Editor: [CodeMirror 6](https://codemirror.net/).** Ele não vem de CDN: o pacote está versionado no repositório, em `vendor/codemirror.js`, gerado uma vez por esbuild e commitado, então o deploy continua sendo só um push e o editor abre sem rede já na primeira visita.
 - **As outras bibliotecas, via CDN com versão fixa:** [marked](https://github.com/markedjs/marked) pra renderizar e [DOMPurify](https://github.com/cure53/DOMPurify) pra sanitizar o HTML, já que o login dá acesso ao Drive inteiro.
-- **Testes:** o `app.js` real roda no jsdom contra um Google Drive falso em memória (50 cenários, 415 checagens). O que o jsdom não enxerga (ditado por voz, o gesto de voltar, a barra de formatação no editor de verdade, a redução da foto, o canvas do desenho) roda num Chrome ou Edge headless pelo protocolo de depuração (11 cenários, 68 checagens). Um terceiro script tira os prints de todas as telas em tamanho de celular. Detalhes em [`tests/README.md`](tests/README.md).
+- **Testes:** o app real (os `app/*.js` concatenados) roda no jsdom contra um Google Drive falso em memória (50 cenários, 415 checagens). O que o jsdom não enxerga (ditado por voz, o gesto de voltar, a barra de formatação no editor de verdade, a redução da foto, o canvas do desenho) roda num Chrome ou Edge headless pelo protocolo de depuração (11 cenários, 68 checagens). Um terceiro script tira os prints de todas as telas em tamanho de celular. Detalhes em [`tests/README.md`](tests/README.md).
 
 Construído com IA: eu defino o problema, decido o comportamento e testo no aparelho; o código é escrito em sessões com o [Claude Code](https://claude.com/claude-code).
 
