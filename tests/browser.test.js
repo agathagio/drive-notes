@@ -25,7 +25,7 @@ const FAKE_DRIVE = `
     N2: { id: 'N2', name: 'destino.md', mimeType: 'text/markdown', parents: ['F1'], content: '# Destino' },
   };
   window.fetch = async (url) => {
-    const u = new URL(url); const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o });
+    const u = new URL(url); const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
     const m = u.pathname.match(/files\\/([^/]+)$/);
     if (m) { const f = files[m[1]]; return u.searchParams.get('alt') === 'media' ? ok(f.content) : ok({ ...f, modifiedTime: 't1' }); }
     const q = u.searchParams.get('q') || ''; const parent = /^'([^']+)' in parents/.exec(q);
@@ -295,7 +295,7 @@ const FAKE_DRIVE = `
       __App.accessToken = 'fake';
       window.__written = [];
       window.fetch = async (url, opts = {}) => {
-        const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o });
+        const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
         if (opts.method === 'POST') return ok({ id: 'NEW', name: 'n.md', parents: [CONFIG.DEFAULT_FOLDER_ID], modifiedTime: 't1' });
         if (opts.method === 'PATCH') { window.__written.push(opts.body); return ok({ id: 'OLD', modifiedTime: 't1' }); }
         if (new URL(url).searchParams.get('alt') === 'media') return ok('---\\ncreated: 2026-01-02\\nupdated: 2026-01-03\\n---\\n\\ntexto');
@@ -781,7 +781,7 @@ const FAKE_DRIVE = `
         longa: '# Destino\\n\\n' + Array.from({ length: 150 }, (_, i) => 'linha ' + i).join('\\n\\n') };
       window.fetch = async (url) => {
         const u = new URL(url);
-        const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o });
+        const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
         await new Promise(r => setTimeout(r, window.__drive.lento));
         if (u.searchParams.get('alt') === 'media') return ok(window.__drive.texto || window.__drive.longa);
         if (/files\\/N2$/.test(u.pathname)) return ok({ id: 'N2', name: 'destino.md', parents: ['F1'], modifiedTime: window.__drive.mt });
@@ -926,7 +926,7 @@ const FAKE_DRIVE = `
         + Array.from({ length: 60 }, (_, i) => 'paragrafo ' + i + ' ' + 'texto '.repeat((i % 7) * 6)).join('\\n\\n');
       window.fetch = async (url) => {
         const u = new URL(url);
-        const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o });
+        const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
         if (/files\\/FOTO$/.test(u.pathname)) {
           await new Promise(r => setTimeout(r, window.__foto.atraso));
           window.__foto.chegou = true;
@@ -1033,7 +1033,7 @@ const FAKE_DRIVE = `
       window.__nota = ${JSON.stringify(NOTA_TRECHO)};
       window.fetch = async (url) => {
         const u = new URL(url);
-        const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o });
+        const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
         if (u.searchParams.get('alt') === 'media') return ok(window.__nota);
         if (u.pathname.endsWith('/N4')) return ok({ id: 'N4', name: 'trecho.md', parents: ['F1'], modifiedTime: 't1' });
         return ok({ files: [] });

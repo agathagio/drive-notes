@@ -1,5 +1,5 @@
 // Drive Notes: Service Worker
-const CACHE_NAME = 'drivenotes-v58';
+const CACHE_NAME = 'drivenotes-v59';
 
 // Renderer and sanitizer come from CDNs; without them offline the reading view falls back to
 // plain text. Must match the script tags in index.html, hash included (scenario 0 of
@@ -100,7 +100,8 @@ function keepArrival(record) {
   });
 }
 
-/** The words of a shared .txt: UTF-8, unless a byte order mark says UTF-16. TextDecoder drops the mark. */
+/** The words of a shared .txt: UTF-8, unless a byte order mark says UTF-16. TextDecoder drops the mark.
+    App.decodeText in app.js is a copy of it, for notes read from the Drive: change both together. */
 function readText(bytes) {
   const [a, b] = new Uint8Array(bytes, 0, Math.min(2, bytes.byteLength));
   const encoding = a === 0xff && b === 0xfe ? 'utf-16le' : a === 0xfe && b === 0xff ? 'utf-16be' : 'utf-8';

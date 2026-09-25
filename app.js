@@ -1701,7 +1701,17 @@ const App = {
     const response = await this.driveFetch(
       `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`
     );
-    return response.text();
+    // Not response.text(): it always reads UTF-8, and a voice recorder's transcript comes in UTF-16
+    const bytes = await response.arrayBuffer();
+    return this.decodeText(bytes);
+  },
+
+  /** The words of a file: UTF-8, unless a byte order mark says UTF-16. TextDecoder drops the mark.
+      A copy of readText in sw.js (the two run apart and share no code): change both together. */
+  decodeText(bytes) {
+    const [a, b] = new Uint8Array(bytes, 0, Math.min(2, bytes.byteLength));
+    const encoding = a === 0xff && b === 0xfe ? 'utf-16le' : a === 0xfe && b === 0xff ? 'utf-16be' : 'utf-8';
+    return new TextDecoder(encoding).decode(bytes);
   },
 
   /** Rename a file. Resolves to { id, name, modifiedTime }. */

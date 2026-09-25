@@ -27,7 +27,13 @@ function makeDrive() {
     put(id, name, content, parents = ['folderA']) {
       this.files.set(id, { id, name, content, parents, modifiedTime: this.tick() });
     },
-    remoteEdit(id, content) { const f = this.files.get(id); f.content = content; f.modifiedTime = this.tick(); },
+    // A file whose bytes are not plain UTF-8 (UTF-16, a byte order mark): the download answers with the
+    // bytes, and `content` keeps what they say, for the searches. Writing the file again drops them.
+    putBytes(id, name, bytes, content, parents = ['folderA']) {
+      this.put(id, name, content, parents);
+      this.files.get(id).bytes = bytes;
+    },
+    remoteEdit(id, content) { const f = this.files.get(id); f.content = content; delete f.bytes; f.modifiedTime = this.tick(); },
     count(method) { return this.log.filter(l => l.startsWith(method)).length; },
   };
   const json = (obj, status = 200) => ({ ok: status < 400, status, json: async () => obj, text: async () => JSON.stringify(obj) });
@@ -91,7 +97,16 @@ function makeDrive() {
       if (!f) return json({}, 404);
       if (u.searchParams.get('alt') === 'media') {
         drive.log.push(`GET content ${f.id}`);
-        return { ok: true, status: 200, text: async () => f.content, blob: async () => ({ fake: 'blob', of: f.id }) };
+        return {
+          ok: true, status: 200,
+          // Like Response.text(): the bytes read as UTF-8, whatever they are
+          text: async () => (f.bytes ? new TextDecoder('utf-8').decode(f.bytes) : f.content),
+          arrayBuffer: async () => {
+            const b = f.bytes ? Buffer.from(f.bytes) : Buffer.from(f.content, 'utf8');
+            return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+          },
+          blob: async () => ({ fake: 'blob', of: f.id }),
+        };
       }
       drive.log.push(`GET meta ${f.id}`);
       return json({ id: f.id, name: f.name, modifiedTime: f.modifiedTime, parents: f.parents });
@@ -114,7 +129,7 @@ function makeDrive() {
     if (method === 'PATCH' && m) {
       if (drive.failWrites) return json({}, 500);
       const f = drive.files.get(m[1]);
-      f.content = opts.body; f.modifiedTime = drive.tick();
+      f.content = opts.body; delete f.bytes; f.modifiedTime = drive.tick();
       drive.log.push(`PATCH ${f.id}`);
       return json({ id: f.id, modifiedTime: f.modifiedTime });
     }
@@ -4832,6 +4847,50 @@ async function seedArrival(factory, record) {
     check('no cartao do espiar a capa aparece e o toque abre fora', !!peekCover && opened === 'https://youtu.be/a1b2c3d4e5f'
       && App.currentFile.id === 'Y', [opened, App.els.peekBody.innerHTML]);
     App.closePeek();
+  }
+
+  console.log('80. Transcricao do gravador (.txt em UTF-16 com marca) abre com o texto certo, e salvar grava em UTF-8');
+  {
+    const { App, w, drive, type } = await boot();
+    const TEXT = 'Este conteúdo foi gerado por IA.\n\nTranscrição da reunião: ação, coração e pé.';
+    const be = Buffer.from('﻿' + TEXT, 'utf16le').swap16();
+    const le = Buffer.from('﻿' + TEXT, 'utf16le');
+    const u8bom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(TEXT, 'utf8')]);
+    check('(o arquivo UTF-16BE comeca com FE FF, o UTF-16LE com FF FE)', be[0] === 0xfe && be[1] === 0xff && le[0] === 0xff && le[1] === 0xfe,
+      [be.subarray(0, 2), le.subarray(0, 2)]);
+    drive.putBytes('BE', 'transcricao-be.txt', be, TEXT, [INBOX]);
+    drive.putBytes('LE', 'transcricao-le.txt', le, TEXT, [INBOX]);
+    drive.putBytes('BOM', 'com-marca.txt', u8bom, TEXT, [INBOX]);
+    drive.put('U8', 'sem-marca.txt', TEXT, [INBOX]);
+    const opened = (id) => App.currentFile?.id === id && ['preview', 'edit'].includes(w.document.body.dataset.view);
+    const start = () => JSON.stringify(App.getContent().slice(0, 12));
+
+    await App.openFile('BE', 'transcricao-be.txt');
+    check('UTF-16BE com marca: abre com o texto exato, sem marca e sem letra trocada',opened('BE') && App.getContent() === TEXT, start());
+    const c = App.els.previewContainer;
+    check('... e a leitura mostra os acentos', c.textContent.includes('Transcrição da reunião') && !c.textContent.includes('�'),
+      c.textContent.slice(0, 40));
+
+    await App.openFile('LE', 'transcricao-le.txt');
+    check('UTF-16LE com marca: abre com o texto exato', opened('LE') && App.getContent() === TEXT, start());
+
+    await App.openFile('BOM', 'com-marca.txt');
+    check('UTF-8 com marca EF BB BF: o texto sai sem a marca, como antes', opened('BOM') && App.getContent() === TEXT, start());
+
+    await App.openFile('U8', 'sem-marca.txt');
+    check('UTF-8 sem marca, com acento: igual a antes', opened('U8') && App.getContent() === TEXT, start());
+
+    // Editing one letter of the transcript and saving: the Drive gets the plain string, which goes up as UTF-8
+    await App.openFile('BE', 'transcricao-be.txt');
+    type(App.getContent().replace('Este', 'Esse'));
+    await App.save();
+    await App._saveChain;
+    const saved = drive.files.get('BE');
+    check('salvar a nota UTF-16 manda o texto editado, sem marca', drive.count('PATCH') === 1 && saved.content === TEXT.replace('Este', 'Esse'),
+      [drive.log.filter(l => l.startsWith('PATCH')), JSON.stringify(String(saved.content).slice(0, 12))]);
+    const up = Buffer.from(String(saved.content), 'utf8');
+    check('... e o que sobe e UTF-8 limpo: nem FE FF, nem FF FE, nem EF BB BF no comeco',
+      !saved.content.startsWith('﻿') && !(up[0] === 0xef && up[1] === 0xbb) && up[0] !== 0xfe && up[0] !== 0xff, up.subarray(0, 4));
   }
 
   done();

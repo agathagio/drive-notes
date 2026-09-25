@@ -34,7 +34,7 @@ const SETUP = `
   // A pasta de cada nota: é ela que a lista do [[ mostra em letra menor debaixo do nome
   const notesIn = ['ROOT', 'd5', 'd4', 'd3', 'd5'];
   window.fetch = async (url) => {
-    const u = new URL(url); const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o });
+    const u = new URL(url); const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
     // The embedded image of the sample note: found by name, then downloaded as a blob
     if ((u.searchParams.get('q') || '').includes("name = 'diagrama.png'")) return ok({ files: [{ id: 'IMG', name: 'diagrama.png', mimeType: 'image/png', parents: ['d2'] }] });
     if (u.pathname.endsWith('/IMG')) {
