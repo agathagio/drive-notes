@@ -359,8 +359,12 @@ const EVERY_DOCUMENT = `(() => {
       // Editar with the reading at the top of the note, then the editor scrolled by hand far below it
       await js(`App.togglePreview(); 'ok'`);
       await esperar(`document.body.dataset.view === 'edit'`, 5000);
-      await js(`App.Editor._impl.view.scrollDOM.scrollTop = 5000; 'ok'`);
-      await sleep(500);
+      // The editor comes out of hiding with a scroll target of its own still pending (editAtReading's
+      // showLine to the top), and the library keeps applying it over a scrollTop written from outside.
+      // So scroll the way the app does, with a scrollIntoView effect, which replaces that target; polled,
+      // because the editor lays out 399 lines in its own time. Not through App.Editor.showLine on purpose:
+      // whoever positions and whoever restores must not be the same function
+      await esperar(`(App.Editor._impl.view.dispatch({ effects: window.CM6.EditorView.scrollIntoView(App.Editor._impl.view.state.doc.line(210).from, { y: 'start' }) }), App.Editor.topLine() > 100)`, 8000);
       const left = await js(`App.Editor.topLine()`, false);
       check('(o editor rolado pra longe do topo, com a leitura deixada no topo)', left > 100, left);
 
@@ -371,7 +375,9 @@ const EVERY_DOCUMENT = `(() => {
       check('a versao 6 assumiu, e o aviso apareceu', offered, await state());
       await js(`document.getElementById('update-bar')?.click(); 'ok'`);
       const reopened = await esperar(`window.__servedVersion === 6 && App.currentFile?.id === 'E' && document.body.dataset.view === 'edit'`, 20000);
-      await sleep(500);
+      // The editor is put back on its line once the note is in: wait for it to have left the top.
+      // A real regression (the editor staying on line 1) runs the limit out, and the check below still fails
+      await esperar(`App.Editor.topLine() > 100`, 8000);
       const back = await js(`App.Editor.topLine()`, false);
       console.log('     linha do topo do editor, antes e depois:', JSON.stringify({ left, back }));
       check('tocar no aviso: recarregou, na versao 6, e reabriu a mesma nota no editor', reopened, await state());
