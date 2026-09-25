@@ -376,7 +376,7 @@ Object.assign(App, {
       if (this.mode === 'edit' && view.view === 'file' && view.id === this.currentFile?.id && document.body.dataset.view === 'edit') {
         kept.editorLine = this.Editor.topLine();
       }
-      sessionStorage.setItem(this.REOPEN_KEY, JSON.stringify(kept));
+      sessionStorage.setItem(KEYS.REOPEN, JSON.stringify(kept));
     } catch (e) {
       console.warn('View not kept for the reload:', e);
     }
@@ -387,8 +387,7 @@ Object.assign(App, {
     this.reloadPage();
   },
 
-  // Kept in sessionStorage: it survives a reload, and dies with the app, where a reopening has no business
-  REOPEN_KEY: 'drivenotes_reopen',
+  // The package is kept in sessionStorage (KEYS.REOPEN): it survives a reload, and dies with the app, where a reopening has no business
 
   /** Right after the reload from the bar: back to the view it was tapped on, in the same mode, and with
       "back" going where it went before. The reading view comes back where it was, as in any opening
@@ -399,8 +398,8 @@ Object.assign(App, {
   async reopenAfterUpdate() {
     let kept = null;
     try {
-      kept = JSON.parse(sessionStorage.getItem(this.REOPEN_KEY));
-      sessionStorage.removeItem(this.REOPEN_KEY);
+      kept = JSON.parse(sessionStorage.getItem(KEYS.REOPEN));
+      sessionStorage.removeItem(KEYS.REOPEN);
     } catch { /* nothing to reopen */ }
     if (!kept?.view || kept.view.view === 'welcome') return;
     this.log(`reopen ${kept.view.view} ${kept.view.name || ''}`);

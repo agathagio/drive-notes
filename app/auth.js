@@ -19,8 +19,8 @@ Object.assign(App, {
   saveToken(accessToken, expiresIn) {
     this.accessToken = accessToken;
     const expiresAt = Date.now() + (expiresIn || 3600) * 1000;
-    localStorage.setItem('drivenotes_token', accessToken);
-    localStorage.setItem('drivenotes_token_expires', expiresAt.toString());
+    localStorage.setItem(KEYS.TOKEN, accessToken);
+    localStorage.setItem(KEYS.TOKEN_EXPIRES, expiresAt.toString());
 
     // Schedule silent refresh 5 minutes before expiry
     this.scheduleTokenRefresh(expiresAt);
@@ -30,7 +30,7 @@ Object.assign(App, {
   /** Learn the account email once, so later logins skip the account chooser.
       Kept in localStorage only: the repo is public, so it must not live in CONFIG. */
   async rememberLoginHint() {
-    if (localStorage.getItem('drivenotes_login_hint')) return;
+    if (localStorage.getItem(KEYS.LOGIN_HINT)) return;
     try {
       const response = await fetch(
         'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)',
@@ -38,7 +38,7 @@ Object.assign(App, {
       );
       if (!response.ok) return;
       const email = (await response.json()).user?.emailAddress;
-      if (email) localStorage.setItem('drivenotes_login_hint', email);
+      if (email) localStorage.setItem(KEYS.LOGIN_HINT, email);
     } catch {
       // ignore: the hint is a convenience
     }
@@ -46,17 +46,17 @@ Object.assign(App, {
 
   /** Options for tokenClient.requestAccessToken */
   tokenRequest(prompt) {
-    const hint = localStorage.getItem('drivenotes_login_hint');
+    const hint = localStorage.getItem(KEYS.LOGIN_HINT);
     return hint ? { prompt, login_hint: hint } : { prompt };
   },
 
   /** Restore token from localStorage if still valid. Falls back to legacy sessionStorage. */
   restoreToken() {
-    const token = localStorage.getItem('drivenotes_token')
-      || sessionStorage.getItem('drivenotes_token');
+    const token = localStorage.getItem(KEYS.TOKEN)
+      || sessionStorage.getItem(KEYS.TOKEN);
     const expiresAt = parseInt(
-      localStorage.getItem('drivenotes_token_expires')
-      || sessionStorage.getItem('drivenotes_token_expires')
+      localStorage.getItem(KEYS.TOKEN_EXPIRES)
+      || sessionStorage.getItem(KEYS.TOKEN_EXPIRES)
       || '0'
     );
 
@@ -89,10 +89,10 @@ Object.assign(App, {
       if (response.error) {
         console.warn('Silent refresh failed:', response.error);
         this.accessToken = null;
-        localStorage.removeItem('drivenotes_token');
-        localStorage.removeItem('drivenotes_token_expires');
-        sessionStorage.removeItem('drivenotes_token');
-        sessionStorage.removeItem('drivenotes_token_expires');
+        localStorage.removeItem(KEYS.TOKEN);
+        localStorage.removeItem(KEYS.TOKEN_EXPIRES);
+        sessionStorage.removeItem(KEYS.TOKEN);
+        sessionStorage.removeItem(KEYS.TOKEN_EXPIRES);
         return;
       }
       this.saveToken(response.access_token, response.expires_in);
@@ -105,8 +105,8 @@ Object.assign(App, {
   /** True while the token in hand has more than a minute left */
   hasValidToken() {
     const expiresAt = parseInt(
-      localStorage.getItem('drivenotes_token_expires')
-      || sessionStorage.getItem('drivenotes_token_expires')
+      localStorage.getItem(KEYS.TOKEN_EXPIRES)
+      || sessionStorage.getItem(KEYS.TOKEN_EXPIRES)
       || '0'
     );
     return !!this.accessToken && expiresAt > Date.now() + 60000;
@@ -147,10 +147,10 @@ Object.assign(App, {
   /** Re-authenticate (e.g. after token expiry / 401) */
   async reAuth() {
     this.accessToken = null;
-    localStorage.removeItem('drivenotes_token');
-    localStorage.removeItem('drivenotes_token_expires');
-    sessionStorage.removeItem('drivenotes_token');
-    sessionStorage.removeItem('drivenotes_token_expires');
+    localStorage.removeItem(KEYS.TOKEN);
+    localStorage.removeItem(KEYS.TOKEN_EXPIRES);
+    sessionStorage.removeItem(KEYS.TOKEN);
+    sessionStorage.removeItem(KEYS.TOKEN_EXPIRES);
 
     // No forced consent screen: with the login hint this is a popup that closes by itself
     return this.requestToken('');

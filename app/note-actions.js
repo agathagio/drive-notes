@@ -159,7 +159,7 @@ Object.assign(App, {
         });
         if (!written) { skipped++; continue; }
         updated++;
-        const draftKey = `drivenotes_draft_${note.id}`;
+        const draftKey = `${KEYS.DRAFT_PREFIX}${note.id}`;
         const draft = this.readDraft(draftKey);
         if (draft) {
           draft.content = this.relinkText(draft.content, oldBase, newBase);
@@ -303,7 +303,7 @@ Object.assign(App, {
       id: null,
       name,
       parents: [file.parents?.[0] || CONFIG.DEFAULT_FOLDER_ID],
-      draftKey: `drivenotes_draft_new_${Date.now()}`,
+      draftKey: `${KEYS.DRAFT_PREFIX}new_${Date.now()}`,
     };
     if (isCurrent()) this.setSaveStatus('saving', 'Criando nota...');
     try {

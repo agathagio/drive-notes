@@ -4604,6 +4604,17 @@ async function scenario(title, block) {
     check('nota sem titulos: o aviso', App.els.tocOverlay.classList.contains('visible') && !App.els.tocEmpty.hidden
       && App.els.tocEmpty.textContent === 'Esta nota não tem títulos.' && items().length === 0);
     App.closeToc();
+
+    // A heading inside something hidden (a folded kanban column hides its body with `hidden`) is not
+    // on the screen: listing it would make a row that scrolls to nowhere
+    const hiddenBlock = w.document.createElement('div');
+    hiddenBlock.hidden = true;
+    hiddenBlock.innerHTML = '<h2>Escondido</h2>';
+    App.els.previewContainer.appendChild(hiddenBlock);
+    App.openToc();
+    check('titulo dentro de bloco escondido fica fora do sumario',
+      ![...App.els.tocUl.querySelectorAll('li')].some(li => li.textContent === 'Escondido'));
+    App.closeToc();
   }
   });
 

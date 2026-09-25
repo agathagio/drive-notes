@@ -253,7 +253,7 @@ Object.assign(App, {
     } catch (e) {
       console.error('Sketch upload failed:', e);
       // In case it was the remembered folder that went away: look it up again next time
-      localStorage.removeItem('drivenotes_media_folder');
+      localStorage.removeItem(KEYS.MEDIA_FOLDER);
       this.setSaveStatus('error', 'Erro ao enviar o desenho');
       return;
     } finally {

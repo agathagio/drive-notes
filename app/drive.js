@@ -1,5 +1,51 @@
 // Drive Notes: the Drive API, the note index and the notes kept on the device. Extends App (see app/core.js).
 
+/**
+ * A small IndexedDB store with one object store and one rule: it never throws. `open()` answers the
+ * database, or null when there is none to be had (no IndexedDB, or it failed to open), opened once on
+ * first use. `run(mode, fallback, work)` runs one transaction and answers `fallback` on any failure:
+ * `work(store)` makes its requests and may answer a function, read once the transaction has completed,
+ * or a request, whose result is then the answer. `warn(e)` is told once per session, so the panel
+ * says the store is off and the app goes on without it.
+ */
+function makeStore({ name, store, upgrade, warn }) {
+  let db = null;
+  let warned = false;
+  const tell = (e) => { if (warned) return; warned = true; warn(e); };
+  return {
+    open() {
+      if (!db) {
+        db = new Promise((resolve, reject) => {
+          if (typeof indexedDB === 'undefined') return resolve(null);
+          const request = indexedDB.open(name, 1);
+          request.onupgradeneeded = () => upgrade(request.result);
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+          request.onblocked = () => reject(new Error(`${name} blocked`));
+        }).catch((e) => { tell(e); return null; });
+      }
+      return db;
+    },
+    async run(mode, fallback, work) {
+      try {
+        const opened = await this.open();
+        if (!opened) return fallback;
+        return await new Promise((resolve, reject) => {
+          const tx = opened.transaction(store, mode);
+          const answer = work(tx.objectStore(store));
+          tx.oncomplete = () => resolve(typeof answer === 'function' ? answer()
+            : answer && typeof answer === 'object' && 'result' in answer ? (answer.result ?? fallback) : fallback);
+          tx.onerror = () => reject(tx.error);
+          tx.onabort = () => reject(tx.error);
+        });
+      } catch (e) {
+        tell(e);
+        return fallback;
+      }
+    },
+  };
+}
+
 Object.assign(App, {
   // ── Google Drive API ──
 
@@ -101,12 +147,12 @@ Object.assign(App, {
 
   /** ID of the vault's attachment folder, or null. Looked up once per device. */
   async getMediaFolderId() {
-    const cached = localStorage.getItem('drivenotes_media_folder');
+    const cached = localStorage.getItem(KEYS.MEDIA_FOLDER);
     if (cached) return cached;
     const folder = (await this.driveFindByName([CONFIG.MEDIA_FOLDER])).find(f =>
       f.mimeType === 'application/vnd.google-apps.folder' && f.parents?.includes(CONFIG.VAULT_FOLDER_ID));
     if (!folder) return null;
-    localStorage.setItem('drivenotes_media_folder', folder.id);
+    localStorage.setItem(KEYS.MEDIA_FOLDER, folder.id);
     return folder.id;
   },
 
@@ -230,8 +276,6 @@ Object.assign(App, {
   // folder by folder, kept in localStorage, and refreshed in the background from the second session
   // on. The app keeps it in step with what it does itself (create, rename, delete) without waiting.
 
-  NOTE_INDEX_KEY: 'drivenotes_note_index',
-
   _noteIndex: null,
 
   _noteIndexRefresh: null,
@@ -250,7 +294,7 @@ Object.assign(App, {
 
   readNoteIndex() {
     try {
-      const raw = localStorage.getItem(this.NOTE_INDEX_KEY);
+      const raw = localStorage.getItem(KEYS.NOTE_INDEX);
       const stored = raw ? JSON.parse(raw) : null;
       return Array.isArray(stored?.notes) ? stored : null;
     } catch {
@@ -261,7 +305,7 @@ Object.assign(App, {
   writeNoteIndex() {
     if (!this._noteIndex) return;
     try {
-      localStorage.setItem(this.NOTE_INDEX_KEY, JSON.stringify({ builtAt: Date.now(), notes: this._noteIndex }));
+      localStorage.setItem(KEYS.NOTE_INDEX, JSON.stringify({ builtAt: Date.now(), notes: this._noteIndex }));
     } catch (e) {
       console.warn('Note index not stored, kept in memory only:', e);
     }
@@ -367,67 +411,23 @@ Object.assign(App, {
   // Without IndexedDB (a private tab, a browser that refuses it) or with it failing, get answers null,
   // put and remove do nothing, and the app takes the road it took before there was a store.
 
-  NoteStore: {
-    DB_NAME: 'drivenotes',
-    STORE: 'notes',
-    // The notes opened most recently; past this, the one opened longest ago goes
-    LIMIT: 100,
-    _db: null,
-    _warned: false,
-    _lastStamp: 0,
-
-    /** The open database, or null when there is none to be had. Opened once, on first use. */
-    open() {
-      if (!this._db) {
-        this._db = new Promise((resolve, reject) => {
-          if (typeof indexedDB === 'undefined') return resolve(null);
-          const request = indexedDB.open(this.DB_NAME, 1);
-          request.onupgradeneeded = () => {
-            const store = request.result.createObjectStore(this.STORE, { keyPath: 'id' });
-            store.createIndex('openedAt', 'openedAt');
-          };
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
-          request.onblocked = () => reject(new Error('note store blocked'));
-        }).catch((e) => {
-          this.warn(e);
-          return null;
-        });
-      }
-      return this._db;
-    },
-
-    /** Once per session: the panel says the store is off, and the app goes on without it */
-    warn(e) {
-      if (this._warned) return;
-      this._warned = true;
+  NoteStore: Object.assign(makeStore({
+    name: 'drivenotes',
+    store: 'notes',
+    upgrade: (db) => db.createObjectStore('notes', { keyPath: 'id' }).createIndex('openedAt', 'openedAt'),
+    warn: (e) => {
       console.warn('Note store unavailable, notes come from the Drive only:', e);
       App.log(`note store off: ${e?.name || e}`);
     },
+  }), {
+    // The notes opened most recently; past this, the one opened longest ago goes
+    LIMIT: 100,
+    _lastStamp: 0,
 
     /** Strictly increasing, so that two notes kept in the same millisecond still have an order */
     stamp() {
       this._lastStamp = Math.max(Date.now(), this._lastStamp + 1);
       return this._lastStamp;
-    },
-
-    /** One transaction on the store. `work` makes its requests and may return a function that reads
-        the answer once the transaction has completed. Any failure answers `fallback` instead. */
-    async run(mode, fallback, work) {
-      try {
-        const db = await this.open();
-        if (!db) return fallback;
-        return await new Promise((resolve, reject) => {
-          const tx = db.transaction(this.STORE, mode);
-          const answer = work(tx.objectStore(this.STORE));
-          tx.oncomplete = () => resolve(typeof answer === 'function' ? answer() : fallback);
-          tx.onerror = () => reject(tx.error);
-          tx.onabort = () => reject(tx.error);
-        });
-      } catch (e) {
-        this.warn(e);
-        return fallback;
-      }
     },
 
     /** The kept entry, { id, name, parents, modifiedTime, content, openedAt }, or null */
@@ -464,5 +464,5 @@ Object.assign(App, {
       if (!id) return Promise.resolve();
       return this.run('readwrite', undefined, (store) => { store.delete(id); });
     },
-  },
+  }),
 });

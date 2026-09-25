@@ -14,7 +14,7 @@ Object.assign(App, {
   },
 
   async loadFile(fileId, fileName, heading, fresh = false) {
-    const draftKey = `drivenotes_draft_${fileId}`;
+    const draftKey = `${KEYS.DRAFT_PREFIX}${fileId}`;
     const tapped = Date.now();
 
     // The note on screen, opened again with text not saved yet (a [[link#heading]] to itself, right after
@@ -115,7 +115,7 @@ Object.assign(App, {
     const file = {
       id: kept.id,
       name: kept.name,
-      draftKey: `drivenotes_draft_${kept.id}`,
+      draftKey: `${KEYS.DRAFT_PREFIX}${kept.id}`,
       modifiedTime: kept.modifiedTime,
       parents: kept.parents || undefined,
     };
@@ -230,7 +230,7 @@ Object.assign(App, {
     const name = this.generateFileName();
     // The draft key is fixed for the life of the note, so the draft is still found
     // (and cleared) after the note gets its Drive ID
-    const file = { id: null, name: name, draftKey: `drivenotes_draft_new_${Date.now()}` };
+    const file = { id: null, name: name, draftKey: `${KEYS.DRAFT_PREFIX}new_${Date.now()}` };
     this.currentFile = file;
     this.syncHistory();
     const today = this.today();
@@ -584,7 +584,7 @@ Object.assign(App, {
     const drafts = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (!key.startsWith('drivenotes_draft') || key === 'drivenotes_draft_latest') continue;
+      if (!key.startsWith(KEYS.DRAFT_PREFIX) || key === KEYS.DRAFT_LATEST) continue;
       const draft = this.readDraft(key);
       if (draft && draft.content.trim()) drafts.push({ key, ...draft });
     }
@@ -746,7 +746,7 @@ Object.assign(App, {
       const copy = {
         id: null,
         name: this.conflictCopyName(file.name),
-        draftKey: `drivenotes_draft_new_${Date.now()}`,
+        draftKey: `${KEYS.DRAFT_PREFIX}new_${Date.now()}`,
         parents: file.parents,
       };
       this.setSaveStatus('saving', 'Salvando cópia...');

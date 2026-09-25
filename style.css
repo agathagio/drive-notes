@@ -26,6 +26,9 @@
      funcionar por cima de qualquer uma das camadas escuras. Quem usa no editor é o realce de
      sintaxe do CodeMirror, montado no app/editor-cm6.js: ele lê esta variável, não um hex próprio. */
   --code-bg: rgba(255,255,255,0.08);
+  /* The faintest surface: a table's even row, a callout, a code block. White, barely there, so it
+     works over any of the dark layers, like --code-bg. */
+  --faint-bg: rgba(255,255,255,0.04);
   /* Marca-texto (==texto== na nota). O mesmo roxo do accent, transparente: por cima do fundo
      escuro ele fica discreto o bastante para o texto continuar legível, e acompanha a paleta
      em vez de fixar um amarelo de caneta. */
@@ -545,14 +548,14 @@ mark {
   font-weight: 600;
 }
 .preview-container tr:nth-child(even) td {
-  background: rgba(255,255,255,0.03);
+  background: var(--faint-bg);
 }
 
 /* Callouts: > [!note] Title */
 .preview-container blockquote.callout {
   --callout: var(--accent-hover);
   border-left: 3px solid var(--callout);
-  background: rgba(255,255,255,0.04);
+  background: var(--faint-bg);
   border-radius: 0 6px 6px 0;
   padding: 10px 12px;
   color: var(--text-primary);
@@ -603,7 +606,7 @@ mark {
   font-size: 0.9em;
 }
 .preview-container pre {
-  background: rgba(255,255,255,0.05);
+  background: var(--faint-bg);
   padding: 12px;
   border-radius: 6px;
   overflow-x: auto;

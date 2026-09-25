@@ -49,47 +49,20 @@ Object.assign(App, {
   // What another app shared waits here, on the device, until it is written into a note. The service
   // worker puts it in (sw.js: same database, store and record; keep the two in step) before the page
   // opens, so nothing depends on the login or the network at that moment. The page reads and removes.
-  ArrivalBox: {
-    DB_NAME: 'drivenotes-arrivals',
-    STORE: 'arrivals',
-    _db: null,
-
-    open() {
-      if (!this._db) {
-        this._db = new Promise((resolve, reject) => {
-          if (typeof indexedDB === 'undefined') return resolve(null);
-          const request = indexedDB.open(this.DB_NAME, 1);
-          request.onupgradeneeded = () => request.result.createObjectStore(this.STORE, { keyPath: 'id' });
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
-        }).catch((e) => {
-          App.log(`arrival box off: ${e?.name || e}`);
-          return null;
-        });
-      }
-      return this._db;
-    },
-
-    /** One request on the store; its result, or null on any failure */
-    async run(mode, work) {
-      const db = await this.open();
-      if (!db) return null;
-      return new Promise((resolve) => {
-        const tx = db.transaction(this.STORE, mode);
-        const request = work(tx.objectStore(this.STORE));
-        tx.oncomplete = () => resolve(request?.result ?? null);
-        tx.onerror = tx.onabort = () => resolve(null);
-      });
-    },
-
-    get(id) { return this.run('readonly', (store) => store.get(id)); },
+  ArrivalBox: Object.assign(makeStore({
+    name: 'drivenotes-arrivals',
+    store: 'arrivals',
+    upgrade: (db) => db.createObjectStore('arrivals', { keyPath: 'id' }),
+    warn: (e) => App.log(`arrival box off: ${e?.name || e}`),
+  }), {
+    get(id) { return this.run('readonly', null, (store) => store.get(id)); },
     async oldest() {
-      const all = await this.run('readonly', (store) => store.getAll());
+      const all = await this.run('readonly', null, (store) => store.getAll());
       return (all || []).sort((a, b) => a.at - b.at)[0] || null;
     },
-    put(record) { return this.run('readwrite', (store) => store.put(record)); },
-    remove(id) { return this.run('readwrite', (store) => store.delete(id)); },
-  },
+    put(record) { return this.run('readwrite', null, (store) => store.put(record)); },
+    remove(id) { return this.run('readwrite', null, (store) => store.delete(id)); },
+  }),
 
   /** What the app was opened for from outside: a shortcut on the icon (?atalho=) or something shared into
       it (?chegada=, see sw.js). Read once and taken out of the address, so that a reload, the new version

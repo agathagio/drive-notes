@@ -116,7 +116,7 @@ Object.assign(App, {
       console.error('Photo upload failed:', e);
       this.log(`photo failed: ${e?.name || 'Error'} ${String(e?.message ?? e).slice(0, 80)}`);
       // In case it was the remembered folder that went away: look it up again next time
-      localStorage.removeItem('drivenotes_media_folder');
+      localStorage.removeItem(KEYS.MEDIA_FOLDER);
       this.setSaveStatus('error', 'Erro ao enviar a foto');
       return false;
     }

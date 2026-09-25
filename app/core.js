@@ -3,9 +3,9 @@
 // The app is one object, App, split into classic scripts by area (index.html lists them, in order).
 // This file declares `const App = { ... }`; every other app/*.js does `Object.assign(App, { ... })`
 // with the methods of its area, so `this` is always App and a method may live in any of the files.
-// Classic scripts share the global scope: App, CONFIG and the SWIPE_* constants are visible in all
-// of them. Object.assign copies values, not accessors: a getter or setter in an extension file
-// would arrive as a fixed value. App has none, and should stay that way.
+// Classic scripts share the global scope: App, CONFIG, KEYS and the SWIPE_* constants are visible
+// in all of them. Object.assign copies values, not accessors: a getter or setter in an extension
+// file would arrive as a fixed value. App has none, and should stay that way.
 // =====================================================
 // CONFIG: Replace these with your Google Cloud project values
 // =====================================================
@@ -32,6 +32,21 @@ const SWIPE_EDGE = 32;
 const SWIPE_TRIGGER = 60;
 // Vertical travel that means "this is a scroll", when it is also more than the travel inwards
 const SWIPE_SCROLL = 36;
+
+// Every key the app writes in localStorage and sessionStorage. The values are what every device already
+// has stored: change a name here, never a value, or the login and the recents vanish on the next opening.
+const KEYS = {
+  TOKEN: 'drivenotes_token',
+  TOKEN_EXPIRES: 'drivenotes_token_expires',
+  LOGIN_HINT: 'drivenotes_login_hint',
+  RECENTS: 'drivenotes_recents',
+  MEDIA_FOLDER: 'drivenotes_media_folder',
+  NOTE_INDEX: 'drivenotes_note_index',
+  PLACES: 'drivenotes_places',
+  REOPEN: 'drivenotes_reopen',          // sessionStorage: the note to reopen after the new version reloads
+  DRAFT_PREFIX: 'drivenotes_draft_',    // followed by the file id, or by `new_<timestamp>` for a note not on the Drive yet
+  DRAFT_LATEST: 'drivenotes_draft_latest', // a pointer versions before the drafts list used; init removes it
+};
 
 // =====================================================
 
@@ -199,7 +214,7 @@ const App = {
     };
 
     // Pointer used by older versions; drafts are now found by scanning their keys
-    localStorage.removeItem('drivenotes_draft_latest');
+    localStorage.removeItem(KEYS.DRAFT_LATEST);
 
     this.useWatcher = typeof CloseWatcher !== 'undefined';
     this.log('init');
@@ -218,7 +233,7 @@ const App = {
     this.renderRecents();
     if (launch) {
       // Opened for something else: the note of an update's reload does not come back on top of it
-      sessionStorage.removeItem(this.REOPEN_KEY);
+      sessionStorage.removeItem(KEYS.REOPEN);
       this.startLaunch(launch);
     } else {
       this.reopenAfterUpdate().then(() => this.offerPendingArrival());
@@ -331,7 +346,7 @@ const App = {
 
   saveToRecents(fileId, fileName) {
     try {
-      const raw = localStorage.getItem('drivenotes_recents');
+      const raw = localStorage.getItem(KEYS.RECENTS);
       let recents = raw ? JSON.parse(raw) : [];
 
       // Remove duplicate
@@ -343,7 +358,7 @@ const App = {
       // Keep max 20
       recents = recents.slice(0, 20);
 
-      localStorage.setItem('drivenotes_recents', JSON.stringify(recents));
+      localStorage.setItem(KEYS.RECENTS, JSON.stringify(recents));
     } catch {
       // ignore
     }
@@ -351,7 +366,7 @@ const App = {
 
   getRecents() {
     try {
-      const raw = localStorage.getItem('drivenotes_recents');
+      const raw = localStorage.getItem(KEYS.RECENTS);
       return raw ? JSON.parse(raw) : [];
     } catch {
       return [];
@@ -404,10 +419,10 @@ const App = {
 
   removeFromRecents(fileId) {
     try {
-      const raw = localStorage.getItem('drivenotes_recents');
+      const raw = localStorage.getItem(KEYS.RECENTS);
       let recents = raw ? JSON.parse(raw) : [];
       recents = recents.filter(r => r.id !== fileId);
-      localStorage.setItem('drivenotes_recents', JSON.stringify(recents));
+      localStorage.setItem(KEYS.RECENTS, JSON.stringify(recents));
       this.renderRecents();
     } catch {
       // ignore

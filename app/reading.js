@@ -10,11 +10,9 @@ Object.assign(App, {
   // scroll anchoring holds it there as the pictures above grow. Per device, for the last 20 notes, like the
   // recents. A note changed on the computer in between may land a little off: accepted.
 
-  PLACES_KEY: 'drivenotes_places',
-
   getPlaces() {
     try {
-      return JSON.parse(localStorage.getItem(this.PLACES_KEY)) || [];
+      return JSON.parse(localStorage.getItem(KEYS.PLACES)) || [];
     } catch {
       return [];
     }
@@ -37,7 +35,7 @@ Object.assign(App, {
       places.unshift({ id: file.id, block, into: Math.round(top - blocks[block].getBoundingClientRect().top) });
     }
     try {
-      localStorage.setItem(this.PLACES_KEY, JSON.stringify(places.slice(0, 20)));
+      localStorage.setItem(KEYS.PLACES, JSON.stringify(places.slice(0, 20)));
     } catch { /* storage full or blocked: the note opens at the top, as it always did */ }
   },
 
@@ -224,7 +222,8 @@ Object.assign(App, {
       own element, so two headings with the same text are two different rows. Where the reading stops
       after the jump is kept like any scroll: rememberPlace measures the view when the note is left. */
   openToc() {
-    const headings = [...this.els.previewContainer.querySelectorAll('h1, h2, h3, h4, h5, h6')];
+    const headings = [...this.els.previewContainer.querySelectorAll('h1, h2, h3, h4, h5, h6')]
+      .filter(h => !h.closest('[hidden]'));
     const ul = this.els.tocUl;
     ul.innerHTML = '';
     this.els.tocEmpty.hidden = headings.length > 0;
@@ -727,8 +726,7 @@ Object.assign(App, {
     const base = target.split('/').pop().trim();
     const names = /\.md$/i.test(base) ? [base] : [`${base}.md`, base];
     const matches = await this.driveFindByName(names);
-    const isText = (f) => /\.(md|markdown|txt)$/i.test(f.name) || (f.mimeType || '').startsWith('text/');
-    const notes = matches.filter(isText);
+    const notes = matches.filter(f => this.isNote(f));
     if (!notes.length) return { base, error: matches.length ? 'type' : 'missing' };
     const folder = this.currentFile?.parents?.[0];
     const note = notes.find(f => folder && f.parents?.includes(folder))
