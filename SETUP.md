@@ -74,7 +74,7 @@ const CONFIG = {
 ## 7. Deploy no GitHub Pages
 
 1. Crie um repositório no GitHub (ex: `drive-notes`)
-2. Antes de dar push, gere os ícones: abra `generate-icons.html` no browser e baixe os dois PNGs
+2. Antes de dar push, gere os ícones: abra `lab/generate-icons.html` no browser e baixe os dois PNGs
 3. Coloque `icon-192.png` e `icon-512.png` na pasta `drive-notes/`
 4. Faça push dos arquivos pro repositório
 5. No GitHub, vá em **Settings** → **Pages**

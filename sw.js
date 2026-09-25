@@ -19,8 +19,8 @@ const CDN_SCRIPTS = {
 // fonts.gstatic.com under urls we cannot predict: those are caught at runtime by CDN_HOSTS
 // the first time a page renders, so the second visit already has the letters offline.
 //
-// O editor não entra nesta lista: ele é o vendor/codemirror.js, versionado no repositório e
-// guardado logo abaixo, junto com os arquivos estáticos.
+// The editor is not on this list: it is vendor/codemirror.js, versioned in the repository and
+// cached just below, with the static assets.
 const CDN_ASSETS = [
   ...Object.keys(CDN_SCRIPTS),
   'https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap',
@@ -57,10 +57,10 @@ const STATIC_ASSETS = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      // cache: 'reload' obriga cada pedido a ir na rede. Sem isso o navegador responde do
-      // cache HTTP dele, e como o GitHub Pages manda max-age=600, um cache novo nasce com
-      // os arquivos velhos dentro: o deploy sai, o numero do cache sobe, e o aparelho segue
-      // mostrando a versao anterior por dez minutos.
+      // cache: 'reload' makes every request go to the network. Without it the browser answers from
+      // its own HTTP cache, and since GitHub Pages sends max-age=600, a new cache is born with the
+      // old files inside: the deploy goes out, the cache number goes up, and the phone keeps
+      // showing the previous version for ten minutes.
       const fresh = (url) => new Request(url, { cache: 'reload', integrity: CDN_SCRIPTS[url] || '' });
       // Best effort: a CDN hiccup must not block the install of the app itself
       return Promise.all([
@@ -166,10 +166,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // As paginas de experimento em /lab/ ficam de fora do cache. Elas existem pra ser
-  // trocadas e reabertas no celular a cada ajuste, e o cache-first abaixo devolveria a
-  // versao anterior: o mesmo "abrir e fechar duas vezes" que ja e dor no app viraria dor
-  // no proprio lugar onde a gente esta tentando medir uma coisa.
+  // /lab/ holds tools that are not part of the app (today, the icon generator), so it stays out of
+  // the cache: the app never needs them offline, and the cache-first below would keep handing back
+  // the copy from before a change.
   if (url.origin === self.location.origin && url.pathname.includes('/lab/')) {
     return;
   }

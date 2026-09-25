@@ -28,6 +28,9 @@ Então fiz o meu. Hoje é por ele que eu leio e escrevo no vault quando estou lo
 - Nota do Drive abre formatada, em modo leitura. Um toque alterna pra edição.
 - Entende o markdown do Obsidian: o frontmatter vira um bloco "Propriedades" recolhido, `[[wikilinks]]` abrem a nota certa (inclusive `[[nota#título]]`), callouts ganham cor por tipo, tabela larga rola de lado, imagem embutida (`![[foto.jpg]]`) aparece na nota.
 - Tarefa (`- [ ]`) se marca tocando na caixa, direto no modo leitura: o `[x]` entra no texto da nota e o auto-save leva pro Drive.
+- Nota longa: segurar o dedo no nome da nota abre o sumário dos títulos, e tocar num deles rola até lá. Segurar um link pra outra nota mostra ela num cartão, sem sair do lugar.
+- O quadro kanban do plugin do Obsidian abre como quadro, com as colunas empilhadas e recolhidas como no Obsidian. Vídeo do YouTube embutido vira capa com play, que abre no app do YouTube.
+- A nota reabre no parágrafo em que a leitura parou, e Ler e Editar mantêm o mesmo trecho na tela.
 - Navegador de pastas próprio, na mesma ordem do Obsidian (`2-x` antes de `10-x`), com a data da última edição.
 - Busca na tela de pastas: o que se digita filtra a pasta aberta na hora, sem rede e sem ligar pra acento, e depois de uma pausa procura no vault inteiro, por nome e pelo texto das notas. Cada resultado mostra a pasta onde a nota mora.
 
@@ -41,7 +44,10 @@ Então fiz o meu. Hoje é por ele que eu leio e escrevo no vault quando estou lo
 - Foto direto na nota, com um botão pra câmera e outro pra galeria: a imagem é reduzida no aparelho, sobe pra pasta de anexos do vault e entra como `![[foto-...jpg]]`, do jeito que o Obsidian espera.
 - Na edição o texto é markdown cru, mas a linha do `![[foto.jpg]]` mostra a imagem embaixo: dá pra escrever olhando pro que se está descrevendo.
 - Desenhar na nota: tela cheia pra rabiscar com o dedo, seis cores, três espessuras, borracha e desfazer. Sai um PNG de fundo transparente, recortado no traço, que funciona tanto no tema escuro do app quanto no claro do Obsidian.
-- Renomear tocando no título.
+- Digitar `[[` lista as notas do vault e filtra a cada letra.
+- Selecionar um trecho e mandar pra uma nota nova, com o link no lugar. Apagar a nota aberta, pra lixeira do Drive.
+- Compartilhar de outro app pro Drive Notes (texto, link, foto, e o .txt da transcrição do gravador, mesmo em UTF-16) cai numa nota nova ou numa nota da inbox. O ícone do app tem atalhos pra nota nova, anotar e buscar.
+- Renomear tocando no título; os `[[links]]` que apontam pra nota são consertados nas outras notas.
 - O botão voltar do Android fecha diálogo, sai da nota e volta de pasta, como em app nativo.
 - Deslizar da borda navega como no Chrome: da esquerda volta, da direita avança, com uma seta que acompanha o dedo e fica roxa quando já dá pra soltar. O gesto é do próprio app: com a barra de três botões o Android não tem gesto de voltar, e o deslizar do Chrome não existe em app instalado.
 
@@ -61,15 +67,14 @@ Foi a parte que mais deu trabalho, e a que mais importa num app de notas.
 - **Google Drive API com OAuth** (Google Identity Services). Não tem servidor: o navegador fala direto com o Drive, e o token fica só no aparelho.
 - **Editor: [CodeMirror 6](https://codemirror.net/).** Ele não vem de CDN: o pacote está versionado no repositório, em `vendor/codemirror.js`, gerado uma vez por esbuild e commitado, então o deploy continua sendo só um push e o editor abre sem rede já na primeira visita.
 - **As outras bibliotecas, via CDN com versão fixa:** [marked](https://github.com/markedjs/marked) pra renderizar e [DOMPurify](https://github.com/cure53/DOMPurify) pra sanitizar o HTML, já que o login dá acesso ao Drive inteiro.
-- **Testes:** o app real (os `app/*.js` concatenados) roda no jsdom contra um Google Drive falso em memória (50 cenários, 415 checagens). O que o jsdom não enxerga (ditado por voz, o gesto de voltar, a barra de formatação no editor de verdade, a redução da foto, o canvas do desenho) roda num Chrome ou Edge headless pelo protocolo de depuração (11 cenários, 68 checagens). Um terceiro script tira os prints de todas as telas em tamanho de celular. Detalhes em [`tests/README.md`](tests/README.md).
+- **Testes:** o app real (os `app/*.js` concatenados) roda no jsdom contra um Google Drive falso em memória (93 cenários, 885 checagens), cada cenário isolado. O que o jsdom não enxerga (ditado por voz, o gesto de voltar, a barra de formatação no editor de verdade, a redução da foto, o canvas do desenho, retomar onde parou) roda num Chrome ou Edge headless pelo protocolo de depuração (23 cenários, 151 checagens), e o service worker tem uma suíte própria, com um servidor local no papel do GitHub Pages (9 cenários, 34 checagens). Um quarto script tira os prints de todas as telas em tamanho de celular. Detalhes em [`tests/README.md`](tests/README.md).
 
 Construído com IA: eu defino o problema, decido o comportamento e testo no aparelho; o código é escrito em sessões com o [Claude Code](https://claude.com/claude-code).
 
 ## Limites
 
-- Feito pra uma pessoa só. Não tem conta, equipe nem compartilhamento.
-- Offline é parcial: sem rede o app abre e dá pra escrever, e o texto fica guardado no aparelho até ser salvo no Drive. Abrir uma nota que já está no Drive precisa de internet.
-- Renomear uma nota não atualiza os `[[links]]` que apontam pra ela.
+- Feito pra uma pessoa só. Não tem conta, equipe nem notas compartilhadas com outras pessoas.
+- Offline é parcial: sem rede o app abre, as últimas 100 notas já vistas abrem do aparelho, e dá pra escrever; o texto fica guardado até ser salvo no Drive. Uma nota que nunca foi aberta neste aparelho precisa de internet.
 - O voltar usa a API CloseWatcher, que hoje só existe em navegadores baseados no Chromium. Nos outros, o app cai pro histórico do navegador, que é menos confiável.
 - O app é travado em retrato (`orientation` no `manifest.json`), então girar o aparelho não muda nada.
 
