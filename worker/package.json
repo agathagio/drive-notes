@@ -1,0 +1,6 @@
+{
+  "name": "drive-notes-auth",
+  "private": true,
+  "type": "module",
+  "description": "The one server piece of Drive Notes: holds the Google client secret and trades codes and refresh tokens for access tokens. Deployed by hand with wrangler (see SETUP.md)."
+}

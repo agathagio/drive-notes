@@ -33,6 +33,7 @@ O app não usa mais o Google Picker: a navegação de pastas é do próprio app,
 4. Clique **Save and Continue** nas próximas telas (Scopes, Test users)
 5. Na tela **Test users**, clique **Add Users** e adicione seu email
 6. Finalize
+7. Depois de tudo salvo, publique o app (de Testing pra In production). Hoje isso fica em **Google Auth Platform**: na página **Branding**, preencha o que o botão exige (nome do app, e-mail de suporte, página inicial `https://SEU-USUARIO.github.io/drive-notes/`, política de privacidade `https://SEU-USUARIO.github.io/drive-notes/privacidade.html`, que é a página `privacidade.html` do repositório, e `SEU-USUARIO.github.io` em Authorized domains); depois, na página **Audience**, clique **Publish app** e confirme. Não precisa enviar pra verificação. Sem isso o refresh token (seção 7b) morre em 7 dias e o app pede login toda semana.
 
 ## 4. Criar credenciais
 
@@ -48,6 +49,10 @@ O app não usa mais o Google Picker: a navegação de pastas é do próprio app,
 
 API key e Project Number não são mais necessários (eram só do Google Picker). Se você criou uma API key pra versões antigas, pode apagar em **Credentials**.
 
+### Segredo do cliente
+
+O Worker de login (seção 7b) precisa do **Client secret** do cliente Web. O Google só mostra o segredo na hora em que ele é criado: se não estiver anotado, abra o cliente em **Credentials**, clique **Add secret**, copie o novo e apague o antigo depois que o Worker estiver no ar. O Client ID não muda.
+
 ## 5. Configurar o app
 
 Abra o arquivo `app/core.js` e substitua os valores no topo:
@@ -58,6 +63,7 @@ const CONFIG = {
   DEFAULT_FOLDER_ID: 'ID_DA_PASTA_DE_NOTAS_NOVAS',
   VAULT_FOLDER_ID: 'ID_DA_PASTA_DO_VAULT',
   VAULT_NAME: 'vault',
+  AUTH_URL: 'https://drive-notes-auth.SUA-CONTA.workers.dev/',
 };
 ```
 
@@ -81,6 +87,19 @@ const CONFIG = {
 6. Source: **Deploy from a branch** → branch `main` → pasta `/ (root)`
 7. O app fica disponível em `https://SEU-USUARIO.github.io/drive-notes/`
 
+## 7b. O Worker de login (Cloudflare)
+
+O token do Google dura 1 hora. Pra renovar sem pedir login de novo, o app usa um refresh token, e pra isso o Google exige o segredo do cliente numa troca feita fora do navegador. Quem faz essa troca é `worker/index.js`, publicado na Cloudflare (plano grátis).
+
+1. Crie uma conta em [cloudflare.com](https://www.cloudflare.com) (não precisa de domínio)
+2. No PC, na pasta do repositório: `npx wrangler login` (abre o navegador pra autorizar)
+3. Em `worker/`: `npx wrangler secret put GOOGLE_CLIENT_SECRET` e cole o segredo (seção "Segredo do cliente")
+4. Confira o `GOOGLE_CLIENT_ID` em `worker/wrangler.toml` (é o seu Client ID) e a lista `ORIGINS` em `worker/index.js` (é a URL do seu GitHub Pages)
+5. Em `worker/`: `npx wrangler deploy`. O comando imprime a URL do Worker, tipo `https://drive-notes-auth.sua-conta.workers.dev`
+6. Cole essa URL, com a barra no fim, em `AUTH_URL` no `app/core.js`, e faça o push
+
+O Worker não guarda nada: quem tem o refresh token é o aparelho. Pra trocar o segredo, repita o passo 3 e o 5.
+
 ## 8. Atualizar origins no Google Cloud
 
 Depois de ativar o GitHub Pages, volte ao Google Cloud Console:
@@ -92,7 +111,7 @@ Depois de ativar o GitHub Pages, volte ao Google Cloud Console:
 ## 9. Instalar no celular
 
 1. Abra a URL do GitHub Pages no Chrome do celular
-2. Na primeira vez, faça login com Google (vai aparecer tela "App não verificado": clique "Avançado" → "Acessar")
+2. Na primeira vez, faça login com Google: aparece a tela "App não verificado" (clique "Avançado" → "Acessar") e a de permissões. É uma vez só por aparelho: dali em diante o login se renova sozinho. Pra trocar de conta ou limpar o aparelho, "Sair da conta" no rodapé da tela inicial.
 3. Toque no menu do Chrome (⋮) → **Adicionar à tela inicial**
 4. O app aparece como ícone no celular e abre fullscreen
 
@@ -100,8 +119,9 @@ Depois de ativar o GitHub Pages, volte ao Google Cloud Console:
 
 ## Troubleshooting
 
-- **"This app isn't verified"**: Normal pra projetos em Testing mode. Clique "Advanced" → "Go to Drive Notes (unsafe)". É seguro: é o seu próprio app.
+- **"This app isn't verified"**: Normal pra app publicado sem verificação do Google. Clique "Advanced" → "Go to Drive Notes (unsafe)". É seguro: é o seu próprio app.
 - **Pasta não carrega**: Verifique se a Google Drive API está ativada e se `VAULT_FOLDER_ID` é o ID da pasta certa.
 - **Botão voltar do celular não funciona**: na tela inicial, toque 5 vezes no título "Drive Notes". Abre um painel de diagnóstico com o modo de navegação em uso e o log dos últimos eventos.
-- **401 Unauthorized**: Token expirou. Recarregue a página e faça login novamente.
+- **"Login expirou: toque em salvar" toda hora**: o app está sem refresh token. Confira no painel de diagnóstico (cinco toques no título) a linha "login": "renovável" é o esperado. "só token" ou "nenhum" com o Worker no ar: saia da conta e entre de novo.
+- **"Erro: salvo local" com rede**: o Worker pode estar fora ou a URL em AUTH_URL errada. Abra a URL do Worker no navegador: tem que responder "forbidden" (é o esperado pra um acesso sem o app).
 - **Erro de origin**: A URL de onde você acessa precisa estar nas Authorized JavaScript Origins.

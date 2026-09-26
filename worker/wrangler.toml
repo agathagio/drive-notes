@@ -1,0 +1,8 @@
+name = "drive-notes-auth"
+main = "index.js"
+compatibility_date = "2026-09-01"
+
+[vars]
+GOOGLE_CLIENT_ID = "104411957628-eu5gbpopvot1ai5a95qbpdn3frcvko4r.apps.googleusercontent.com"
+
+# GOOGLE_CLIENT_SECRET is a secret: `npx wrangler secret put GOOGLE_CLIENT_SECRET`, never a var here

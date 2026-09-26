@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <title>Drive Notes: privacidade</title>
+  <!-- Standalone on purpose: the privacy policy the Google consent screen points to. No scripts,
+       no fonts from outside, the app's own palette (style.css, :root). -->
+  <style>
+    :root {
+      --bg-primary: #1c1b1f;
+      --text-primary: #e4e0e8;
+      --text-secondary: #928d99;
+      --accent-hover: #a68dff;
+      --border: #35323d;
+    }
+    body {
+      margin: 0;
+      padding: 32px 16px 48px;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main { max-width: 640px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    h2 { font-size: 17px; margin: 28px 0 8px; }
+    p, li { color: var(--text-primary); }
+    .meta { color: var(--text-secondary); font-size: 14px; margin: 0 0 24px; }
+    a { color: var(--accent-hover); }
+    ul { padding-left: 20px; }
+    hr { border: 0; border-top: 1px solid var(--border); margin: 32px 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Drive Notes: privacidade</h1>
+    <p class="meta">Última atualização: 26 de setembro de 2026</p>
+
+    <p>O Drive Notes é um app pessoal pra ler e editar notas em markdown guardadas no Google Drive. Ele roda inteiro no seu navegador. Esta página diz o que ele acessa, onde isso fica e como desfazer.</p>
+
+    <h2>O que o app acessa</h2>
+    <ul>
+      <li><strong>O seu Google Drive</strong>, com a permissão que você dá na tela de login do Google. É com ela que o app lista pastas, abre, cria e salva notas e sobe fotos e desenhos pra dentro das notas.</li>
+      <li><strong>O e-mail da conta</strong>, lido uma vez depois do login, só pra pular o seletor de conta nas próximas vezes.</li>
+    </ul>
+
+    <h2>Onde os dados ficam</h2>
+    <ul>
+      <li>As notas ficam no seu Google Drive. O app não copia nada delas pra outro lugar.</li>
+      <li>No aparelho, no armazenamento do navegador, ficam: o token de acesso ao Drive e o token de renovação, o e-mail da conta, a lista de notas recentes, os rascunhos ainda não salvos e uma cópia das últimas notas abertas, pra abrirem sem esperar a rede.</li>
+      <li>Um serviço mínimo na Cloudflare recebe o código do login e o token de renovação e os troca junto ao Google por um token de acesso. Ele não guarda nada e não registra nada: só repassa a troca, que o Google exige que seja feita fora do navegador.</li>
+    </ul>
+
+    <h2>O que não existe</h2>
+    <ul>
+      <li>Nenhuma conta própria, nenhum servidor com as suas notas.</li>
+      <li>Nenhum rastreamento, análise de uso, anúncio ou cookie de terceiros.</li>
+      <li>Nenhum compartilhamento de dados com quem quer que seja.</li>
+    </ul>
+
+    <h2>Como desfazer</h2>
+    <ul>
+      <li><strong>Sair da conta</strong>, no rodapé da tela inicial do app: revoga a permissão no Google e apaga tudo o que o app guardou no aparelho.</li>
+      <li>Ou, na sua Conta Google, em <a href="https://myaccount.google.com/connections">Conexões de terceiros</a>: remova o acesso do Drive Notes. O app deixa de conseguir abrir o Drive na hora.</li>
+    </ul>
+
+    <hr>
+    <p class="meta">O código do app é aberto e está em <a href="https://github.com/agathagio/drive-notes">github.com/agathagio/drive-notes</a>. Dúvidas, por lá.</p>
+  </main>
+</body>
+</html>
