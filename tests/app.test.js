@@ -177,6 +177,48 @@ function fakeCtx(canvas) {
   return ctx;
 }
 
+/** The Worker (CONFIG.AUTH_URL) and Google's revoke endpoint faked behind w.fetch; everything else goes to the Drive.
+    `answers[grant_type]` is what the Worker says for that grant (default: a fresh token); `{ status, body }` is an
+    error with that status; the string 'network' throws like a fetch with no network. `answers.raw` is a body that
+    is not JSON (a 5xx page). `answers.revoke` is 'network' to fail the revoke. */
+function fakeWorker(w, drive, answers = {}) {
+  const worker = { calls: [], revoked: [] };
+  const AUTH_URL = w.__CONFIG.AUTH_URL;
+  const notJson = { ok: false, status: 502, json: async () => { throw new SyntaxError('not json'); }, text: async () => '<html>bad gateway</html>' };
+  w.fetch = async (url, opts = {}) => {
+    const s = String(url);
+    if (s === AUTH_URL) {
+      const body = JSON.parse(opts.body);
+      worker.calls.push(body);
+      if (answers.raw) return notJson;
+      const answer = answers[body.grant_type] || { access_token: 'renovado', expires_in: 3600 };
+      if (answer === 'network') throw new TypeError('Failed to fetch');
+      const status = answer.status || 200;
+      const payload = answer.status ? answer.body : answer;
+      return { ok: status < 400, status, json: async () => payload, text: async () => JSON.stringify(payload) };
+    }
+    if (s.startsWith('https://oauth2.googleapis.com/revoke')) {
+      if (answers.revoke === 'network') throw new TypeError('Failed to fetch');
+      worker.revoked.push(new URL(s).searchParams.get('token'));
+      return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+    }
+    return drive.fetch(url, opts);
+  };
+  return worker;
+}
+
+/** A login popup faked: `requestCode` counts, and after 5 ms hands the app `code` (or nothing, with code null) */
+function fakePopup(App, code = 'c1') {
+  const popup = { count: 0 };
+  App.makeCodeClient = () => ({
+    requestCode() {
+      popup.count++;
+      if (code !== null) setTimeout(() => App._codeCallback({ code }), 5);
+    },
+  });
+  return popup;
+}
+
 async function boot({ auth = true, seedStorage = {}, seedSession = {}, watcher = false, editor = false, idb = null, drive: givenDrive = null, beforeApp = null, url = 'http://localhost:8000/' } = {}) {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const dom = new JSDOM(html, { url, runScripts: 'outside-only', pretendToBeVisual: true });
@@ -622,9 +664,14 @@ async function scenario(title, block) {
   await scenario('13. login_hint', async () => {
   {
     const { App, w } = await boot();
-    check('sem hint: so prompt', JSON.stringify(App.tokenRequest('')) === '{"prompt":""}');
+    // The code client is made per popup (login_hint only goes in at creation): the Google script faked to see it
+    let config = null;
+    w.google = { accounts: { oauth2: { initCodeClient: (c) => { config = c; return { requestCode() {} }; } } } };
+    App.makeCodeClient();
+    check('sem hint: cliente de codigo em popup, sem login_hint', config?.ux_mode === 'popup' && !('login_hint' in config), config);
     w.localStorage.setItem('drivenotes_login_hint', 'x@example.com');
-    check('com hint guardado', App.tokenRequest('consent').login_hint === 'x@example.com');
+    App.makeCodeClient();
+    check('com hint guardado', config.login_hint === 'x@example.com');
   }
   });
 
@@ -1027,23 +1074,33 @@ async function scenario(title, block) {
   }
   });
 
-  await scenario('22. Login expirado', async () => {
+  await scenario('22. Login expirado sem refresh token: rascunho, e o toque em salvar abre o popup', async () => {
   {
     const { App, drive, type, w } = await boot();
     drive.put('A', 'a.md', 'A');
     await App.openFile('A', 'a.md');
     w.localStorage.setItem('drivenotes_token_expires', String(Date.now() - 1000));
-    let popups = 0;
-    App.tokenClient = { requestAccessToken() { popups++; setTimeout(() => App.tokenClient.callback({ access_token: 'novo', expires_in: 3600 }), 5); } };
-    w.eval('window.gapi = { client: { setToken() {} } }');
+    const worker = fakeWorker(w, drive, { authorization_code: { access_token: 'novo', expires_in: 3600, refresh_token: 'r-novo' } });
+    const popup = fakePopup(App);
     const before = drive.log.length;
     type('digitado com login vencido');
     await App.save(); // autosave
-    check('autosave: nenhum popup, nenhuma requisicao, rascunho guardado', popups === 0 && drive.log.length === before && App.listDrafts().length === 1);
+    check('autosave: nenhum popup, nenhuma requisicao, rascunho guardado', popup.count === 0 && worker.calls.length === 0 && drive.log.length === before && App.listDrafts().length === 1);
     check('avisa pra tocar em salvar', App.els.saveStatus.textContent === 'Login expirou: toque em salvar' && App.isDirty);
     await App.save({ manual: true });
-    check('salvar manual: renova o login e sincroniza', popups === 1 && App.accessToken === 'novo' && drive.files.get('A').content === 'digitado com login vencido');
+    check('salvar manual: popup, codigo trocado no Worker, sincroniza', popup.count === 1 && worker.calls[0]?.grant_type === 'authorization_code' && worker.calls[0].code === 'c1' && App.accessToken === 'novo' && drive.files.get('A').content === 'digitado com login vencido', worker.calls);
+    check('refresh token guardado: dali em diante renova sem popup', w.localStorage.getItem('drivenotes_refresh_token') === 'r-novo' && App.canRenewQuietly());
     check('limpo, rascunho removido', !App.isDirty && App.listDrafts().length === 0);
+  }
+  {
+    // The Google script not loaded yet (an opening without network): a tap that needs the login fails clean
+    const { App, drive, w } = await boot({ auth: false });
+    drive.put('A', 'a.md', 'A');
+    let failed = null;
+    await App.ensureAuth().catch((e) => { failed = e; });
+    check('sem o script do Google: ensureAuth rejeita, nao pendura', failed instanceof w.Error || failed instanceof Error, String(failed));
+    const opened = await App.loadFile('A', 'a.md');
+    check('abrir nota sem login diz pra entrar', opened === false && App.els.saveStatus.textContent === 'Faça login primeiro');
   }
   });
 
@@ -5018,6 +5075,180 @@ async function scenario(title, block) {
     const up = Buffer.from(String(saved.content), 'utf8');
     check('... e o que sobe e UTF-8 limpo: nem FE FF, nem FF FE, nem EF BB BF no comeco',
       !saved.content.startsWith('\ufeff') && !(up[0] === 0xef && up[1] === 0xbb) && up[0] !== 0xfe && up[0] !== 0xff, up.subarray(0, 4));
+  }
+  });
+
+  await scenario('81. Login permanente: com refresh token o token de 1h renova sozinho, sem popup', async () => {
+  {
+    // Autosave with the hour gone: renews through the Worker and saves, nothing asked, nothing shown
+    const { App, drive, type, w } = await boot({ seedStorage: { drivenotes_refresh_token: 'r1' } });
+    drive.put('A', 'a.md', 'A');
+    await App.openFile('A', 'a.md');
+    w.localStorage.setItem('drivenotes_token_expires', String(Date.now() - 1000));
+    const worker = fakeWorker(w, drive);
+    const popup = fakePopup(App);
+    type('digitado uma hora depois');
+    await App.save(); // autosave
+    check('autosave renova pelo Worker e salva no Drive, sem popup', popup.count === 0 && worker.calls.length === 1 && worker.calls[0].grant_type === 'refresh_token' && drive.files.get('A').content === 'digitado uma hora depois', worker.calls);
+    check('token novo em maos, status Salvo', App.accessToken === 'renovado' && App.hasValidToken() && !App.isDirty && App.els.saveStatus.textContent === 'Salvo no Drive');
+  }
+  {
+    // Google says the refresh token is dead: forgotten, and the app is back to the tap rule
+    const { App, drive, type, w } = await boot({ seedStorage: { drivenotes_refresh_token: 'r-morto' } });
+    drive.put('A', 'a.md', 'A');
+    await App.openFile('A', 'a.md');
+    w.localStorage.setItem('drivenotes_token_expires', String(Date.now() - 1000));
+    fakeWorker(w, drive, {
+      refresh_token: { status: 400, body: { error: 'invalid_grant' } },
+      authorization_code: { access_token: 'novo', expires_in: 3600, refresh_token: 'r-novo' },
+    });
+    const popup = fakePopup(App, 'c2');
+    type('texto');
+    await App.save(); // autosave
+    check('refresh token morto: esquecido, rascunho, aviso pra tocar', !w.localStorage.getItem('drivenotes_refresh_token') && popup.count === 0 && App.listDrafts().length === 1 && App.els.saveStatus.textContent === 'Login expirou: toque em salvar');
+    await App.save({ manual: true });
+    check('toque em salvar: popup, refresh token novo, salvo', popup.count === 1 && w.localStorage.getItem('drivenotes_refresh_token') === 'r-novo' && drive.files.get('A').content === 'texto' && !App.isDirty);
+  }
+  {
+    // The Worker unreachable (no network, Cloudflare down) with a refresh token: the draft road, text safe
+    const { App, drive, type, w } = await boot({ seedStorage: { drivenotes_refresh_token: 'r1' } });
+    drive.put('A', 'a.md', 'A');
+    await App.openFile('A', 'a.md');
+    w.localStorage.setItem('drivenotes_token_expires', String(Date.now() - 1000));
+    fakeWorker(w, drive, { refresh_token: 'network' });
+    const popup = fakePopup(App);
+    type('sem Worker');
+    await App.save(); // autosave
+    check('Worker fora: rascunho, "Erro: salvo local", refresh token fica, nenhum popup', popup.count === 0 && App.listDrafts().length === 1 && App.els.saveStatus.textContent === 'Erro: salvo local' && w.localStorage.getItem('drivenotes_refresh_token') === 'r1' && App.isDirty);
+  }
+  {
+    // Two trips to the Drive at once with the hour gone: one refresh, shared
+    const { App, drive, w } = await boot({ seedStorage: { drivenotes_refresh_token: 'r1' } });
+    drive.put('A', 'a.md', 'A'); drive.put('B', 'b.md', 'B');
+    w.localStorage.setItem('drivenotes_token_expires', String(Date.now() - 1000));
+    const worker = fakeWorker(w, drive);
+    const popup = fakePopup(App);
+    const [a, b] = await Promise.all([App.driveGetFileMeta('A'), App.driveGetFileMeta('B')]);
+    check('duas idas ao mesmo tempo: um pedido so ao Worker, nenhum popup', worker.calls.length === 1 && worker.calls[0].grant_type === 'refresh_token' && worker.calls[0].refresh_token === 'r1' && popup.count === 0 && a.id === 'A' && b.id === 'B', worker.calls);
+    check('token novo em maos e guardado', App.accessToken === 'renovado' && App.hasValidToken() && w.localStorage.getItem('drivenotes_token') === 'renovado');
+  }
+  {
+    // The Drive answers 401 (token revoked under the app): one refresh, one retry
+    const { App, drive, w } = await boot({ seedStorage: { drivenotes_refresh_token: 'r1' } });
+    drive.put('A', 'a.md', 'A');
+    const worker = fakeWorker(w, drive);
+    const inner = w.fetch;
+    let denied = 0;
+    w.fetch = async (url, opts) => {
+      if (String(url).includes('/drive/v3/files/A') && denied === 0) {
+        denied++;
+        return { ok: false, status: 401, json: async () => ({}), text: async () => '' };
+      }
+      return inner(url, opts);
+    };
+    const meta = await App.driveGetFileMeta('A');
+    check('401: renova uma vez e repete', denied === 1 && worker.calls.length === 1 && meta.id === 'A' && App.accessToken === 'renovado');
+  }
+  {
+    // The exchange comes back without a refresh token: the hour is kept, and after it the tap rule is back
+    const { App, w, drive } = await boot({ auth: false });
+    fakeWorker(w, drive, { authorization_code: { access_token: 'so-token', expires_in: 3600 } });
+    fakePopup(App, 'c3');
+    await App.ensureAuth();
+    check('troca sem refresh token: o token vale, e nada guardado como refresh', App.accessToken === 'so-token' && App.canRenewQuietly() && !w.localStorage.getItem('drivenotes_refresh_token'));
+    w.localStorage.setItem('drivenotes_token_expires', String(Date.now() - 1000));
+    check('vencido e sem refresh token: nao renova em silencio', !App.canRenewQuietly());
+  }
+  {
+    // The Worker answers something that is not JSON (a 5xx page): treated as no network, refresh token kept
+    const { App, drive, w } = await boot({ seedStorage: { drivenotes_refresh_token: 'r1' } });
+    w.localStorage.setItem('drivenotes_token_expires', String(Date.now() - 1000));
+    fakeWorker(w, drive, { raw: true });
+    let failed = null;
+    await App.ensureAuth({ quiet: true }).catch((e) => { failed = e; });
+    check('resposta que nao e JSON: erro comum, refresh token fica', failed && failed.code !== 'login_needed' && w.localStorage.getItem('drivenotes_refresh_token') === 'r1', String(failed));
+  }
+  });
+
+  await scenario('82. Sair da conta: revoga no Google, limpa o aparelho e volta ao comeco', async () => {
+  {
+    const { App, drive, w, type } = await boot({ idb: true, seedStorage: {
+      drivenotes_refresh_token: 'r1', drivenotes_login_hint: 'eu@exemplo.com',
+    } });
+    drive.put('A', 'a.md', 'A');
+    check('rodape da home mostra a conta', !w.document.getElementById('welcome-account').classList.contains('hidden') && w.document.getElementById('welcome-email').textContent === 'eu@exemplo.com');
+    await App.openFile('A', 'a.md'); // kept on the device from here on
+    type('nao salvo');
+    App.saveDraft();
+    App.showWelcome();
+    fakeWorker(w, drive);
+    let reloads = 0;
+    App.reloadPage = () => { reloads++; };
+
+    // The dialog: what it says, then cancel
+    let dialog = null;
+    App.confirmDialog = async (title, text, ok) => { dialog = { title, text, ok }; return false; };
+    await App.signOut();
+    check('dialogo lista o rascunho que nao esta no Drive', dialog?.title === 'Sair da conta' && dialog.ok === 'Sair'
+      && dialog.text === 'O app esquece o login e apaga o que guardou neste aparelho: notas vistas, recentes e rascunhos. 1 rascunho ainda não está no Drive: a.md. Sair apaga ele.', dialog);
+    check('cancelar: nada apagado', w.localStorage.getItem('drivenotes_refresh_token') === 'r1' && reloads === 0);
+
+    // Confirm, but Google unreachable: nothing wiped
+    App.confirmDialog = async () => true;
+    fakeWorker(w, drive, { revoke: 'network' });
+    await App.signOut();
+    check('revogar sem rede: avisa e nao apaga nada', App.els.saveStatus.textContent === 'Não deu pra sair: tente de novo' && w.localStorage.getItem('drivenotes_refresh_token') === 'r1' && App.listDrafts().length === 1 && reloads === 0);
+
+    // Confirm, Google reachable: revoked and wiped
+    const worker = fakeWorker(w, drive);
+    const left = await App.signOut();
+    const keys = [];
+    for (let i = 0; i < w.localStorage.length; i++) keys.push(w.localStorage.key(i));
+    for (let i = 0; i < w.sessionStorage.length; i++) keys.push(w.sessionStorage.key(i));
+    check('revoga o refresh token no Google', worker.revoked[0] === 'r1' && left === true);
+    check('nada do app sobra no localStorage nem no sessionStorage', !keys.some(k => k.startsWith('drivenotes_')), keys);
+    check('nota guardada no aparelho apagada', (await App.NoteStore.get('A')) === null);
+    check('recarrega, sem token e sem como renovar', reloads === 1 && App.accessToken === null && !App.canRenewQuietly());
+    check('rodape some', w.document.getElementById('welcome-account').classList.contains('hidden'));
+  }
+  {
+    // A save still on its way when the tap lands: it reaches the Drive before anything is wiped
+    const { App, drive, w, type } = await boot({ seedStorage: { drivenotes_refresh_token: 'r1' } });
+    drive.put('A', 'a.md', 'A');
+    await App.openFile('A', 'a.md');
+    type('a caminho');
+    drive.delay = 60;
+    App.flushCurrent(); // the save is queued and slow
+    App.showWelcome();
+    fakeWorker(w, drive);
+    App.reloadPage = () => {};
+    App.confirmDialog = async () => true;
+    await App.signOut();
+    check('salvamento a caminho chega ao Drive antes de apagar', drive.files.get('A').content === 'a caminho');
+  }
+  {
+    // Offline: the dialog does not even open
+    const { App, drive, w } = await boot({ seedStorage: { drivenotes_refresh_token: 'r1' } });
+    fakeWorker(w, drive);
+    Object.defineProperty(w.navigator, 'onLine', { value: false, configurable: true });
+    let asked = false;
+    App.confirmDialog = async () => { asked = true; return true; };
+    const out = await App.signOut();
+    check('sem rede: nao abre o dialogo, avisa', out === false && !asked && App.els.saveStatus.textContent === 'Sem rede: sair da conta precisa de conexão' && w.localStorage.getItem('drivenotes_refresh_token') === 'r1');
+  }
+  {
+    // Two drafts: the plural
+    const { App, drive, w, type } = await boot({ seedStorage: { drivenotes_refresh_token: 'r1' } });
+    drive.put('A', 'a.md', 'A'); drive.put('B', 'b.md', 'B');
+    await App.openFile('A', 'a.md'); type('um'); App.saveDraft();
+    App.currentFile = null; App.isDirty = false;
+    await App.openFile('B', 'b.md'); type('dois'); App.saveDraft();
+    App.showWelcome();
+    fakeWorker(w, drive);
+    let text = null;
+    App.confirmDialog = async (title, t) => { text = t; return false; };
+    await App.signOut();
+    check('dois rascunhos: plural e os dois nomes', /2 rascunhos ainda não estão no Drive: (b\.md, a\.md|a\.md, b\.md)\. Sair apaga eles\./.test(text), text);
   }
   });
 

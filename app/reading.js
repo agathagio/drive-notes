@@ -275,7 +275,7 @@ Object.assign(App, {
     // Finding a note by its name always asks the Drive: without network there is nothing to show
     if (navigator.onLine === false) return say('Sem rede.');
     // Never a login popup from a long press: the tap on Abrir is where that can happen
-    if (!this.hasValidToken()) return say('O login do Google venceu.');
+    if (!this.canRenewQuietly()) return say('O login do Google venceu.');
     let found;
     try {
       found = await this.findLinkedNote(target);
@@ -650,7 +650,7 @@ Object.assign(App, {
 
   /** Blob URL for an image found by file name, or null. Never opens a login popup just for a picture. */
   async fetchEmbed(name) {
-    if (!this.hasValidToken()) return null;
+    if (!this.canRenewQuietly()) return null;
     const pick = await this.findEmbedFile(name);
     if (!pick) return null;
     const response = await this.driveFetch(`https://www.googleapis.com/drive/v3/files/${pick.id}?alt=media`);

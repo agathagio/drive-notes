@@ -1,5 +1,5 @@
 // Drive Notes: Service Worker
-const CACHE_NAME = 'drivenotes-v62';
+const CACHE_NAME = 'drivenotes-v63';
 
 // Renderer and sanitizer come from CDNs; without them offline the reading view falls back to
 // plain text. Must match the script tags in index.html, hash included (scenario 0 of
@@ -157,11 +157,13 @@ async function receiveShare(request) {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Never cache Google API calls
+  // Never cache Google API calls, the login endpoints, nor the login Worker
   if (
     url.hostname === 'www.googleapis.com' ||
+    url.hostname === 'oauth2.googleapis.com' ||
     url.hostname === 'apis.google.com' ||
-    url.hostname === 'accounts.google.com'
+    url.hostname === 'accounts.google.com' ||
+    url.hostname.endsWith('.workers.dev')
   ) {
     return;
   }

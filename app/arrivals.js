@@ -96,7 +96,7 @@ Object.assign(App, {
   /** The "Buscar" shortcut: the vault's folder screen with the caret in the search field. An opening from
       the icon is no tap inside the page, and the login popup only opens from one: an expired login asks first. */
   async startSearch() {
-    if (!this.hasValidToken()
+    if (!this.canRenewQuietly()
       && !(await this.confirmDialog('Buscar no vault', 'O login do Google venceu. Entre pra buscar.', 'Entrar', { danger: false }))) return;
     await this.browseVault();
     if (document.body.dataset.view === 'browse') this.els.browserSearch.focus();
@@ -142,7 +142,7 @@ Object.assign(App, {
       els.arrivalMessage.textContent = text;
       els.arrivalMessage.hidden = false;
     };
-    if (!this.hasValidToken()) {
+    if (!this.canRenewQuietly()) {
       say('O login do Google venceu.');
       els.arrivalLogin.hidden = false;
       return;

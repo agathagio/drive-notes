@@ -242,8 +242,8 @@ Object.assign(App, {
     const born = this.getContent();
 
     // Create on Drive in background, not awaited, so the user can type immediately.
-    // If it fails, the first save creates the file instead.
-    if (this.hasValidToken()) {
+    // If it fails, the first save creates the file instead. Needs a login that renews without a window.
+    if (this.canRenewQuietly()) {
       this.setSaveStatus('saving', 'Criando no Drive...');
       this.enqueue(() => this.createOnDrive(file, born)).then(() => {
         if (this.currentFile !== file) return;
@@ -287,9 +287,10 @@ Object.assign(App, {
       return;
     }
 
-    // A tap is the only moment a login popup is allowed to open, so an expired login is renewed here.
-    // Automatic saves never try: they fall back to the local draft (see saveSnapshot).
-    if (manual && !this.hasValidToken()) {
+    // With a refresh token the login renews inside driveFetch. Without one, a tap is the only moment a
+    // login popup is allowed to open, so an expired login is renewed here; automatic saves never try:
+    // they fall back to the local draft (see saveSnapshot).
+    if (manual && !this.canRenewQuietly()) {
       this.saveDraft();
       try {
         await this.ensureAuth();
@@ -337,7 +338,7 @@ Object.assign(App, {
       return true;
     }
 
-    if (!this.hasValidToken()) {
+    if (!this.canRenewQuietly()) {
       // No usable login: keep it locally. It stays flagged as unsaved because it is not on Drive.
       this.saveDraft(file, content);
       if (isCurrent()) {
@@ -391,7 +392,8 @@ Object.assign(App, {
       console.error('Drive save failed:', e);
       this.saveDraft(file, content);
       if (isCurrent()) {
-        this.setSaveStatus('error', 'Erro: salvo local');
+        // A refresh token found dead on the way: the same message as a login expired without one
+        this.setSaveStatus('error', e.code === 'login_needed' ? 'Login expirou: toque em salvar' : 'Erro: salvo local');
       } else {
         this.setSaveStatus('error', `Erro ao salvar ${file.name}: rascunho guardado`);
       }
@@ -464,7 +466,8 @@ Object.assign(App, {
     return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
   },
 
-  /** `content` the way it goes to the Drive. Never throws: when in doubt, the note is saved as it is. */
+  /** `content` the way it goes to the Drive. Throws only when the login is gone (err.code 'login_needed'),
+      since then the save cannot go through either; otherwise, when in doubt, the note is saved as it is. */
   async withDates(file, content) {
     const name = file.name.toLowerCase();
     if (!name.endsWith('.md') || name.includes('-antigo') || CONFIG.NO_DATES_FILES.includes(name)) return content;
@@ -473,6 +476,8 @@ Object.assign(App, {
       const dated = await this.folderKeepsDates(file.parents?.[0] || CONFIG.DEFAULT_FOLDER_ID);
       return dated ? this.stampDates(content, this.today(), !file.id) : content;
     } catch (e) {
+      // A refresh token found dead here: going on would send the save with no token at all
+      if (e.code === 'login_needed') throw e;
       console.warn('Could not tell where the note lives, dates left alone:', e);
       return content;
     }

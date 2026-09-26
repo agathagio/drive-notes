@@ -4,7 +4,7 @@ Um app de celular pra ler e editar notas em markdown direto no Google Drive. Sem
 
 **App:** https://agathagio.github.io/drive-notes/
 
-> O app é de uso pessoal e o login do Google está restrito à minha conta, então o link acima para na tela de login pra qualquer outra pessoa. Os prints abaixo mostram as telas com dados de exemplo. Pra ter o seu, veja [Rodar o seu](#rodar-o-seu).
+> O app é de uso pessoal: as pastas que ele abre são as do meu Drive, então o link acima não serve pra mais ninguém (o login até passa, mas cai numa pasta que não existe na sua conta). Os prints abaixo mostram as telas com dados de exemplo. Pra ter o seu, veja [Rodar o seu](#rodar-o-seu).
 
 ## Por que existe
 
@@ -58,16 +58,16 @@ Foi a parte que mais deu trabalho, e a que mais importa num app de notas.
 - Tudo que é digitado vira rascunho no aparelho antes de ir pro Drive. Trocar de app, fechar a aba ou ficar sem sinal não perde nada.
 - Antes de salvar, o app confere se o arquivo mudou no Drive desde que foi aberto (por exemplo, editado no computador). Se mudou, pergunta o que fazer: salvar a minha versão como cópia, sobrescrever, descartar a minha ou decidir depois.
 - Toda escrita no Drive passa por uma fila única, pra criar e salvar ao mesmo tempo não duplicar arquivo.
-- Login expirado no meio da escrita guarda o rascunho e avisa. Um toque em salvar renova o login e sincroniza.
+- O login é feito uma vez por aparelho e se renova sozinho. Sem como renovar (conta desconectada), escrever guarda o rascunho e avisa; um toque em salvar refaz o login e sincroniza.
 
 ## Como é feito
 
 - **JavaScript puro, sem framework e sem build no deploy.** O que se publica: `index.html`, `style.css`, `sw.js`, os catorze `app/*.js` (um por área; `app/core.js` declara o app e os outros o estendem) e o `vendor/codemirror.js`, o único gerado (por esbuild, uma vez, e commitado). Push na `main` é deploy, via GitHub Pages.
 - **PWA:** instala na tela inicial do celular, abre em tela cheia, e o service worker guarda o app e as bibliotecas pra abrir sem rede.
-- **Google Drive API com OAuth** (Google Identity Services). Não tem servidor: o navegador fala direto com o Drive, e o token fica só no aparelho.
+- **Google Drive API com OAuth** (Google Identity Services). O navegador fala direto com o Drive e o token fica só no aparelho. A única peça de servidor é um [Cloudflare Worker](worker/index.js) de umas 60 linhas, sem estado, que guarda o segredo do cliente Google pra trocar o código do login e renovar o token de 1 hora.
 - **Editor: [CodeMirror 6](https://codemirror.net/).** Ele não vem de CDN: o pacote está versionado no repositório, em `vendor/codemirror.js`, gerado uma vez por esbuild e commitado, então o deploy continua sendo só um push e o editor abre sem rede já na primeira visita.
 - **As outras bibliotecas, via CDN com versão fixa:** [marked](https://github.com/markedjs/marked) pra renderizar e [DOMPurify](https://github.com/cure53/DOMPurify) pra sanitizar o HTML, já que o login dá acesso ao Drive inteiro.
-- **Testes:** o app real (os `app/*.js` concatenados) roda no jsdom contra um Google Drive falso em memória (93 cenários, 885 checagens), cada cenário isolado. O que o jsdom não enxerga (ditado por voz, o gesto de voltar, a barra de formatação no editor de verdade, a redução da foto, o canvas do desenho, retomar onde parou) roda num Chrome ou Edge headless pelo protocolo de depuração (23 cenários, 151 checagens), e o service worker tem uma suíte própria, com um servidor local no papel do GitHub Pages (9 cenários, 34 checagens). Um quarto script tira os prints de todas as telas em tamanho de celular. Detalhes em [`tests/README.md`](tests/README.md).
+- **Testes:** o app real (os `app/*.js` concatenados) roda no jsdom contra um Google Drive falso em memória (95 cenários, 911 checagens), cada cenário isolado. O que o jsdom não enxerga (ditado por voz, o gesto de voltar, a barra de formatação no editor de verdade, a redução da foto, o canvas do desenho, retomar onde parou) roda num Chrome ou Edge headless pelo protocolo de depuração (23 cenários, 151 checagens), e o service worker tem uma suíte própria, com um servidor local no papel do GitHub Pages (9 cenários, 34 checagens). Um quarto script tira os prints de todas as telas em tamanho de celular. O Worker tem 7 testes próprios em node --test. Detalhes em [`tests/README.md`](tests/README.md).
 
 Construído com IA: eu defino o problema, decido o comportamento e testo no aparelho; o código é escrito em sessões com o [Claude Code](https://claude.com/claude-code).
 
@@ -77,9 +77,10 @@ Construído com IA: eu defino o problema, decido o comportamento e testo no apar
 - Offline é parcial: sem rede o app abre, as últimas 100 notas já vistas abrem do aparelho, e dá pra escrever; o texto fica guardado até ser salvo no Drive. Uma nota que nunca foi aberta neste aparelho precisa de internet.
 - O voltar usa a API CloseWatcher, que hoje só existe em navegadores baseados no Chromium. Nos outros, o app cai pro histórico do navegador, que é menos confiável.
 - O app é travado em retrato (`orientation` no `manifest.json`), então girar o aparelho não muda nada.
+- Sair da conta precisa de rede: revogar a permissão no Google é o que faz o botão valer.
 
 ## Rodar o seu
 
-O [`SETUP.md`](SETUP.md) tem o passo a passo: criar o projeto no Google Cloud, ativar a Drive API, gerar o Client ID, apontar o app pras suas pastas e publicar no GitHub Pages.
+O [`SETUP.md`](SETUP.md) tem o passo a passo: criar o projeto no Google Cloud, ativar a Drive API, gerar o Client ID, apontar o app pras suas pastas, publicar no GitHub Pages e subir o Worker de login na Cloudflare.
 
 Pra rodar os testes: `npm install` uma vez, depois `npm test`.

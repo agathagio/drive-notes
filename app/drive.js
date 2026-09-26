@@ -43,21 +43,42 @@ function makeStore({ name, store, upgrade, warn }) {
         return fallback;
       }
     },
+    /** Close and delete the whole database. Never throws. Opening again afterwards makes an empty one. */
+    async wipe() {
+      try {
+        const opened = await this.open();
+        db = null;
+        if (opened) opened.close();
+        if (typeof indexedDB === 'undefined') return;
+        await new Promise((resolve) => {
+          const request = indexedDB.deleteDatabase(name);
+          // blocked: another connection (the service worker's) still holds it; the deletion lands when it closes
+          request.onsuccess = request.onerror = request.onblocked = () => resolve();
+        });
+      } catch (e) {
+        tell(e);
+      }
+    },
   };
 }
 
 Object.assign(App, {
   // ── Google Drive API ──
 
-  /** fetch with the access token; on 401 re-authenticates and retries once */
+  /** fetch with the access token. Renews it here, quietly, when the hour has passed and there is a refresh
+      token, so that no caller has to remember; a window is only ever opened by ensureAuth() from a tap.
+      On 401 re-authenticates (quietly too) and retries once. */
   async driveFetch(url, options = {}, retried = false) {
+    if (!this.hasValidToken() && localStorage.getItem(KEYS.REFRESH_TOKEN)) {
+      await this.ensureAuth({ quiet: true });
+    }
     const response = await fetch(url, {
       ...options,
       headers: { ...options.headers, 'Authorization': `Bearer ${this.accessToken}` },
     });
 
     if (response.status === 401 && !retried) {
-      await this.reAuth();
+      await this.reAuth({ quiet: true });
       return this.driveFetch(url, options, true);
     }
 

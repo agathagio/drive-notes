@@ -1029,6 +1029,43 @@ body.has-selection .toolbar-btn.toolbar-extract {
   padding: 10px 20px;
 }
 
+/* The foot of the home screen: the account signed in, and the way out. At the bottom while the screen
+   has room (margin-top: auto in the column), after the lists once they outgrow it. Only the two greys
+   of the text: it is the least important thing on the screen. */
+.welcome-account {
+  margin-top: auto;
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.welcome-signout {
+  background: none;
+  border: none;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-decoration: underline;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.welcome-signout:hover, .welcome-signout:active {
+  color: var(--error);
+}
+
+/* With the foot shown, its auto margin alone would take all the free space and pin the title and the
+   buttons to the top (auto margins win over justify-content). A second auto margin, on the title, splits
+   that space in two: the block stays centred over the foot. Hidden foot: no auto margins, safe center as before. */
+.welcome:has(.welcome-account:not(.hidden)) > h2 {
+  margin-top: auto;
+}
+
 /* ── Recents list ── */
 
 .recents-list {

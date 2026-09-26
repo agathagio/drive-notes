@@ -23,6 +23,9 @@ const CONFIG = {
   NO_DATES_FILES: ['claude.md', 'skill.md'],
   // Pause in the typing, in ms, before a search goes to the Drive
   SEARCH_DELAY: 500,
+  // The Worker that holds the Google client secret (worker/index.js): trades the login's code for the
+  // tokens and renews the access token. Public, like CLIENT_ID. Set at deploy time (SETUP.md).
+  AUTH_URL: 'https://drive-notes-auth.agathagio.workers.dev/',
 };
 
 const SCOPES = 'https://www.googleapis.com/auth/drive';
@@ -38,6 +41,7 @@ const SWIPE_SCROLL = 36;
 const KEYS = {
   TOKEN: 'drivenotes_token',
   TOKEN_EXPIRES: 'drivenotes_token_expires',
+  REFRESH_TOKEN: 'drivenotes_refresh_token', // lasts until revoked: it is what makes the login permanent
   LOGIN_HINT: 'drivenotes_login_hint',
   RECENTS: 'drivenotes_recents',
   MEDIA_FOLDER: 'drivenotes_media_folder',
@@ -66,8 +70,6 @@ const App = {
   autoSaveTimer: null,
 
   accessToken: null,
-
-  tokenClient: null,
 
   // All Drive writes run through this chain, one at a time, so a create and a save
   // (or two saves) of the same file can never race and duplicate or reorder content
@@ -700,6 +702,7 @@ const App = {
     // Welcome buttons
     document.getElementById('welcome-new')?.addEventListener('click', () => this.newFile());
     document.getElementById('welcome-open')?.addEventListener('click', () => this.browseVault());
+    document.getElementById('welcome-signout')?.addEventListener('click', () => this.signOut());
 
     // Diagnostics: five quick taps on the welcome title
     let taps = [];

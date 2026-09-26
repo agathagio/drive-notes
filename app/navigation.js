@@ -281,6 +281,7 @@ Object.assign(App, {
       `modo de voltar: ${this.useWatcher ? 'CloseWatcher' : 'History API'}`,
       `instalado (standalone): ${standalone}`,
       `view: ${document.body.dataset.view}`,
+      `login: ${localStorage.getItem(KEYS.REFRESH_TOKEN) ? 'renovável' : this.accessToken ? 'só token' : 'nenhum'} (${CONFIG.AUTH_URL})`,
       navigator.userAgent,
       '',
       ...this._log,
