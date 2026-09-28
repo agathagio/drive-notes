@@ -27,6 +27,8 @@ const CONFIG = {
   HIDDEN_FOLDERS: ['_media', '_tasknotes', '_templates'],
   // How many items an open folder of the home tree shows at a time ("Ver mais" brings the next ones)
   TREE_PAGE: 30,
+  // How many folders the home tree asks the Drive for at the same time, one level ahead of the taps
+  TREE_AHEAD: 4,
   // The Worker that holds the Google client secret (worker/index.js): trades the login's code for the
   // tokens and renews the access token. Public, like CLIENT_ID. Set at deploy time (SETUP.md).
   AUTH_URL: 'https://drive-notes-auth.agathagio.workers.dev/',

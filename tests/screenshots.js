@@ -33,6 +33,15 @@ const SETUP = `
   const notes = ['00-estado-projeto.md', '01-core.md', 'guia-voz-geral.md', 'Uma nota com um nome bem comprido pra ver como a linha quebra no celular.md', 'voz-blue.md'];
   // Each note's folder: it is what the [[ list shows in smaller type under the name
   const notesIn = ['ROOT', 'd5', 'd4', 'd3', 'd5'];
+  const deepFolder = (id, name) => ({ id, name, mimeType: FOLDER });
+  const deepNote = (id, name) => ({ id, name, mimeType: 'text/markdown', modifiedTime: new Date(now - 5e6).toISOString() });
+  const deep = {
+    d4: [deepFolder('a1', 'saude'), deepNote('an1', 'areas-indice.md')],
+    a1: [deepFolder('a2', 'exames'), deepNote('an2', 'plano-de-saude.md')],
+    a2: [deepFolder('a3', '2026'), deepNote('an3', 'como-pedir-resultado.md')],
+    a3: [deepFolder('a4', 'setembro'), deepNote('an4', 'agosto-resumo.md')],
+    a4: [deepNote('an5', 'Hemograma completo com os comentários da consulta.md'), deepNote('an6', 'vitamina-d.md')],
+  };
   window.fetch = async (url) => {
     const u = new URL(url); const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
     // The embedded image of the sample note: found by name, then downloaded as a blob
@@ -57,6 +66,9 @@ const SETUP = `
     if (dir) return ok({ id: 'd' + dir[1], name: folders[dir[1]], parents: ['ROOT'] });
     if (u.searchParams.get('alt') === 'media') return ok(${JSON.stringify(NOTE)});
     if (/files\\/[^/]+$/.test(u.pathname)) return ok({ id: 'N', name: 'Relatório semanal.md', modifiedTime: 't', parents: ['ROOT'] });
+    // A path five folders deep under 10-areas, for the deep tree's screenshot
+    const parent = /^'([^']+)' in parents/.exec(u.searchParams.get('q') || '');
+    if (parent && deep[parent[1]]) return ok({ files: deep[parent[1]] });
     return ok({ files: [
       ...folders.map((name, i) => ({ id: 'd' + i, name, mimeType: FOLDER })),
       ...notes.map((name, i) => ({ id: 'n' + i, name, mimeType: 'text/markdown', modifiedTime: new Date(now - i * i * 40e6 - 5e6).toISOString() })),
@@ -92,6 +104,24 @@ const SETUP = `
     await js(`__App.openMenu(); 'ok'`);
     await shot('1c-inicio-menu');
     await js(`__App.closeMenu(); 'ok'`);
+    // A path five folders deep, opened one tap at a time, with a note at the bottom: how much width is left for the names
+    const tapFolder = (name) => js(`[...document.querySelectorAll('#tree-list .tree-row.is-folder .tree-item')].find((b) => b.textContent === ${JSON.stringify(name)}).click(); 'ok'`);
+    await tapFolder('20-projetos');
+    for (const name of ['10-areas', 'saude', 'exames', '2026', 'setembro']) {
+      await sleep(250);
+      await tapFolder(name);
+    }
+    await sleep(250);
+    await js(`[...document.querySelectorAll('#tree-list .tree-row.is-folder')].find((li) => li.textContent === '10-areas').scrollIntoView(); 'ok'`);
+    await shot('1d-inicio-arvore-funda');
+    await js(`JSON.stringify((() => {
+      const note = [...document.querySelectorAll('#tree-list .tree-name')].find((s) => s.textContent.startsWith('Hemograma'));
+      const withBackground = [...document.querySelectorAll('#tree-list .tree-item')]
+        .filter((b) => getComputedStyle(b).backgroundColor !== 'rgba(0, 0, 0, 0)').map((b) => b.textContent);
+      const lines = [...document.querySelectorAll('#tree-list .tree-children')].filter((ul) => getComputedStyle(ul).borderLeftWidth !== '0px').length;
+      return { noteNameLeft: Math.round(note.getBoundingClientRect().left), withBackground, childLines: lines };
+    })())`).then((r) => console.log(`  (arvore funda: ${r})`));
+    for (const name of ['setembro', '2026', 'exames', 'saude', '10-areas']) await tapFolder(name);
     await js(`__App.browseVault().then(() => 'ok')`);
     await shot('2-pastas');
     await js(`__App.els.browserSearch.value = 'voz'; __App.onSearchInput(); 'ok'`);

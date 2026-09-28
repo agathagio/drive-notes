@@ -5267,6 +5267,43 @@ async function scenario(title, block) {
   const showHome = async (App) => { App.renderHome(); await sleep(80); };
   const makeDir = (drive, id, name, parent) => { drive.put(id, name, '', [parent]); drive.files.get(id).mimeType = FOLDER; };
   const listsOf = (drive, id) => drive.log.filter((l) => l === `LIST '${id}' in parents and trashed = false`).length;
+  const until = async (cond, limit = 3000) => {
+    const end = Date.now() + limit;
+    while (!cond() && Date.now() < end) await sleep(10);
+    return cond();
+  };
+  // Nothing waiting, nothing on its way, one level ahead of the taps
+  const aheadDone = (App) => App._tree.ahead.length === 0 && App._tree.fetching.size === 0;
+  // The folder listings behind a gate, set by folder id, in front of whatever w.fetch is: `fail` answers 500,
+  // `delay` adds ms, `holdFirst(id)` holds only the first listing of that folder until `release(id)`.
+  // `active` and `peak` count the listings on their way; `asked` is every folder asked, in order.
+  const gateFolders = (w) => {
+    const inner = w.fetch;
+    const holds = new Map();
+    const gate = {
+      fail: new Set(), delay: new Map(), active: 0, peak: 0, asked: [],
+      holdFirst(id) { let open; holds.set(id, { promise: new Promise((r) => { open = r; }), open, used: false }); },
+      release(id) { holds.get(id)?.open(); },
+    };
+    w.fetch = async (url, opts) => {
+      const parent = /^'([^']+)' in parents/.exec(new URL(String(url)).searchParams.get('q') || '');
+      if (!parent) return inner(url, opts);
+      const id = parent[1];
+      gate.asked.push(id);
+      gate.active++;
+      gate.peak = Math.max(gate.peak, gate.active);
+      try {
+        const hold = holds.get(id);
+        if (hold && !hold.used) { hold.used = true; await hold.promise; }
+        if (gate.delay.has(id)) await sleep(gate.delay.get(id));
+        if (gate.fail.has(id)) return { ok: false, status: 500, json: async () => ({}), text: async () => '' };
+        return await inner(url, opts);
+      } finally {
+        gate.active--;
+      }
+    };
+    return gate;
+  };
 
   await scenario('H1. Home: a raiz na ordem do Obsidian, sem as pastas de sistema', async () => {
     const { App, drive, w } = await boot();
@@ -5292,13 +5329,14 @@ async function scenario(title, block) {
     seedVault(drive);
     const d = w.document;
     await showHome(App);
+    await until(() => aheadDone(App));
+    check('a pasta veio por tras antes do toque: uma listagem', listsOf(drive, 'd-proj') === 1);
     treeButton(d, '20-projetos').click();
-    check('a pasta abre na hora, com o carregando', treeRows(d).includes('20-projetos/*') && !!d.querySelector('#tree-list .tree-loading'));
-    await sleep(80);
     const at = treeRows(d).indexOf('20-projetos/*');
-    check('os filhos entram logo abaixo da pasta', treeRows(d)[at + 1] === 'nota do projeto', treeRows(d));
-    check('o carregando some', !d.querySelector('#tree-list .tree-loading'));
-    check('uma listagem da pasta', listsOf(drive, 'd-proj') === 1);
+    check('a pasta abre na hora, com os filhos logo abaixo', at >= 0 && treeRows(d)[at + 1] === 'nota do projeto', treeRows(d));
+    check('... sem carregando e sem barrinhas', !d.querySelector('#tree-list .tree-loading') && !d.querySelector('#tree-list .tree-skeleton'));
+    await sleep(80);
+    check('o toque atualiza a pasta por tras: segunda listagem', listsOf(drive, 'd-proj') === 2);
     check('abrir pasta nao e navegacao: pilha vazia, voltar sai do app', App.navStack.length === 0 && w.__back() === 'EXIT');
     check('a view continua sendo a home', d.body.dataset.view === 'welcome');
 
@@ -5308,7 +5346,7 @@ async function scenario(title, block) {
     check('reabrir desenha na hora o que ja tinha, sem carregando',
       treeRows(d).includes('nota do projeto') && !d.querySelector('#tree-list .tree-loading'));
     await sleep(80);
-    check('e atualiza por tras', listsOf(drive, 'd-proj') === 2);
+    check('e atualiza por tras', listsOf(drive, 'd-proj') === 3);
 
     treeButton(d, 'nota do projeto').click(); await sleep(80);
     check('toque na nota abre em leitura', App.currentFile?.id === 'n-sub' && d.body.dataset.view === 'preview');
@@ -5322,17 +5360,19 @@ async function scenario(title, block) {
     seedVault(drive);
     const d = w.document;
     const messages = () => [...d.querySelectorAll('#tree-list .tree-message')].map((li) => li.textContent);
+    // The two folders fail from the start, so the listings asked ahead fail too and nothing is kept of them
+    const gate = gateFolders(w);
+    gate.fail.add('d-10').add('d-proj');
     await showHome(App);
-    drive.failReads = true;
+    await until(() => aheadDone(App));
     treeButton(d, '10-areas').click(); await sleep(80);
     check('listagem que falha mostra o erro', JSON.stringify(messages()) === JSON.stringify(['Erro ao carregar a pasta']), messages());
     check('a pasta continua aberta', treeRows(d).includes('10-areas/*'));
-    drive.failReads = false;
+    gate.fail.delete('d-10');
     treeButton(d, '10-areas').click(); await sleep(80);
     check('o toque seguinte tenta de novo, e nao fecha', treeRows(d).includes('10-areas/*') && JSON.stringify(messages()) === JSON.stringify(['Pasta vazia']), messages());
-    drive.failReads = true;
     treeButton(d, '20-projetos').click(); await sleep(80);
-    drive.failReads = false;
+    gate.fail.delete('d-proj');
     treeButton(d, '20-projetos').click(); await sleep(80);
     drive.failReads = true;
     App.renderHome(); await sleep(80);
@@ -5559,6 +5599,202 @@ async function scenario(title, block) {
     App.els.editorElement.dispatchEvent(new w.Event('input'));
     App.els.btnOpen.click(); await sleep(80); await App._saveChain;
     check('com edicao pendente, salva antes de ir', bodyOf(drive.files.get('L').content) === 'editado' && d.body.dataset.view === 'welcome');
+  });
+
+  // ── Home: one level ahead of the taps, and the waiting in the diagnostics panel (v65) ──
+
+  await scenario('H12. Home: as pastas de dentro sao pedidas um nivel na frente, e nao dois', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    makeDir(drive, 'd-deep', 'fundo', 'd-proj');
+    makeDir(drive, 'd-deeper', 'mais-fundo', 'd-deep');
+    const d = w.document;
+    await showHome(App);
+    await until(() => aheadDone(App));
+    check('depois da raiz: as quatro pastas dela pedidas uma vez cada',
+      ['d-proj', 'd-inbox', 'd-10', 'd-2'].every((id) => listsOf(drive, id) === 1), drive.log);
+    check('... e as de dentro delas, nao', listsOf(drive, 'd-deep') === 0);
+    check('... nada disso foi pro aparelho: so a raiz guardada',
+      JSON.stringify(Object.keys(JSON.parse(w.localStorage.getItem('drivenotes_tree_listings')))) === JSON.stringify([VAULT]));
+
+    treeButton(d, '20-projetos').click();
+    check('toque em pasta ja listada: as de dentro saem na hora, sem esperar a atualizacao',
+      App._tree.fetching.has('d-deep') && App._tree.loading.has('d-proj'), [...App._tree.fetching]);
+    await until(() => aheadDone(App) && App._tree.loading.size === 0);
+    check('a de dentro foi pedida uma vez, mesmo com a atualizacao da pasta chegando depois', listsOf(drive, 'd-deep') === 1);
+    check('a que veio por tras nao pede a de dentro dela', listsOf(drive, 'd-deeper') === 0);
+    check('pasta pedida por tras e fechada: a arvore nao mudou', treeRows(d).includes('fundo/') && !treeRows(d).includes('mais-fundo/'), treeRows(d));
+  });
+
+  await scenario('H13. Home: no maximo 4 idas por tras ao mesmo tempo, sem pedir duas vezes a mesma pasta', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    for (let i = 1; i <= 6; i++) makeDir(drive, `d-x${i}`, `x${i}`, VAULT);
+    const d = w.document;
+    const gate = gateFolders(w);
+    const inside = ['d-proj', 'd-inbox', 'd-10', 'd-2', ...[1, 2, 3, 4, 5, 6].map((i) => `d-x${i}`)];
+    inside.forEach((id) => gate.holdFirst(id));
+    App.renderHome();
+    await until(() => App._tree.fetching.size > 0 && gate.active === 4);
+    await sleep(40);
+    check('dez pastas na raiz: quatro a caminho, seis na fila', App._tree.fetching.size === 4 && App._tree.ahead.length === 6 && gate.active === 4,
+      { fetching: [...App._tree.fetching], ahead: App._tree.ahead, active: gate.active });
+    App.askAhead(VAULT);
+    check('pedir de novo nao duplica nada', App._tree.fetching.size === 4 && App._tree.ahead.length === 6 && new Set(App._tree.ahead).size === 6);
+
+    const waiting = App._tree.ahead[App._tree.ahead.length - 1];
+    const name = drive.files.get(waiting).name;
+    gate.release(waiting); // the gate holds a folder's first listing, and this one's is the tap's
+    treeButton(d, name).click();
+    check('toque numa pasta da fila: ela sai da fila e o toque assume', !App._tree.ahead.includes(waiting) && App._tree.loading.has(waiting));
+    await until(() => !App._tree.loading.has(waiting));
+    check('... e ela abre com a listagem do toque', !treeRows(d).includes(`${name}/`) && treeRows(d).includes(`${name}/*`) && !d.querySelector('#tree-list .tree-loading'), treeRows(d));
+
+    inside.forEach((id) => gate.release(id));
+    await until(() => aheadDone(App));
+    check('o teto nunca passou de 4 (fora a listagem do toque)', gate.peak <= 5, gate.peak);
+    check('cada pasta foi pedida uma vez so', inside.every((id) => listsOf(drive, id) === 1), inside.map((id) => `${id}:${listsOf(drive, id)}`));
+  });
+
+  await scenario('H14. Home: falha por tras e silenciosa, e pode ser pedida de novo', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    const d = w.document;
+    const gate = gateFolders(w);
+    gate.fail.add('d-10').add('d-proj');
+    await showHome(App);
+    await until(() => aheadDone(App));
+    check('as duas foram pedidas', gate.asked.includes('d-10') && gate.asked.includes('d-proj'), gate.asked);
+    check('nenhuma mensagem, nenhuma barrinha, nada marcado como falha',
+      !d.querySelector('#tree-list .tree-message') && !d.querySelector('#tree-list .tree-skeleton') && App._tree.failed.size === 0 && App._tree.loading.size === 0);
+    check('a arvore continua no lugar, sem o Entrar', !d.getElementById('tree').hidden && d.getElementById('tree-login').hidden);
+    check('nada guardado das duas', !App._folderCache.has('d-10') && !App._folderCache.has('d-proj'));
+    gate.fail.clear();
+    App.renderHome();
+    await until(() => aheadDone(App) && App._folderCache.has('d-10'));
+    check('a leva seguinte pede de novo, e agora guarda', App._folderCache.has('d-10') && App._folderCache.has('d-proj'));
+  });
+
+  await scenario('H15. Home: toque que chega antes da ida por tras', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    const d = w.document;
+    const gate = gateFolders(w);
+    gate.holdFirst('d-proj');
+    let writes = 0;
+    const set = App._folderCache.set.bind(App._folderCache);
+    App._folderCache.set = (id, items) => { if (id === 'd-proj') writes++; return set(id, items); };
+    App.renderHome();
+    await until(() => App._tree.fetching.has('d-proj') && gate.active === 1);
+    treeButton(d, '20-projetos').click();
+    check('a ida por tras ainda nao respondeu: carregando e barrinhas',
+      !!d.querySelector('#tree-list .tree-loading') && d.querySelectorAll('#tree-list .tree-skeleton').length === 3);
+    await until(() => !App._tree.loading.has('d-proj'));
+    check('a listagem do toque chega e desenha', treeRows(d).includes('nota do projeto') && !d.querySelector('#tree-list .tree-loading') && !d.querySelector('#tree-list .tree-skeleton'), treeRows(d));
+    drive.put('n-late', 'chegou-depois.md', 'x', ['d-proj']);
+    gate.release('d-proj');
+    await until(() => aheadDone(App));
+    check('a ida por tras que chega depois nao grava por cima', writes === 1 && !treeRows(d).includes('chegou-depois'), { writes, rows: treeRows(d) });
+  });
+
+  await scenario('H16. Home: so as pastas que aparecem sao pedidas (sistema escondida, corte do Ver mais)', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    makeDir(drive, 'd-media', '_media', VAULT);
+    makeDir(drive, 'd-tpl', '_templates', VAULT);
+    makeDir(drive, 'd-big', 'grande', VAULT);
+    for (let i = 1; i <= 32; i++) makeDir(drive, `d-sub${i}`, `sub-${String(i).padStart(2, '0')}`, 'd-big');
+    const d = w.document;
+    await showHome(App);
+    await until(() => aheadDone(App));
+    check('pastas de sistema escondidas: nao pedidas', listsOf(drive, 'd-media') === 0 && listsOf(drive, 'd-tpl') === 0);
+    check('... a pasta grande, sim', listsOf(drive, 'd-big') === 1);
+    treeButton(d, 'grande').click();
+    await until(() => aheadDone(App) && App._tree.loading.size === 0);
+    check('pasta com 32 pastas: as 30 na tela foram pedidas', [...Array(30)].every((_, i) => listsOf(drive, `d-sub${i + 1}`) === 1));
+    check('... as duas depois do Ver mais, nao', listsOf(drive, 'd-sub31') === 0 && listsOf(drive, 'd-sub32') === 0);
+    d.querySelector('#tree-list .tree-more .tree-item').click();
+    await until(() => aheadDone(App));
+    check('o Ver mais pede as que entraram na vista', listsOf(drive, 'd-sub31') === 1 && listsOf(drive, 'd-sub32') === 1);
+    check('... sem pedir de novo as de antes', listsOf(drive, 'd-sub1') === 1);
+  });
+
+  await scenario('H17. Home: nenhuma ida por tras sem login, nenhuma abre a janela do Google', async () => {
+    const listings = JSON.stringify({ [VAULT]: [{ id: 'd-proj', name: '20-projetos', isFolder: true }, { id: 'd-10', name: '10-areas', isFolder: true }] });
+    {
+      const { App, drive, w } = await boot({ auth: false, seedStorage: { drivenotes_tree_listings: listings } });
+      seedVault(drive);
+      const worker = fakeWorker(w, drive);
+      const popup = fakePopup(App);
+      await showHome(App);
+      App.askAhead(VAULT);
+      await sleep(40);
+      check('sem login: nada na fila, nada pedido ao Drive, nenhuma janela',
+        aheadDone(App) && drive.count('LIST') === 0 && popup.count === 0 && worker.calls.length === 0, drive.log);
+    }
+    {
+      // A refresh token the Worker says is dead: the listings ahead give up without a window
+      const { App, drive, w } = await boot({ auth: false, seedStorage: { drivenotes_refresh_token: 'r1', drivenotes_tree_listings: listings } });
+      await App._refreshing?.catch(() => {});
+      seedVault(drive);
+      const worker = fakeWorker(w, drive, { refresh_token: { status: 400, body: { error: 'invalid_grant' } } });
+      const popup = fakePopup(App);
+      App.initTree();
+      App.askAhead(VAULT);
+      await until(() => aheadDone(App));
+      check('refresh token morto: uma chamada so ao Worker, nenhuma listagem, nenhuma janela',
+        worker.calls.length === 1 && drive.count('LIST') === 0 && popup.count === 0, { calls: worker.calls.length, log: drive.log });
+    }
+  });
+
+  await scenario('H18. Home: token vencido na abertura, uma renovacao so para todas as idas', async () => {
+    const kept = {
+      drivenotes_refresh_token: 'r1',
+      drivenotes_tree_open: JSON.stringify(['d-proj', 'd-10']),
+      drivenotes_tree_listings: JSON.stringify({
+        [VAULT]: [{ id: 'd-proj', name: '20-projetos', isFolder: true }, { id: 'd-10', name: '10-areas', isFolder: true }, { id: 'd-2', name: '2-rascunho', isFolder: true }],
+        'd-proj': [], 'd-10': [],
+      }),
+    };
+    const { App, drive, w } = await boot({ auth: false, seedStorage: kept });
+    await App._refreshing?.catch(() => {});
+    seedVault(drive);
+    makeDir(drive, 'd-in10', 'dentro', 'd-10');
+    const worker = fakeWorker(w, drive);
+    const popup = fakePopup(App);
+    App.renderHome();
+    await until(() => aheadDone(App) && App._tree.loading.size === 0);
+    check('tres listagens do toque e as de por tras, com uma chamada ao Worker', worker.calls.length === 1 && listsOf(drive, 'd-in10') === 1 && listsOf(drive, 'd-2') === 1,
+      { calls: worker.calls.length, log: drive.log });
+    check('nenhuma janela', popup.count === 0);
+  });
+
+  await scenario('H19. Home: o painel de diagnostico mede as idas e as esperas dos toques', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    const d = w.document;
+    const gate = gateFolders(w);
+    gate.delay.set('d-10', 300);
+    const panel = () => d.getElementById('debug-text').textContent;
+    App.showDiagnostics();
+    check('antes de tudo: nenhuma ida', panel().includes('árvore: nenhuma ida ao Drive'), panel());
+    await showHome(App);
+    treeButton(d, '10-areas').click();
+    await until(() => aheadDone(App) && App._tree.loading.size === 0);
+    treeButton(d, '20-projetos').click();
+    await until(() => App._tree.loading.size === 0);
+    App.showDiagnostics();
+    const lines = panel().split('\n');
+    const head = lines.find((l) => l.startsWith('árvore: ')) || '';
+    const [, count, middle, worst] = /^árvore: (\d+) idas ao Drive, mediana (\d+) ms, pior (\d+) ms$/.exec(head) || [];
+    check('a contagem bate com as listagens feitas', Number(count) === App._treeTimes.count && Number(count) === drive.count('LIST') && Number(count) >= 6, { head, log: drive.log.length });
+    check('a pior e a da pasta lenta, a mediana nao', Number(worst) >= 300 && Number(middle) < 300, head);
+    const tap = (name) => lines.find((l) => l.startsWith(`  ${name}: `));
+    check('os toques aparecem com a espera: a lenta esperou', Number(/(\d+) ms$/.exec(tap('10-areas') || '')?.[1]) >= 100, lines);
+    check('... a que ja tinha vindo por tras, zero', tap('20-projetos') === '  20-projetos: 0 ms', tap('20-projetos'));
+    check('fica fora do _log da navegacao', !App._log.some((l) => l.includes('idas ao Drive')) && !App._log.some((l) => l.includes('10-areas')));
+    for (let i = 0; i < 24; i++) { treeButton(d, '20-projetos').click(); } // twelve openings
+    check('guarda so os ultimos 10 toques', App._treeTimes.taps.length === 10);
   });
 
   done();

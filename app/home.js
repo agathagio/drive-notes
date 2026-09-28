@@ -64,8 +64,16 @@ Object.assign(App, {
   // open: ids of the folders left open. shown: how many items each open folder shows. seq: the latest
   // listing asked of each folder, so a late answer never draws. loading: folders with a listing on its
   // way. failed: folders whose listing failed with nothing kept to show. scroll and restore: how far
-  // down the screen was, and whether the next drawing should go back there.
-  _tree: { open: new Set(), shown: new Map(), seq: new Map(), loading: new Set(), failed: new Set(), scroll: 0, restore: false },
+  // down the screen was, and whether the next drawing should go back there. ahead and fetching: the
+  // folders waiting to be asked for one level ahead of the taps, and the ones on their way (see askAhead).
+  _tree: { open: new Set(), shown: new Map(), seq: new Map(), loading: new Set(), failed: new Set(), scroll: 0, restore: false, ahead: [], fetching: new Set() },
+
+  // How long the tree waits on the Drive, for the diagnostics panel. Memory only, and kept out of the
+  // _log: its 60 lines are the navigation's, and the listings of one opening would fill them.
+  // count and trips: every listing asked (taps and ahead) and the last 200 durations, in ms. taps: the
+  // last 10 taps that opened a folder, { name, wait, failed }. waiting: folder id -> { name, at } of a
+  // tap whose rows are not on screen yet.
+  _treeTimes: { count: 0, trips: [], taps: [], waiting: new Map() },
 
   /** A JSON value kept on the device, or `fallback` when there is none or it does not parse */
   readJson(key, fallback) {
@@ -193,13 +201,15 @@ Object.assign(App, {
     tree.seq.set(folderId, seq);
     tree.loading.add(folderId);
     tree.failed.delete(folderId);
+    // Waiting in the queue ahead: this listing takes its place
+    tree.ahead = tree.ahead.filter((id) => id !== folderId);
     this.drawTree();
 
     let items = null;
     let loginNeeded = false;
     try {
       await this.ensureAuth({ quiet: true });
-      items = await this.driveListFolder(folderId);
+      items = await this.listTreeFolder(folderId);
     } catch (e) {
       console.error('Failed to list folder:', e);
       loginNeeded = e?.code === 'login_needed';
@@ -210,6 +220,7 @@ Object.assign(App, {
     if (items) {
       this._folderCache.set(folderId, items);
       this.saveTree();
+      this.askAhead(folderId);
     } else if (loginNeeded && !this._folderCache.has(CONFIG.VAULT_FOLDER_ID)) {
       this.showTreeLogin(true);
       return;
@@ -217,6 +228,75 @@ Object.assign(App, {
       tree.failed.add(folderId);
     }
     this.drawTree();
+  },
+
+  /** driveListFolder, timed for the diagnostics panel */
+  async listTreeFolder(folderId) {
+    const times = this._treeTimes;
+    const start = Date.now();
+    try {
+      return await this.driveListFolder(folderId);
+    } finally {
+      times.count++;
+      times.trips.push(Date.now() - start);
+      if (times.trips.length > 200) times.trips.shift();
+    }
+  },
+
+  // ── One level ahead ──
+  // Each folder opened for the first time used to be a trip to the Drive begun by the tap, half a second
+  // to more than one on the phone, with grey bars meanwhile. Now, once a folder is listed (or opened from
+  // what is kept), the folders the tree shows inside it are asked for behind the user's back. One level
+  // only: what arrives this way asks for nothing more, or the app would walk the whole vault.
+
+  /** Queue the folders shown inside `folderId` that the app has never listed. Only a folder on screen
+      counts, and only what it shows: hidden system folders and whatever sits past "Ver mais" stay out. */
+  askAhead(folderId) {
+    const tree = this._tree;
+    if (!this.canRenewQuietly()) return;
+    if (folderId !== CONFIG.VAULT_FOLDER_ID && !this.openFoldersInView().includes(folderId)) return;
+    const items = this.treeItems(folderId) || [];
+    for (const item of items.slice(0, tree.shown.get(folderId) || CONFIG.TREE_PAGE)) {
+      if (!item.isFolder || this._folderCache.has(item.id) || tree.loading.has(item.id)
+        || tree.fetching.has(item.id) || tree.ahead.includes(item.id)) continue;
+      tree.ahead.push(item.id);
+    }
+    this.pumpAhead();
+  },
+
+  /** Start what the queue holds, CONFIG.TREE_AHEAD at a time */
+  pumpAhead() {
+    const tree = this._tree;
+    while (tree.fetching.size < CONFIG.TREE_AHEAD && tree.ahead.length) this.fetchAhead(tree.ahead.shift());
+  },
+
+  /** One listing asked ahead. Silent: no bars, no "carregando", no error, no "Entrar", and it never
+      touches seq. A failure is forgotten (a later round may ask again); a login that cannot be had
+      without a window empties the queue, since nothing behind it would get through either. */
+  async fetchAhead(folderId) {
+    const tree = this._tree;
+    tree.fetching.add(folderId);
+    let items = null;
+    try {
+      await this.ensureAuth({ quiet: true });
+    } catch (e) {
+      console.warn('No login for the folders ahead:', e);
+      tree.ahead = [];
+      tree.fetching.delete(folderId);
+      return;
+    }
+    try {
+      items = await this.listTreeFolder(folderId);
+    } catch (e) {
+      console.warn('A folder asked ahead failed:', e);
+    }
+    tree.fetching.delete(folderId);
+    this.pumpAhead();
+    // A listing already there came from a tap, and is as new as this one or newer
+    if (!items || this._folderCache.has(folderId)) return;
+    this._folderCache.set(folderId, items);
+    // Only an open folder in view changes what is on screen: the rest waits in memory for its tap
+    if (this.openFoldersInView().includes(folderId)) this.drawTree();
   },
 
   /** A tap on a folder: open it, close it, or try again if its listing had failed */
@@ -229,11 +309,16 @@ Object.assign(App, {
     if (tree.open.has(item.id)) {
       tree.open.delete(item.id);
       tree.shown.delete(item.id);
+      this._treeTimes.waiting.delete(item.id);
     } else {
       tree.open.add(item.id);
       // The tree only walks down from the vault root, so it knows where this folder sits without asking
       if (!this._folderTrails.has(item.id)) this._folderTrails.set(item.id, [...folder.path, folder.name, item.name].slice(1));
+      if (this._folderCache.has(item.id)) this.noteTreeTap(item.name, 0, false);
+      else this._treeTimes.waiting.set(item.id, { name: item.name, at: Date.now() });
       this.loadTreeFolder(item.id);
+      // What is kept is enough to know the folders inside: they need not wait for the fresh listing
+      this.askAhead(item.id);
     }
     this.saveTree();
     this.drawTree();
@@ -250,6 +335,41 @@ Object.assign(App, {
     this.drawTreeLevel(list, root, [root.id]);
     scroller.scrollTop = top;
     if (list.querySelector('.tree-row')) this._tree.restore = false;
+    this.noteTreeWaits();
+  },
+
+  /** The taps whose folder now shows its rows (or its error): how long they waited, into the panel */
+  noteTreeWaits() {
+    const times = this._treeTimes;
+    for (const [id, tap] of times.waiting) {
+      const failed = this._tree.failed.has(id);
+      if (!this._folderCache.has(id) && !failed) continue;
+      times.waiting.delete(id);
+      this.noteTreeTap(tap.name, Date.now() - tap.at, failed);
+    }
+  },
+
+  /** One tap into the panel's last 10. A folder already listed is 0: its rows are drawn by the tap itself. */
+  noteTreeTap(name, wait, failed) {
+    const taps = this._treeTimes.taps;
+    taps.push({ name, wait, failed });
+    if (taps.length > 10) taps.shift();
+  },
+
+  /** The lines of the diagnostics panel about the tree's trips to the Drive */
+  treeTimesReport() {
+    const { count, trips, taps } = this._treeTimes;
+    const sorted = [...trips].sort((a, b) => a - b);
+    const half = sorted.length >> 1;
+    const middle = sorted.length % 2 ? sorted[half] : Math.round((sorted[half - 1] + sorted[half]) / 2);
+    const lines = [count
+      ? `árvore: ${count} ${count === 1 ? 'ida' : 'idas'} ao Drive, mediana ${middle} ms, pior ${sorted[sorted.length - 1]} ms`
+      : 'árvore: nenhuma ida ao Drive'];
+    if (taps.length) {
+      lines.push('toques em pasta (espera até as linhas):');
+      for (const tap of taps) lines.push(`  ${tap.name}: ${tap.failed ? 'erro em ' : ''}${tap.wait} ms`);
+    }
+    return lines;
   },
 
   /** The rows of one folder into `list`. `above` holds the ids from the root down to this folder: a
@@ -344,6 +464,7 @@ Object.assign(App, {
     button.addEventListener('click', () => {
       this._tree.shown.set(folder.id, shown + CONFIG.TREE_PAGE);
       this.drawTree();
+      this.askAhead(folder.id);
     });
     li.appendChild(button);
     return li;

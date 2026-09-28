@@ -1095,11 +1095,10 @@ button.home-section-title {
   padding: 0;
 }
 
-/* One step in per level, with a line down the side that says which folder the rows belong to */
+/* One short step in per level, and no line down the side: in a deep tree the lines ate the width of
+   the names. Which folder the rows belong to is said by the open folders above them (see below). */
 .tree-children {
-  margin-left: 14px;
-  padding-left: 8px;
-  border-left: 1px solid var(--border);
+  padding-left: 12px;
 }
 
 .tree-item {
@@ -1124,16 +1123,21 @@ button.home-section-title {
   color: var(--text-secondary);
 }
 
-/* A note has no arrow: its name lines up with the names of the folders beside it */
+/* A note has no arrow: its name steps in to about where the names of the folders beside it start */
 .tree-row:not(.is-folder) .tree-item,
 .tree-more .tree-item {
-  padding-left: 30px;
+  padding-left: 24px;
 }
 
 .tree-row.is-open > .tree-item {
-  background: var(--bg-secondary);
   color: var(--accent-hover);
   font-weight: 600;
+}
+
+/* The background marks only the deepest open folder, the one with no open folder drawn inside it
+   (its rows are in the .tree-branch right after it). The open ones above keep the colour alone. */
+.tree-row.is-open:not(:has(+ .tree-branch .tree-row.is-open)) > .tree-item {
+  background: var(--bg-secondary);
 }
 
 .tree-row.is-open > .tree-item svg {
@@ -1170,7 +1174,7 @@ button.home-section-title {
   display: flex;
   align-items: center;
   min-height: 44px;
-  padding: 0 8px 0 30px;
+  padding: 0 8px 0 24px;
   font-size: 14px;
   color: var(--text-secondary);
 }
@@ -1180,7 +1184,7 @@ button.home-section-title {
   display: flex;
   align-items: center;
   height: 44px;
-  padding: 0 8px 0 30px;
+  padding: 0 8px 0 24px;
 }
 
 .tree-skeleton::before {

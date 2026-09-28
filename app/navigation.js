@@ -284,6 +284,8 @@ Object.assign(App, {
       `login: ${localStorage.getItem(KEYS.REFRESH_TOKEN) ? 'renovável' : this.accessToken ? 'só token' : 'nenhum'} (${CONFIG.AUTH_URL})`,
       navigator.userAgent,
       '',
+      ...this.treeTimesReport(),
+      '',
       ...this._log,
     ].join('\n');
     document.getElementById('debug-overlay').classList.add('visible');
