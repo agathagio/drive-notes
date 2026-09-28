@@ -963,7 +963,7 @@ async function scenario(title, block) {
     w.history.back(); await sleep(80); // the system's back gesture
     check('gesto do sistema: volta pra A', App.currentFile.id === 'A');
     App.els.btnBack.click(); await sleep(80);
-    check('voltar de novo: tela inicial com recentes', view() === 'welcome' && App.currentFile === null && w.document.querySelectorAll('#recents-ul li').length >= 2 && App.els.fileName.textContent === 'Drive Notes');
+    check('voltar de novo: tela inicial com recentes', view() === 'welcome' && App.currentFile === null && w.document.querySelectorAll('#recents-ul li').length >= 2 && App.els.fileName.textContent === 'dn');
     check('nada foi escrito no Drive', drive.count('PATCH') === 0 && drive.count('POST') === 0);
   }
   });
@@ -1166,7 +1166,7 @@ async function scenario(title, block) {
     App.els.btnBack.click(); await sleep(80);
     check('voltar: raiz do vault', App.folder?.id === VAULT && rows().length === 8);
     App.els.btnBack.click(); await sleep(80);
-    check('voltar: tela inicial', d.body.dataset.view === 'welcome' && App.folder === null && App.els.fileName.textContent === 'Drive Notes');
+    check('voltar: tela inicial', d.body.dataset.view === 'welcome' && App.folder === null && App.els.fileName.textContent === 'dn');
 
     drive.failReads = true;
     d.getElementById('welcome-open').click(); await sleep(80);
@@ -1217,7 +1217,7 @@ async function scenario(title, block) {
     w.__back(); await sleep(80); await App._saveChain;
     check('voltar com edicao pendente salva antes', bodyOf(drive.files.get('L').content) === 'editado' && d.body.dataset.view === 'welcome');
 
-    for (let i = 0; i < 5; i++) d.querySelector('#welcome h2').click();
+    for (let i = 0; i < 5; i++) d.getElementById('file-name').click();
     const dbg = d.getElementById('debug-text').textContent;
     check('5 toques no titulo: painel de diagnostico com o modo e o log', d.getElementById('debug-overlay').classList.contains('visible') && dbg.includes('modo de voltar: CloseWatcher') && dbg.includes('watcher: close'));
     w.__back(); await sleep(20);
@@ -5124,6 +5124,9 @@ async function scenario(title, block) {
   {
     // Two trips to the Drive at once with the hour gone: one refresh, shared
     const { App, drive, w } = await boot({ seedStorage: { drivenotes_refresh_token: 'r1' } });
+    // The home tree lists the vault as the app opens, and with no token that renewal is already on its
+    // way, before the fake Worker below exists: it has to settle first, or the two trips would share it
+    await App._refreshing?.catch(() => {});
     drive.put('A', 'a.md', 'A'); drive.put('B', 'b.md', 'B');
     w.localStorage.setItem('drivenotes_token_expires', String(Date.now() - 1000));
     const worker = fakeWorker(w, drive);
@@ -5135,6 +5138,7 @@ async function scenario(title, block) {
   {
     // The Drive answers 401 (token revoked under the app): one refresh, one retry
     const { App, drive, w } = await boot({ seedStorage: { drivenotes_refresh_token: 'r1' } });
+    await App._refreshing?.catch(() => {}); // the home tree's renewal at opening (see the two trips above)
     drive.put('A', 'a.md', 'A');
     const worker = fakeWorker(w, drive);
     const inner = w.fetch;
@@ -5162,6 +5166,7 @@ async function scenario(title, block) {
   {
     // The Worker answers something that is not JSON (a 5xx page): treated as no network, refresh token kept
     const { App, drive, w } = await boot({ seedStorage: { drivenotes_refresh_token: 'r1' } });
+    await App._refreshing?.catch(() => {}); // the home tree's renewal at opening (see the two trips above)
     w.localStorage.setItem('drivenotes_token_expires', String(Date.now() - 1000));
     fakeWorker(w, drive, { raw: true });
     let failed = null;
@@ -5250,6 +5255,310 @@ async function scenario(title, block) {
     await App.signOut();
     check('dois rascunhos: plural e os dois nomes', /2 rascunhos ainda não estão no Drive: (b\.md, a\.md|a\.md, b\.md)\. Sair apaga eles\./.test(text), text);
   }
+  });
+
+  // ── Home: the vault tree (home-design) ──
+  // What the tree shows, row by row: a folder is "name/", an open one "name/*"
+  const treeRows = (d) => [...d.querySelectorAll('#tree-list .tree-row')].map((li) =>
+    li.querySelector('.tree-name').textContent
+      + (li.classList.contains('is-folder') ? (li.classList.contains('is-open') ? '/*' : '/') : ''));
+  const treeButton = (d, name) => [...d.querySelectorAll('#tree-list .tree-row')]
+    .find((li) => li.querySelector('.tree-name').textContent === name)?.querySelector('.tree-item');
+  const showHome = async (App) => { App.renderHome(); await sleep(80); };
+  const makeDir = (drive, id, name, parent) => { drive.put(id, name, '', [parent]); drive.files.get(id).mimeType = FOLDER; };
+  const listsOf = (drive, id) => drive.log.filter((l) => l === `LIST '${id}' in parents and trashed = false`).length;
+
+  await scenario('H1. Home: a raiz na ordem do Obsidian, sem as pastas de sistema', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    makeDir(drive, 'd-media', '_media', VAULT);
+    makeDir(drive, 'd-task', '_tasknotes', VAULT);
+    makeDir(drive, 'd-tpl', '_templates', VAULT);
+    makeDir(drive, 'd-html', '<b>negrito</b>', VAULT);
+    const d = w.document;
+    await showHome(App);
+    check('pastas primeiro, ordem natural, sem .obsidian, sem imagem, .md sem extensao, sem as tres de sistema',
+      JSON.stringify(treeRows(d)) === JSON.stringify(['_inbox/', '<b>negrito</b>/', '2-rascunho/', '10-areas/', '20-projetos/', 'Abacaxi', 'émile', 'lista.txt', 'zebra']), treeRows(d));
+    check('nome com < e > e texto, nao HTML', d.querySelectorAll('#tree-list b').length === 0);
+    check('a arvore aparece e o Entrar some', !d.getElementById('tree').hidden && d.getElementById('tree-login').hidden);
+    w.localStorage.setItem('drivenotes_show_system', '1');
+    App.drawTree();
+    check('com a chave ligada, as tres entram no lugar certo da ordem',
+      JSON.stringify(treeRows(d).slice(0, 5)) === JSON.stringify(['_inbox/', '_media/', '_tasknotes/', '_templates/', '<b>negrito</b>/']), treeRows(d));
+  });
+
+  await scenario('H2. Home: a pasta abre no lugar, e a nota abre com um toque', async () => {
+    const { App, drive, w } = await boot({ watcher: true });
+    seedVault(drive);
+    const d = w.document;
+    await showHome(App);
+    treeButton(d, '20-projetos').click();
+    check('a pasta abre na hora, com o carregando', treeRows(d).includes('20-projetos/*') && !!d.querySelector('#tree-list .tree-loading'));
+    await sleep(80);
+    const at = treeRows(d).indexOf('20-projetos/*');
+    check('os filhos entram logo abaixo da pasta', treeRows(d)[at + 1] === 'nota do projeto', treeRows(d));
+    check('o carregando some', !d.querySelector('#tree-list .tree-loading'));
+    check('uma listagem da pasta', listsOf(drive, 'd-proj') === 1);
+    check('abrir pasta nao e navegacao: pilha vazia, voltar sai do app', App.navStack.length === 0 && w.__back() === 'EXIT');
+    check('a view continua sendo a home', d.body.dataset.view === 'welcome');
+
+    treeButton(d, '20-projetos').click();
+    check('segundo toque fecha', treeRows(d).includes('20-projetos/') && !treeRows(d).includes('nota do projeto'));
+    treeButton(d, '20-projetos').click();
+    check('reabrir desenha na hora o que ja tinha, sem carregando',
+      treeRows(d).includes('nota do projeto') && !d.querySelector('#tree-list .tree-loading'));
+    await sleep(80);
+    check('e atualiza por tras', listsOf(drive, 'd-proj') === 2);
+
+    treeButton(d, 'nota do projeto').click(); await sleep(80);
+    check('toque na nota abre em leitura', App.currentFile?.id === 'n-sub' && d.body.dataset.view === 'preview');
+    check('a nota entra nos recentes', App.getRecents()[0]?.id === 'n-sub');
+    w.__back(); await sleep(80);
+    check('voltar da nota: home, com a pasta ainda aberta', d.body.dataset.view === 'welcome' && treeRows(d).includes('20-projetos/*'), treeRows(d));
+  });
+
+  await scenario('H3. Home: pasta vazia, erro ao carregar e nova tentativa', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    const d = w.document;
+    const messages = () => [...d.querySelectorAll('#tree-list .tree-message')].map((li) => li.textContent);
+    await showHome(App);
+    drive.failReads = true;
+    treeButton(d, '10-areas').click(); await sleep(80);
+    check('listagem que falha mostra o erro', JSON.stringify(messages()) === JSON.stringify(['Erro ao carregar a pasta']), messages());
+    check('a pasta continua aberta', treeRows(d).includes('10-areas/*'));
+    drive.failReads = false;
+    treeButton(d, '10-areas').click(); await sleep(80);
+    check('o toque seguinte tenta de novo, e nao fecha', treeRows(d).includes('10-areas/*') && JSON.stringify(messages()) === JSON.stringify(['Pasta vazia']), messages());
+    drive.failReads = true;
+    treeButton(d, '20-projetos').click(); await sleep(80);
+    drive.failReads = false;
+    treeButton(d, '20-projetos').click(); await sleep(80);
+    drive.failReads = true;
+    App.renderHome(); await sleep(80);
+    check('falha com pasta ja vista: fica a listagem guardada', treeRows(d).includes('nota do projeto') && !messages().includes('Erro ao carregar a pasta'), treeRows(d));
+  });
+
+  await scenario('H4. Home: duas listagens da mesma pasta a caminho, so a ultima desenha', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    await showHome(App);
+    let writes = 0;
+    const set = App._folderCache.set.bind(App._folderCache);
+    App._folderCache.set = (id, items) => { if (id === 'd-proj') writes++; return set(id, items); };
+    drive.delay = 60;
+    const first = App.loadTreeFolder('d-proj');
+    drive.delay = 5;
+    const second = App.loadTreeFolder('d-proj');
+    await Promise.all([first, second]);
+    await sleep(80);
+    check('so uma resposta foi guardada', writes === 1, writes);
+    check('nada ficou marcado como carregando', App._tree.loading.size === 0, [...App._tree.loading]);
+  });
+
+  await scenario('H5. Home: a arvore lembra o que estava aberto, e aguenta o que o aparelho guardou', async () => {
+    const first = await boot();
+    seedVault(first.drive);
+    await showHome(first.App);
+    treeButton(first.w.document, '20-projetos').click(); await sleep(80);
+    const kept = {
+      drivenotes_tree_open: first.w.localStorage.getItem('drivenotes_tree_open'),
+      drivenotes_tree_listings: first.w.localStorage.getItem('drivenotes_tree_listings'),
+    };
+    check('o aparelho guardou a pasta aberta', JSON.parse(kept.drivenotes_tree_open).includes('d-proj'), kept.drivenotes_tree_open);
+
+    const offline = makeDrive();
+    offline.failReads = true;
+    const again = await boot({ seedStorage: kept, drive: offline });
+    await showHome(again.App);
+    check('app aberto de novo, sem rede: a arvore volta desenhada, com a pasta aberta',
+      treeRows(again.w.document).includes('20-projetos/*') && treeRows(again.w.document).includes('nota do projeto'), treeRows(again.w.document));
+
+    const ghost = await boot({ seedStorage: { ...kept, drivenotes_tree_open: JSON.stringify(['d-proj', 'ghost']) } });
+    seedVault(ghost.drive);
+    await showHome(ghost.App);
+    check('pasta aberta que sumiu do Drive: o app nao pede a listagem dela', listsOf(ghost.drive, 'ghost') === 0);
+    check('... e a arvore desenha normalmente', treeRows(ghost.w.document).includes('20-projetos/*'));
+
+    const junk = await boot({ seedStorage: { drivenotes_tree_open: '{nao e json', drivenotes_tree_listings: '"texto"', drivenotes_tree_scroll: 'abc' } });
+    seedVault(junk.drive);
+    await showHome(junk.App);
+    check('lixo nas chaves da arvore: a raiz desenha mesmo assim', treeRows(junk.w.document).includes('zebra'), treeRows(junk.w.document));
+
+    const full = await boot();
+    seedVault(full.drive);
+    const setItem = full.w.Storage.prototype.setItem;
+    full.w.Storage.prototype.setItem = function (key, value) {
+      if (String(key).startsWith('drivenotes_tree_')) throw new Error('QuotaExceededError');
+      return setItem.call(this, key, value);
+    };
+    await showHome(full.App);
+    treeButton(full.w.document, '20-projetos').click(); await sleep(80);
+    check('storage cheio: a pasta abre do mesmo jeito', treeRows(full.w.document).includes('nota do projeto'), treeRows(full.w.document));
+  });
+
+  await scenario('H6. Home: pasta grande mostra 30 e o Ver mais', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    for (let i = 1; i <= 31; i++) drive.put(`big-${i}`, `nota-${String(i).padStart(2, '0')}.md`, 'x', ['d-10']);
+    for (let i = 1; i <= 30; i++) drive.put(`fit-${i}`, `cabe-${String(i).padStart(2, '0')}.md`, 'x', ['d-2']);
+    const d = w.document;
+    const inside = (prefix) => treeRows(d).filter((name) => name.startsWith(prefix));
+    const more = () => [...d.querySelectorAll('#tree-list .tree-more')].map((li) => li.querySelector('.tree-more-count').textContent);
+    await showHome(App);
+    treeButton(d, '10-areas').click(); await sleep(80);
+    check('31 itens: 30 na tela', inside('nota-').length === 30 && inside('nota-')[29] === 'nota-30', inside('nota-').length);
+    check('... e o Ver mais diz que falta 1', JSON.stringify(more()) === JSON.stringify(['1']), more());
+    d.querySelector('#tree-list .tree-more .tree-item').click();
+    check('o toque traz o que faltava, sem mexer nos de antes', inside('nota-').length === 31 && inside('nota-')[0] === 'nota-01' && more().length === 0, inside('nota-').length);
+    treeButton(d, '10-areas').click();
+    treeButton(d, '10-areas').click(); await sleep(80);
+    check('fechar e abrir volta pros 30', inside('nota-').length === 30 && more().length === 1);
+    treeButton(d, '2-rascunho').click(); await sleep(80);
+    check('30 itens exatos: sem Ver mais pra essa pasta', inside('cabe-').length === 30 && more().length === 1, more());
+  });
+
+  await scenario('H7. Home: secoes que recolhem, com a contagem', async () => {
+    const empty = await boot();
+    const e = empty.w.document;
+    check('sem recentes e sem rascunho: as duas secoes somem',
+      e.getElementById('recents-list').classList.contains('hidden') && e.getElementById('drafts-list').classList.contains('hidden'));
+
+    const now = Date.now();
+    const { w } = await boot({ seedStorage: {
+      drivenotes_recents: JSON.stringify([{ id: 'r1', name: 'uma.md', timestamp: now }, { id: 'r2', name: 'duas.md', timestamp: now }]),
+      drivenotes_draft_new_1: JSON.stringify({ name: 'rascunho.md', content: 'x', timestamp: now, fileId: null }),
+    } });
+    const d = w.document;
+    const title = (id) => d.querySelector(`#${id} .home-section-title`);
+    check('recentes: secao a vista, recolhida, contagem 2',
+      !d.getElementById('recents-list').classList.contains('hidden') && d.getElementById('recents-ul').hidden
+      && title('recents-list').getAttribute('aria-expanded') === 'false' && d.getElementById('recents-count').textContent === '2');
+    check('nao sincronizados: secao a vista, recolhida, contagem 1',
+      !d.getElementById('drafts-list').classList.contains('hidden') && d.getElementById('drafts-ul').hidden
+      && d.getElementById('drafts-count').textContent === '1');
+    check('recentes vem antes de nao sincronizados',
+      !!(d.getElementById('recents-list').compareDocumentPosition(d.getElementById('drafts-list')) & w.Node.DOCUMENT_POSITION_FOLLOWING));
+    title('recents-list').click();
+    check('toque no titulo abre', !d.getElementById('recents-ul').hidden && title('recents-list').getAttribute('aria-expanded') === 'true');
+    title('recents-list').click();
+    check('outro toque recolhe', d.getElementById('recents-ul').hidden);
+    d.querySelector('#recents-ul .recent-remove').click();
+    d.querySelector('#recents-ul .recent-remove').click();
+    check('tirar o ultimo recente some com a secao', d.getElementById('recents-list').classList.contains('hidden'));
+  });
+
+  await scenario('H8. Home: sem login, o Entrar fica no lugar da arvore', async () => {
+    const now = Date.now();
+    const { App, drive, w } = await boot({ auth: false, seedStorage: {
+      drivenotes_recents: JSON.stringify([{ id: 'r1', name: 'uma.md', timestamp: now }]),
+    } });
+    seedVault(drive);
+    fakeWorker(w, drive);
+    const popup = fakePopup(App);
+    const d = w.document;
+    await showHome(App);
+    check('sem login: o Entrar aparece e a arvore some', !d.getElementById('tree-login').hidden && d.getElementById('tree').hidden);
+    check('... sem abrir a janela do Google sozinho', popup.count === 0);
+    check('... sem pedir nada ao Drive', drive.count('LIST') === 0, drive.log);
+    check('os recentes continuam la', !d.getElementById('recents-list').classList.contains('hidden'));
+    d.getElementById('tree-login-btn').click(); await sleep(120);
+    check('o toque no Entrar abre a janela, uma vez', popup.count === 1);
+    check('depois do login a arvore aparece', !d.getElementById('tree').hidden && d.getElementById('tree-login').hidden && treeRows(d).includes('zebra'), treeRows(d));
+  });
+
+  await scenario('H9. Home: o cabecalho e a barra de baixo', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    const d = w.document;
+    await showHome(App);
+    check('o cabecalho diz dn e vault', App.els.fileName.textContent === 'dn' && d.getElementById('home-label').textContent === 'vault');
+    check('as sobras da home antiga sairam', !d.querySelector('#welcome > p') && !d.querySelector('#welcome h2') && !d.querySelector('#welcome > .btn'));
+    check('o + e o campo de busca estao na barra de baixo',
+      !!d.querySelector('.home-bar #welcome-new') && !!d.querySelector('.home-bar #welcome-open'));
+    check('o + tem nome pra leitor de tela', d.getElementById('welcome-new').getAttribute('aria-label') === 'Nova nota');
+    d.getElementById('welcome-open').click(); await sleep(80);
+    check('nesta fatia o campo abre a busca que ja existe, na raiz', d.body.dataset.view === 'browse' && App.folder?.id === VAULT);
+    App.els.btnBack.click(); await sleep(80);
+    d.getElementById('welcome-new').click(); await sleep(20);
+    // With a login the new note goes up to the Drive at once, in the background: by now it may have its id
+    const born = App.currentFile;
+    check('o + cria nota nova em edicao', d.body.dataset.view === 'edit' && !!born && /^\d{4}-\d{2}-\d{2}-\d{4}\.md$/.test(born.name)
+      && (born.id === null || drive.files.get(born.id)?.parents[0] === INBOX), { view: d.body.dataset.view, id: born?.id, name: born?.name });
+  });
+
+  await scenario('H10. Home: o menu dos tres pontinhos', async () => {
+    const { App, drive, w } = await boot({ watcher: true, seedStorage: { drivenotes_login_hint: 'conta@exemplo.com' } });
+    seedVault(drive);
+    makeDir(drive, 'd-media', '_media', VAULT);
+    App._version = 'drivenotes-v64';
+    const d = w.document;
+    const menu = d.getElementById('menu-overlay');
+    await showHome(App);
+    check('fechado: o voltar sai do app', !menu.classList.contains('visible') && w.__back() === 'EXIT');
+
+    d.getElementById('btn-menu').click();
+    check('o toque nos tres pontinhos abre, e arma o voltar', menu.classList.contains('visible') && w.__watchers.length === 1);
+    check('mostra a conta e a versao', d.getElementById('welcome-email').textContent === 'conta@exemplo.com'
+      && !d.getElementById('welcome-account').classList.contains('hidden') && d.getElementById('menu-version').textContent === 'v64');
+    check('o Sair da conta aparece', !d.getElementById('welcome-signout').hidden);
+    check('o voltar fecha o menu', w.__back() === 'handled' && !menu.classList.contains('visible'));
+    check('... fica na home, e o voltar seguinte sai do app', d.body.dataset.view === 'welcome' && w.__back() === 'EXIT');
+
+    d.getElementById('btn-menu').click();
+    menu.click();
+    check('toque fora do painel fecha', !menu.classList.contains('visible') && w.__watchers.length === 0);
+    d.getElementById('btn-menu').click();
+    d.querySelector('#menu-overlay .menu').click();
+    check('toque dentro do painel nao fecha', menu.classList.contains('visible'));
+
+    const chave = d.getElementById('menu-system');
+    check('a chave nasce desligada, e a pasta de sistema fora da arvore', chave.getAttribute('aria-checked') === 'false' && !treeRows(d).includes('_media/'));
+    chave.click();
+    check('ligar mostra a pasta, sem fechar o menu',
+      chave.getAttribute('aria-checked') === 'true' && treeRows(d).includes('_media/') && menu.classList.contains('visible'), treeRows(d));
+    check('... e o aparelho lembra', w.localStorage.getItem('drivenotes_show_system') === '1');
+    chave.click();
+    check('desligar esconde de novo', chave.getAttribute('aria-checked') === 'false' && !treeRows(d).includes('_media/')
+      && w.localStorage.getItem('drivenotes_show_system') === null);
+
+    d.getElementById('menu-debug').click();
+    check('Diagnostico fecha o menu e abre o painel', !menu.classList.contains('visible') && d.getElementById('debug-overlay').classList.contains('visible'));
+    w.__back(); await sleep(20);
+    check('o voltar fecha o painel', !d.getElementById('debug-overlay').classList.contains('visible'));
+
+    d.getElementById('btn-menu').click();
+    d.getElementById('welcome-signout').click(); await sleep(20);
+    check('Sair da conta fecha o menu e pergunta antes', !menu.classList.contains('visible')
+      && d.getElementById('confirm-overlay').classList.contains('visible') && d.getElementById('confirm-title').textContent === 'Sair da conta');
+    d.getElementById('confirm-cancel').click(); await sleep(20);
+
+    const out = await boot({ auth: false });
+    out.w.document.getElementById('btn-menu').click();
+    check('sem login guardado: nem conta, nem Sair da conta',
+      out.w.document.getElementById('welcome-account').classList.contains('hidden') && out.w.document.getElementById('welcome-signout').hidden);
+  });
+
+  await scenario('H11. Home: o botao de pasta da nota aberta leva pra home', async () => {
+    const { App, drive, w } = await boot({ watcher: true });
+    seedVault(drive);
+    drive.put('L', 'com link.md', 'vai [[zebra]]', [VAULT]);
+    const d = w.document;
+    await showHome(App);
+    treeButton(d, 'com link').click(); await sleep(80);
+    App.els.previewContainer.querySelector('a.wikilink').click(); await sleep(80);
+    check('duas notas de fundo: duas telas na pilha', App.currentFile?.id === 'n-z' && App.navStack.length === 2, App.navStack);
+    App.els.btnOpen.click(); await sleep(80);
+    check('o botao de pasta leva pra home', d.body.dataset.view === 'welcome' && App.currentFile === null && App.folder === null);
+    check('a home e o fundo da pilha: o voltar sai do app', App.navStack.length === 0 && w.__back() === 'EXIT');
+    check('a arvore esta la', treeRows(d).includes('zebra'), treeRows(d));
+
+    treeButton(d, 'com link').click(); await sleep(80);
+    App.els.btnPreview.click();
+    App.els.editorElement.value = 'editado';
+    App.els.editorElement.dispatchEvent(new w.Event('input'));
+    App.els.btnOpen.click(); await sleep(80); await App._saveChain;
+    check('com edicao pendente, salva antes de ir', bodyOf(drive.files.get('L').content) === 'editado' && d.body.dataset.view === 'welcome');
   });
 
   done();

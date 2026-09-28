@@ -63,6 +63,8 @@ const SETUP = `
     ] });
   };
   CONFIG.VAULT_FOLDER_ID = 'ROOT';
+  // The app read the home tree's memory as it opened, from the profile of the previous run: read again, now empty
+  __App.initTree();
   __App.goHome();
   'ok'`;
 
@@ -84,6 +86,12 @@ const SETUP = `
     };
 
     await shot('1-inicio');
+    // The home tree with a folder open, and the menu of the three dots
+    await js(`[...document.querySelectorAll('#tree-list .tree-row.is-folder .tree-item')].find((b) => b.textContent.includes('20-projetos')).click(); 'ok'`);
+    await shot('1b-inicio-pasta-aberta');
+    await js(`__App.openMenu(); 'ok'`);
+    await shot('1c-inicio-menu');
+    await js(`__App.closeMenu(); 'ok'`);
     await js(`__App.browseVault().then(() => 'ok')`);
     await shot('2-pastas');
     await js(`__App.els.browserSearch.value = 'voz'; __App.onSearchInput(); 'ok'`);

@@ -224,13 +224,15 @@ Object.assign(App, {
     return this.ensureAuth({ quiet });
   },
 
-  /** The foot of the home screen: the account signed in, and the way out. Shown while the device keeps
+  /** The top of the home menu: the account signed in, and the way out. Shown while the device keeps
       anything of a login (a refresh token, a token, the email); the email once it has been learned. */
   renderAccount() {
     const box = document.getElementById('welcome-account');
     if (!box) return;
     const signedIn = !!(localStorage.getItem(KEYS.REFRESH_TOKEN) || localStorage.getItem(KEYS.TOKEN) || localStorage.getItem(KEYS.LOGIN_HINT));
     box.classList.toggle('hidden', !signedIn);
+    const signOut = document.getElementById('welcome-signout');
+    if (signOut) signOut.hidden = !signedIn;
     document.getElementById('welcome-email').textContent = localStorage.getItem(KEYS.LOGIN_HINT) || 'Conta Google';
   },
 

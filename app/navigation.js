@@ -255,7 +255,7 @@ Object.assign(App, {
     if (!this.useWatcher) this.show(state);
   },
 
-  /** Line for the hidden diagnostics panel (five taps on the welcome title) */
+  /** Line for the hidden diagnostics panel (five taps on the "dn" of the home screen) */
   log(message) {
     const time = new Date().toTimeString().slice(0, 8);
     this._log.push(`${time} ${message} | hist=${history.length} stack=${this.navStack.length} watcher=${this._watcher ? 1 : 0}`);

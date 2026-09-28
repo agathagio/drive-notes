@@ -1195,13 +1195,14 @@ const FAKE_DRIVE = `
     // Interface: the home screen text, where Touch to Search opened
     await open(buildPage('selecao', currentApp));
     await js(COUNT_CLICKS);
-    const homeWord = await wordAt('#welcome p', 'pessoal');
+    // Without a login the home shows the line that asks for one, in the tree's place
+    const homeWord = await wordAt('#tree-login p', 'conta');
     const homeClicked = await click(homeWord, 2);
     const homeSelection = await selected();
-    check('duplo clique no texto da home nao seleciona nada', homeClicked === true && homeSelection === '', { homeClicked, homeSelection });
+    check('duplo clique no texto da home nao seleciona nada', homeWord?.y > 0 && homeClicked === true && homeSelection === '', { homeWord, homeClicked, homeSelection });
     const chrome = JSON.parse(await js(`JSON.stringify({ header: getComputedStyle(document.querySelector('.header')).userSelect,
       name: getComputedStyle(document.getElementById('file-name')).userSelect,
-      title: getComputedStyle(document.querySelector('#welcome h2')).userSelect,
+      title: getComputedStyle(document.querySelector('#welcome .tree-title')).userSelect,
       body: getComputedStyle(document.body).userSelect })`));
     check('cabecalho, nome da nota e titulo da home: user-select none', Object.values(chrome).every(v => v === 'none'), chrome);
 
@@ -1520,6 +1521,59 @@ const FAKE_DRIVE = `
     }
     console.log('     deslizar da borda em cima do link:', JSON.stringify(swiped));
     check('deslizar da borda comecando num link volta, e o cartao nao abre', swiped.wentBack === true && swiped.openAfter === false, swiped);
+
+    console.log('\nHome: a barra de baixo, a altura das linhas e a rolagem que volta');
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    await open(buildPage('home', currentApp));
+    await js(FAKE_DRIVE);
+    // A root with more than a screen of folders, so the tree scrolls and ends in "Ver mais"
+    await js(`(() => {
+      const FOLDER = 'application/vnd.google-apps.folder';
+      const many = Array.from({ length: 40 }, (_, i) => ({ id: 'M' + i, name: 'pasta-' + String(i).padStart(2, '0'), mimeType: FOLDER, modifiedTime: '2026-09-19T10:00:00Z' }));
+      const base = window.fetch;
+      window.fetch = async (url) => {
+        const q = new URL(url).searchParams.get('q') || '';
+        if (q.startsWith("'ROOT' in parents")) return { ok: true, status: 200, json: async () => ({ files: many }), text: async () => '' };
+        return base(url);
+      };
+      __App.renderHome();
+      return 'ok'; })()`);
+    const homeDrawn = await waitFor(`document.querySelectorAll('#tree-list .tree-row').length === 30`, 4000);
+    check('a raiz desenha 30 linhas', homeDrawn, await js(`document.querySelectorAll('#tree-list .tree-row').length`));
+    const hitOf = `(id) => { const b = document.getElementById(id).getBoundingClientRect();
+      const el = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2);
+      return { hit: !!el && !!el.closest('#' + id), top: Math.round(b.top), bottom: Math.round(b.bottom), h: Math.round(b.height) }; }`;
+    await js(`document.getElementById('home-scroll').scrollTop = 1e6; 'ok'`);
+    const bar = JSON.parse(await js(`JSON.stringify({ add: (${hitOf})('welcome-new'), search: (${hitOf})('welcome-open'),
+      last: (() => { const b = document.querySelector('#tree-list > li:last-child').getBoundingClientRect(); return { bottom: Math.round(b.bottom), h: Math.round(b.height) }; })(),
+      row: Math.round(document.querySelector('#tree-list .tree-item').getBoundingClientRect().height),
+      barTop: Math.round(document.querySelector('.home-bar').getBoundingClientRect().top) })`));
+    console.log('     barra:', JSON.stringify(bar));
+    check('o + recebe o toque, dentro da tela', bar.add.hit && bar.add.bottom <= 844 && bar.add.h >= 44, bar);
+    check('o campo de busca recebe o toque', bar.search.hit && bar.search.h >= 44, bar);
+    check('rolada ate o fim, a ultima linha fica inteira acima da barra', bar.last.bottom <= bar.barTop, bar);
+    check('linha da arvore com altura de dedo', bar.row >= 44, bar);
+
+    await js(`document.getElementById('home-scroll').scrollTop = 400; 'ok'`);
+    const homeScrollBefore = await js(`document.getElementById('home-scroll').scrollTop`);
+    await js(`__App.navigateTo('N1', 'com link.md').then(() => 'ok')`);
+    await waitFor(`document.body.dataset.view === 'preview'`, 4000);
+    await js(`__App.goBack(); 'ok'`);
+    await waitFor(`document.body.dataset.view === 'welcome' && document.querySelectorAll('#tree-list .tree-row').length === 30`, 4000);
+    const homeScrollAfter = await js(`document.getElementById('home-scroll').scrollTop`);
+    check('voltar de uma nota devolve a home na mesma rolagem', homeScrollBefore === 400 && Math.abs(homeScrollAfter - homeScrollBefore) <= 2, { homeScrollBefore, homeScrollAfter });
+
+    await js(`__App.openMenu(); 'ok'`);
+    const panel = JSON.parse(await js(`JSON.stringify((() => { const b = document.querySelector('#menu-overlay .menu').getBoundingClientRect();
+      const s = (${hitOf})('menu-system');
+      return { left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top), bottom: Math.round(b.bottom), chave: s }; })())`));
+    console.log('     menu:', JSON.stringify(panel));
+    check('o menu cabe na tela, pendurado na direita', panel.left >= 0 && panel.right <= 390 && panel.bottom <= 844 && panel.right >= 370, panel);
+    check('a chave do menu recebe o toque', panel.chave.hit && panel.chave.h >= 44, panel);
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    const menuClosed = await waitFor(`!document.getElementById('menu-overlay').classList.contains('visible')`, 4000);
+    check('o voltar de verdade (Esc) fecha o menu', menuClosed);
     await send('Emulation.setTouchEmulationEnabled', { enabled: false });
     await send('Emulation.clearDeviceMetricsOverride');
   } finally {

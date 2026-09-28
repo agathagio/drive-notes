@@ -993,77 +993,404 @@ body.has-selection .toolbar-btn.toolbar-extract {
   font-weight: 600;
 }
 
-/* ── Welcome screen ── */
+/* ── Home: the vault tree ── */
 
+/* Three storeys: the header above (shared with every view), what scrolls, and the bar at the thumb */
 .welcome {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  /* "safe": centred while it fits, top-aligned and scrollable once the lists outgrow the screen */
-  justify-content: safe center;
-  overflow-y: auto;
-  gap: 16px;
-  padding: 32px;
-  text-align: center;
-  color: var(--text-secondary);
-}
-
-.welcome > * {
-  flex-shrink: 0;
-}
-
-.welcome h2 {
   color: var(--text-primary);
-  font-size: 20px;
 }
 
-.welcome p {
-  font-size: 14px;
-  max-width: 280px;
-  line-height: 1.5;
+.home-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px 8px 16px;
 }
 
-.welcome .btn {
-  font-size: 15px;
-  padding: 10px 20px;
+/* Each of these has a display of its own, which would beat the hidden attribute */
+.home-section[hidden],
+.tree-login[hidden],
+.menu-item[hidden],
+.home-section ul[hidden] {
+  display: none;
 }
 
-/* The foot of the home screen: the account signed in, and the way out. At the bottom while the screen
-   has room (margin-top: auto in the column), after the lists once they outgrow it. Only the two greys
-   of the text: it is the least important thing on the screen. */
-.welcome-account {
-  margin-top: auto;
-  padding-top: 16px;
+.home-section + .home-section,
+.home-section + .tree-login {
+  border-top: 1px solid var(--border);
+}
+
+.home-section-title {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 8px;
+  border: none;
+  background: none;
   color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.welcome-signout {
-  background: none;
+button.home-section-title {
+  cursor: pointer;
+}
+
+.drafts-list .home-section-title {
+  color: var(--warning);
+}
+
+.home-section-name {
+  flex: 1;
+}
+
+/* The title of the tree has no arrow: it lines up with the names, not with the arrows */
+.tree-title {
+  padding-left: 30px;
+}
+
+/* The swipe from the edge decides by the target of the touch: it has to stay the button */
+.home-section-title svg,
+.tree-item svg,
+.home-bar svg {
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.home-section-title[aria-expanded="true"] svg,
+.tree-item[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+/* The recents and the drafts, inside the home: the whole width, rows a finger tall */
+.home-section.recents-list {
+  max-width: none;
+  margin-top: 0;
+}
+
+.home-section.recents-list li {
+  min-height: 44px;
+  padding: 0 8px 0 30px;
+  font-size: 15px;
+}
+
+.tree-list,
+.tree-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* One step in per level, with a line down the side that says which folder the rows belong to */
+.tree-children {
+  margin-left: 14px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+
+.tree-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 8px;
   border: none;
-  padding: 4px 8px;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-primary);
   font: inherit;
-  font-size: 12px;
-  color: var(--text-secondary);
-  text-decoration: underline;
+  font-size: 15px;
+  text-align: left;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
 
-.welcome-signout:hover, .welcome-signout:active {
+.tree-item svg {
+  color: var(--text-secondary);
+}
+
+/* A note has no arrow: its name lines up with the names of the folders beside it */
+.tree-row:not(.is-folder) .tree-item,
+.tree-more .tree-item {
+  padding-left: 30px;
+}
+
+.tree-row.is-open > .tree-item {
+  background: var(--bg-secondary);
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+
+.tree-row.is-open > .tree-item svg {
+  color: currentColor;
+}
+
+.tree-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-loading,
+.tree-more-count,
+.home-section-count {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.drafts-list .home-section-count {
+  color: var(--warning);
+}
+
+.tree-more .tree-item {
+  color: var(--accent-hover);
+}
+
+.tree-message {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 8px 0 30px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+/* A folder on its way from the Drive: three grey bars where its rows will be */
+.tree-skeleton {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 8px 0 30px;
+}
+
+.tree-skeleton::before {
+  content: '';
+  width: 150px;
+  height: 12px;
+  border-radius: 6px;
+  background: var(--button-bg);
+}
+
+.tree-skeleton + .tree-skeleton::before {
+  width: 210px;
+}
+
+.tree-skeleton + .tree-skeleton + .tree-skeleton::before {
+  width: 120px;
+}
+
+.tree-login {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 8px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.tree-login .btn {
+  min-height: 44px;
+  padding: 10px 20px;
+  font-size: 15px;
+}
+
+/* The bar at the thumb: the search, and the new note */
+.home-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+}
+
+.home-search {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Filled: the one thing on the screen that asks to be tapped. What sits on a coloured fill is dark. */
+.home-new {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border: none;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--bg-primary);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The header on the home screen: the "dn" of the icon, and where we are */
+.home-label {
+  display: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+body[data-view="welcome"] .home-label {
+  display: inline;
+}
+
+body[data-view="welcome"] .file-name {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: var(--accent-hover);
+}
+
+/* ── Home menu ── */
+
+/* The panel hangs from the three dots, instead of sitting in the middle like a dialog */
+.menu-overlay {
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 56px 8px 0;
+}
+
+.menu {
+  display: flex;
+  flex-direction: column;
+  width: 280px;
+  max-width: 100%;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-secondary);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+.menu-account {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.menu-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-secondary);
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.menu-item:active {
+  background: var(--button-bg);
+}
+
+.menu-item-name {
+  flex: 1;
+}
+
+.menu-danger {
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 8px 8px;
   color: var(--error);
 }
 
-/* With the foot shown, its auto margin alone would take all the free space and pin the title and the
-   buttons to the top (auto margins win over justify-content). A second auto margin, on the title, splits
-   that space in two: the block stays centred over the foot. Hidden foot: no auto margins, safe center as before. */
-.welcome:has(.welcome-account:not(.hidden)) > h2 {
-  margin-top: auto;
+.menu-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  padding: 0 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.menu-info span + span {
+  font-family: var(--font-mono);
+}
+
+.menu-switch {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  width: 40px;
+  height: 24px;
+  padding: 2px;
+  border-radius: 12px;
+  background: var(--border);
+}
+
+.menu-switch i {
+  width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--text-secondary);
+  transition: transform 0.15s;
+}
+
+.menu-item[aria-checked="true"] .menu-switch {
+  background: var(--accent);
+}
+
+.menu-item[aria-checked="true"] .menu-switch i {
+  background: var(--bg-primary);
+  transform: translateX(16px);
 }
 
 /* ── Recents list ── */
@@ -1357,6 +1684,14 @@ body[data-view="preview"]:not(.unsaved) #btn-save,
 /* Inside a note the title needs the room: a new note is one "back" away */
 body[data-view="edit"] #btn-new,
 body[data-view="preview"] #btn-new {
+  display: none;
+}
+
+/* On the home screen the new note went down to the bar and the folder is the screen itself; the menu
+   of the three dots only exists there */
+body[data-view="welcome"] #btn-new,
+body[data-view="welcome"] #btn-open,
+body:not([data-view="welcome"]) #btn-menu {
   display: none;
 }
 

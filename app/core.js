@@ -23,6 +23,10 @@ const CONFIG = {
   NO_DATES_FILES: ['claude.md', 'skill.md'],
   // Pause in the typing, in ms, before a search goes to the Drive
   SEARCH_DELAY: 500,
+  // Folders the home tree keeps out of sight until "Mostrar pastas de sistema" is on (by name, at any depth)
+  HIDDEN_FOLDERS: ['_media', '_tasknotes', '_templates'],
+  // How many items an open folder of the home tree shows at a time ("Ver mais" brings the next ones)
+  TREE_PAGE: 30,
   // The Worker that holds the Google client secret (worker/index.js): trades the login's code for the
   // tokens and renews the access token. Public, like CLIENT_ID. Set at deploy time (SETUP.md).
   AUTH_URL: 'https://drive-notes-auth.agathagio.workers.dev/',
@@ -47,6 +51,10 @@ const KEYS = {
   MEDIA_FOLDER: 'drivenotes_media_folder',
   NOTE_INDEX: 'drivenotes_note_index',
   PLACES: 'drivenotes_places',
+  TREE_OPEN: 'drivenotes_tree_open',         // the folders left open in the home tree (ids)
+  TREE_LISTINGS: 'drivenotes_tree_listings', // what the vault root and those folders held, to draw before the Drive answers
+  TREE_SCROLL: 'drivenotes_tree_scroll',     // how far down the home screen was scrolled
+  SHOW_SYSTEM: 'drivenotes_show_system',     // '1' while the home tree shows CONFIG.HIDDEN_FOLDERS
   REOPEN: 'drivenotes_reopen',          // sessionStorage: the note to reopen after the new version reloads
   DRAFT_PREFIX: 'drivenotes_draft_',    // followed by the file id, or by `new_<timestamp>` for a note not on the Drive yet
   DRAFT_LATEST: 'drivenotes_draft_latest', // a pointer versions before the drafts list used; init removes it
@@ -229,10 +237,10 @@ const App = {
     this.initEditor();
     this.bindEvents();
     this.initToolbarKeyboardHandler();
+    this.initTree();
     this.showWelcome();
     this.syncHistory();
-    this.renderDrafts();
-    this.renderRecents();
+    this.renderHome();
     if (launch) {
       // Opened for something else: the note of an update's reload does not come back on top of it
       sessionStorage.removeItem(KEYS.REOPEN);
@@ -245,6 +253,7 @@ const App = {
   // ── UI State ──
 
   showBrowser() {
+    this.rememberHomeScroll(); // before the home screen is hidden: hidden, it forgets how far it was scrolled
     this._pending = this._opening = null; // a view has landed
     this.els.welcome.classList.add('hidden');
     this.els.editorContainer.classList.add('hidden');
@@ -262,9 +271,12 @@ const App = {
     this.els.previewContainer.classList.remove('visible');
     // The stylesheet keys off data-view: the formatting toolbar only exists while editing
     document.body.dataset.view = 'welcome';
+    // The tree is drawn after this: the drawing is what goes back to where the screen was (see drawTree)
+    this._tree.restore = true;
   },
 
   showEditor(mode = 'edit') {
+    this.rememberHomeScroll(); // before the home screen is hidden: hidden, it forgets how far it was scrolled
     this._pending = this._opening = null; // a view has landed
     this.els.welcome.classList.add('hidden');
     this.els.browser.classList.add('hidden');
@@ -303,8 +315,7 @@ const App = {
     this.updateFileNameDisplay();
     this.setSaveStatus('', '');
     this.showWelcome();
-    this.renderDrafts();
-    this.renderRecents();
+    this.renderHome();
     // The note just left may still be syncing; once it settles its draft is gone
     this._saveChain.then(() => {
       if (!this.currentFile) this.renderDrafts();
@@ -332,7 +343,7 @@ const App = {
   },
 
   updateFileNameDisplay() {
-    const name = this.currentFile ? this.currentFile.name : (this.folder ? this.folder.name : 'Drive Notes');
+    const name = this.currentFile ? this.currentFile.name : (this.folder ? this.folder.name : 'dn');
     this.els.fileName.textContent = name;
     this.els.fileName.classList.toggle('unsaved', this.isDirty);
     // In reading view the save button only shows while there is something to save (see the stylesheet)
@@ -376,16 +387,18 @@ const App = {
   },
 
   renderRecents() {
-    const recents = this.getRecents();
+    const recents = this.getRecents().slice(0, 8);
     const container = document.getElementById('recents-list');
     const ul = document.getElementById('recents-ul');
+    if (!container || !ul) return;
 
-    if (!recents.length || !container || !ul) return;
-
-    container.classList.remove('hidden');
+    // Without this, taking the last recent away left the section on screen with nothing in it
+    container.classList.toggle('hidden', !recents.length);
+    const count = document.getElementById('recents-count');
+    if (count) count.textContent = String(recents.length);
     ul.innerHTML = '';
 
-    recents.slice(0, 8).forEach(r => {
+    recents.forEach(r => {
       const li = document.createElement('li');
 
       // File name (clickable)
@@ -522,7 +535,7 @@ const App = {
   bindEvents() {
     // Header buttons
     this.els.btnNew.addEventListener('click', () => this.newFile());
-    this.els.btnOpen.addEventListener('click', () => this.browseVault());
+    this.els.btnOpen.addEventListener('click', () => this.openHome());
     // Save is tapped in the middle of writing: it must not take the focus (and the keyboard, and the
     // caret) away from the editor. Here the whole touch is cancelled, and not just its end as in the
     // toolbar (bindToolbarButton): there is nothing to scroll in the header, so nothing to make room for
@@ -699,14 +712,39 @@ const App = {
       }
     });
 
-    // Welcome buttons
+    // Home: the bar at the thumb, the sections that fold, the login of the tree
     document.getElementById('welcome-new')?.addEventListener('click', () => this.newFile());
-    document.getElementById('welcome-open')?.addEventListener('click', () => this.browseVault());
-    document.getElementById('welcome-signout')?.addEventListener('click', () => this.signOut());
+    // Until the search moves to the home screen itself, the field opens the one the folder screen has
+    document.getElementById('welcome-open')?.addEventListener('click', async () => {
+      await this.browseVault();
+      if (document.body.dataset.view === 'browse') this.els.browserSearch.focus();
+    });
+    document.getElementById('tree-login-btn')?.addEventListener('click', () => this.loginFromTree());
+    document.querySelectorAll('.home-section-title[data-section]').forEach((button) => {
+      button.addEventListener('click', () => this.toggleHomeSection(button));
+    });
 
-    // Diagnostics: five quick taps on the welcome title
+    // Home: the menu of the three dots. A tap on the dimmed backdrop closes, like the system back button
+    const menu = document.getElementById('menu-overlay');
+    document.getElementById('btn-menu')?.addEventListener('click', () => this.openMenu());
+    document.getElementById('menu-close')?.addEventListener('click', () => this.closeMenu());
+    menu?.addEventListener('click', (e) => {
+      if (e.target === menu) this.closeMenu();
+    });
+    document.getElementById('menu-system')?.addEventListener('click', () => this.toggleSystemFolders());
+    document.getElementById('menu-debug')?.addEventListener('click', () => {
+      this.closeMenu();
+      this.showDiagnostics();
+    });
+    document.getElementById('welcome-signout')?.addEventListener('click', () => {
+      this.closeMenu();
+      this.signOut();
+    });
+
+    // Diagnostics: five quick taps on the "dn" of the home screen
     let taps = [];
-    document.querySelector('#welcome h2')?.addEventListener('click', () => {
+    this.els.fileName.addEventListener('click', () => {
+      if (document.body.dataset.view !== 'welcome') return;
       const now = Date.now();
       taps = [...taps.filter(t => now - t < 3000), now];
       if (taps.length >= 5) {
@@ -742,6 +780,7 @@ const App = {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState !== 'hidden') return;
       this.rememberPlace();
+      this.rememberHomeScroll();
       if (this.isDirty) {
         this.saveDraft();
         this.save();
@@ -749,6 +788,7 @@ const App = {
     });
     window.addEventListener('pagehide', () => {
       this.rememberPlace();
+      this.rememberHomeScroll();
       if (this.isDirty) this.saveDraft();
     });
   },

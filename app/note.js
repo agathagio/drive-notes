@@ -627,6 +627,8 @@ Object.assign(App, {
     if (!container || !ul) return;
 
     container.classList.toggle('hidden', !drafts.length);
+    const count = document.getElementById('drafts-count');
+    if (count) count.textContent = String(drafts.length);
     ul.innerHTML = '';
 
     drafts.forEach(d => {
