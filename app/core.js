@@ -726,6 +726,9 @@ const App = {
       button.addEventListener('click', () => this.toggleHomeSection(button));
     });
 
+    // Home: the two arrows next to the three dots close every open folder of the tree
+    document.getElementById('btn-collapse')?.addEventListener('click', () => this.collapseTree());
+
     // Home: the menu of the three dots. A tap on the dimmed backdrop closes, like the system back button
     const menu = document.getElementById('menu-overlay');
     document.getElementById('btn-menu')?.addEventListener('click', () => this.openMenu());

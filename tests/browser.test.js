@@ -1574,6 +1574,50 @@ const FAKE_DRIVE = `
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     const menuClosed = await waitFor(`!document.getElementById('menu-overlay').classList.contains('visible')`, 4000);
     check('o voltar de verdade (Esc) fecha o menu', menuClosed);
+
+    console.log('\nHome: as duas setas que fecham todas as pastas');
+    await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 740, deviceScaleFactor: 2, mobile: true });
+    await sleep(200);
+    const arrowsShown = `getComputedStyle(document.getElementById('btn-collapse')).display !== 'none'`;
+    check('tudo fechado: as setas nao aparecem', await js(arrowsShown) === false);
+    // Three folders open (empty ones, in this Drive), then the tree scrolled to the end
+    await js(`(() => { for (const name of ['pasta-00', 'pasta-01', 'pasta-02']) {
+      [...document.querySelectorAll('#tree-list .tree-row')].find((li) => li.querySelector('.tree-name').textContent === name).querySelector('.tree-item').click(); }
+      return 'ok'; })()`);
+    await waitFor(`document.querySelectorAll('#tree-list .tree-row.is-open').length === 3 && !document.querySelector('#tree-list .tree-loading')`, 4000);
+    await js(`document.getElementById('home-scroll').scrollTop = 1e6; 'ok'`);
+    const arrows = JSON.parse(await js(`JSON.stringify((() => {
+      const box = (id) => { const b = document.getElementById(id).getBoundingClientRect(); return { left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top), w: Math.round(b.width), h: Math.round(b.height) }; };
+      const bg = (id) => getComputedStyle(document.getElementById(id)).backgroundColor;
+      return { shown: ${arrowsShown}, hit: (${hitOf})('btn-collapse'), box: box('btn-collapse'), menu: box('btn-menu'), sameBg: bg('btn-collapse') === bg('btn-menu'),
+        scrolled: document.getElementById('home-scroll').scrollTop }; })())`));
+    console.log('     setas:', JSON.stringify(arrows));
+    check('pasta aberta: as setas aparecem', arrows.shown);
+    check('rolada ate o fim, dentro da tela de 360px e recebendo o toque', arrows.scrolled > 0 && arrows.hit.hit && arrows.box.left >= 0 && arrows.box.right <= 360 && arrows.box.top >= 0, arrows);
+    check('logo a esquerda dos tres pontinhos, com o mesmo tamanho e o mesmo fundo',
+      arrows.box.right <= arrows.menu.left && arrows.menu.left - arrows.box.right <= 8 && arrows.box.w === arrows.menu.w && arrows.box.h === arrows.menu.h && arrows.sameBg, arrows);
+
+    const backState = `JSON.stringify({ stack: __App.navStack.length, watcher: !!__App._watcher, history: history.length })`;
+    const backBefore = await js(backState);
+    const center = { x: arrows.box.left + arrows.box.w / 2, y: arrows.box.top + arrows.box.h / 2 };
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: center.x, y: center.y, button: 'left', clickCount: 1 });
+    }
+    const allClosed = await waitFor(`!document.querySelector('#tree-list .tree-row.is-open')`, 4000);
+    const collapsed = JSON.parse(await js(`JSON.stringify({ shown: ${arrowsShown}, top: document.getElementById('home-scroll').scrollTop, kept: localStorage.getItem('drivenotes_tree_scroll') })`));
+    console.log('     depois do toque:', JSON.stringify(collapsed));
+    check('o toque fecha todas as pastas, e as setas somem', allClosed && collapsed.shown === false, collapsed);
+    check('a home volta pro comeco, e o aparelho guarda o zero', collapsed.top === 0 && collapsed.kept === '0', collapsed);
+    const backAfter = await js(backState);
+    check('nada entrou na pilha do voltar', backBefore === backAfter, { backBefore, backAfter });
+    // With nothing armed, the real back button leaves the app; here Esc must reach no handleBack at all
+    await js(`window.__backs = 0; { const handle = __App.handleBack; __App.handleBack = function () { window.__backs++; return handle.call(this); }; } 'ok'`);
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await sleep(300);
+    const afterEsc = JSON.parse(await js(`JSON.stringify({ view: document.body.dataset.view, backs: window.__backs, state: ${backState} })`));
+    check('o voltar (Esc) na home segue sem nada pra fechar: o do celular sai do app, como antes',
+      afterEsc.view === 'welcome' && afterEsc.backs === 0 && afterEsc.state === backBefore, afterEsc);
     await send('Emulation.setTouchEmulationEnabled', { enabled: false });
     await send('Emulation.clearDeviceMetricsOverride');
   } finally {

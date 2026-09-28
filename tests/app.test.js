@@ -5797,5 +5797,196 @@ async function scenario(title, block) {
     check('guarda so os ultimos 10 toques', App._treeTimes.taps.length === 10);
   });
 
+  // ── Home: the two arrows that close every folder (v66) ──
+  // The stylesheet goes into the page for these: whether the button shows depends on it (data-view and
+  // the hidden attribute), and jsdom applies its rules to getComputedStyle, with no layout
+  const addStyles = (w) => {
+    const style = w.document.createElement('style');
+    style.textContent = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
+    w.document.head.appendChild(style);
+  };
+  const collapseShown = (w) => w.getComputedStyle(w.document.getElementById('btn-collapse')).display !== 'none';
+  const openRows = (d) => treeRows(d).filter((row) => row.endsWith('/*'));
+
+  await scenario('H20. Home: as duas setas so aparecem com pasta aberta na arvore', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    makeDir(drive, 'd-media', '_media', VAULT);
+    const d = w.document;
+    addStyles(w);
+    const button = d.getElementById('btn-collapse');
+    check('ao lado dos tres pontinhos, com as mesmas classes e o nome em pt-BR',
+      button.nextElementSibling === d.getElementById('btn-menu') && button.className === d.getElementById('btn-menu').className
+      && button.title === 'Fechar todas as pastas' && button.getAttribute('aria-label') === 'Fechar todas as pastas');
+    check('o desenho e de traco, do tamanho do dos tres pontinhos', button.querySelector('svg').getAttribute('width') === '18'
+      && button.querySelector('svg').getAttribute('stroke-width') === '2' && button.querySelectorAll('svg path').length === 2);
+    await showHome(App);
+    await until(() => aheadDone(App));
+    check('tudo fechado: o botao nao aparece', !collapseShown(w) && button.hidden);
+    treeButton(d, '20-projetos').click();
+    check('abrir uma pasta faz aparecer', collapseShown(w));
+    treeButton(d, '20-projetos').click();
+    check('fechar essa pasta pelo toque nela faz sumir', !collapseShown(w));
+
+    w.localStorage.setItem('drivenotes_show_system', '1');
+    App.drawTree();
+    treeButton(d, '_media').click(); await sleep(40);
+    check('pasta de sistema aberta: aparece', collapseShown(w) && openRows(d).includes('_media/*'), treeRows(d));
+    App.toggleSystemFolders();
+    check('desligar as pastas de sistema tira a pasta da vista, e o botao junto', !collapseShown(w) && !openRows(d).length, treeRows(d));
+    App.toggleSystemFolders();
+    check('ligar de novo: a pasta volta aberta, e o botao tambem', collapseShown(w) && openRows(d).includes('_media/*'));
+  });
+
+  await scenario('H21. Home: o toque fecha tudo, em varios niveis, e a pasta reabre na hora', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    makeDir(drive, 'd-deep', 'fundo', 'd-proj');
+    makeDir(drive, 'd-deeper', 'mais-fundo', 'd-deep');
+    const d = w.document;
+    addStyles(w);
+    await showHome(App);
+    await until(() => aheadDone(App));
+    treeButton(d, '20-projetos').click();
+    await until(() => aheadDone(App) && App._tree.loading.size === 0);
+    treeButton(d, 'fundo').click();
+    await until(() => aheadDone(App) && App._tree.loading.size === 0);
+    treeButton(d, 'mais-fundo').click();
+    treeButton(d, '10-areas').click();
+    await until(() => aheadDone(App) && App._tree.loading.size === 0);
+    check('quatro pastas abertas, em tres niveis', JSON.stringify(openRows(d)) === JSON.stringify(['10-areas/*', '20-projetos/*', 'fundo/*', 'mais-fundo/*']), openRows(d));
+    const scroller = App.homeScroller();
+    scroller.scrollTop = 400;
+    App.rememberHomeScroll();
+    check('a rolagem estava guardada', w.localStorage.getItem('drivenotes_tree_scroll') === '400', w.localStorage.getItem('drivenotes_tree_scroll'));
+    const cached = App._folderCache.size;
+    const seq = JSON.stringify([...App._tree.seq]);
+
+    d.getElementById('btn-collapse').click();
+    check('nenhuma pasta aberta na tela', openRows(d).length === 0 && treeRows(d).includes('20-projetos/') && !treeRows(d).includes('fundo/'), treeRows(d));
+    check('... nem no estado', App._tree.open.size === 0 && App._tree.shown.size === 0 && App._tree.ahead.length === 0 && App._treeTimes.waiting.size === 0);
+    check('o botao some', !collapseShown(w));
+    check('o aparelho guardou tudo fechado', w.localStorage.getItem('drivenotes_tree_open') === '[]'
+      && JSON.stringify(Object.keys(JSON.parse(w.localStorage.getItem('drivenotes_tree_listings')))) === JSON.stringify([VAULT]));
+    check('a rolagem volta pro comeco, e fica guardada', scroller.scrollTop === 0 && App._tree.scroll === 0 && w.localStorage.getItem('drivenotes_tree_scroll') === '0',
+      { top: scroller.scrollTop, scroll: App._tree.scroll, kept: w.localStorage.getItem('drivenotes_tree_scroll') });
+    check('o que foi listado continua em memoria, e o seq nao mudou', App._folderCache.size === cached && JSON.stringify([...App._tree.seq]) === seq);
+    check('nada novo pedido: as pastas da raiz ja estao listadas', App._tree.fetching.size === 0 && App._tree.loading.size === 0);
+
+    treeButton(d, '20-projetos').click();
+    check('reabrir desenha na hora, sem carregando e sem barrinhas', treeRows(d).includes('nota do projeto') && treeRows(d).includes('fundo/')
+      && !d.querySelector('#tree-list .tree-loading') && !d.querySelector('#tree-list .tree-skeleton'), treeRows(d));
+    check('... com as de dentro fechadas, e o botao de volta', !openRows(d).includes('fundo/*') && collapseShown(w));
+    await until(() => aheadDone(App) && App._tree.loading.size === 0);
+  });
+
+  await scenario('H22. Home: fechar tudo esquece o Ver mais, e o aparelho nasce fechado', async () => {
+    const first = await boot();
+    const { App, drive, w } = first;
+    seedVault(drive);
+    for (let i = 1; i <= 31; i++) drive.put(`big-${i}`, `nota-${String(i).padStart(2, '0')}.md`, 'x', ['d-10']);
+    const d = w.document;
+    const inside = () => treeRows(d).filter((name) => name.startsWith('nota-'));
+    await showHome(App);
+    await until(() => aheadDone(App));
+    treeButton(d, '10-areas').click();
+    treeButton(d, '20-projetos').click();
+    d.querySelector('#tree-list .tree-more .tree-item').click();
+    check('Ver mais: 31 na tela', inside().length === 31, inside().length);
+    App.homeScroller().scrollTop = 250;
+    App.rememberHomeScroll();
+    d.getElementById('btn-collapse').click();
+    treeButton(d, '10-areas').click();
+    check('reaberta, a pasta grande volta aos 30 primeiros', inside().length === 30 && d.querySelectorAll('#tree-list .tree-more').length === 1, inside().length);
+    d.getElementById('btn-collapse').click();
+    await until(() => aheadDone(App) && App._tree.loading.size === 0);
+
+    const kept = {};
+    for (const key of ['drivenotes_tree_open', 'drivenotes_tree_listings', 'drivenotes_tree_scroll']) kept[key] = w.localStorage.getItem(key);
+    const again = await boot({ seedStorage: kept });
+    seedVault(again.drive);
+    addStyles(again.w);
+    await showHome(again.App);
+    check('segunda abertura: tudo fechado', openRows(again.w.document).length === 0 && again.App._tree.open.size === 0 && treeRows(again.w.document).includes('10-areas/'),
+      treeRows(again.w.document));
+    check('... a rolagem em zero', again.App._tree.scroll === 0 && again.App.homeScroller().scrollTop === 0);
+    check('... e sem o botao', !collapseShown(again.w));
+    await until(() => aheadDone(again.App));
+  });
+
+  await scenario('H23. Home: fora da home, sem login ou com pasta fantasma, o botao nao aparece', async () => {
+    {
+      const { App, drive, w } = await boot();
+      seedVault(drive);
+      const d = w.document;
+      addStyles(w);
+      await showHome(App);
+      await until(() => aheadDone(App));
+      treeButton(d, '20-projetos').click();
+      check('home com pasta aberta: aparece', collapseShown(w));
+      treeButton(d, 'nota do projeto').click(); await sleep(80);
+      check('nota aberta: nao aparece', d.body.dataset.view === 'preview' && !collapseShown(w), d.body.dataset.view);
+      App.els.btnPreview.click();
+      check('... nem na edicao', d.body.dataset.view === 'edit' && !collapseShown(w));
+      App.els.btnBack.click(); await sleep(80);
+      check('de volta na home, com a pasta aberta: aparece de novo', d.body.dataset.view === 'welcome' && collapseShown(w));
+      d.getElementById('welcome-open').click(); await sleep(80);
+      check('na tela de pastas: nao aparece', d.body.dataset.view === 'browse' && !collapseShown(w));
+    }
+    const listings = JSON.stringify({
+      [VAULT]: [{ id: 'd-proj', name: '20-projetos', isFolder: true }, { id: 'd-10', name: '10-areas', isFolder: true }],
+      'd-proj': [{ id: 'd-deep', name: 'fundo', isFolder: true }],
+    });
+    {
+      const { App, drive, w } = await boot({ auth: false, seedStorage: { drivenotes_tree_open: JSON.stringify(['d-proj']), drivenotes_tree_listings: listings } });
+      seedVault(drive);
+      addStyles(w);
+      await showHome(App);
+      check('sem login, com pasta aberta guardada: o Entrar no lugar, e nada de botao',
+        !w.document.getElementById('tree-login').hidden && App.openFoldersInView().length === 1 && !collapseShown(w));
+    }
+    {
+      const { App, drive, w } = await boot({ seedStorage: { drivenotes_tree_open: JSON.stringify(['ghost', 'd-deep']), drivenotes_tree_listings: listings } });
+      seedVault(drive);
+      makeDir(drive, 'd-deep', 'fundo', 'd-proj');
+      addStyles(w);
+      App.renderHome();
+      check('pasta que saiu do Drive e pasta dentro de uma fechada: o botao nao aparece', App._tree.open.size === 2 && !collapseShown(w));
+      await until(() => aheadDone(App) && App._tree.loading.size === 0);
+      check('... nem depois de a arvore chegar do Drive', !collapseShown(w) && openRows(w.document).length === 0, treeRows(w.document));
+    }
+  });
+
+  await scenario('H24. Home: fechar tudo nao mexe no voltar, e listagem atrasada nao reabre nada', async () => {
+    const { App, drive, w } = await boot({ watcher: true });
+    seedVault(drive);
+    makeDir(drive, 'd-deep', 'fundo', 'd-proj');
+    const d = w.document;
+    addStyles(w);
+    const gate = gateFolders(w);
+    await showHome(App);
+    await until(() => aheadDone(App));
+    // The tap's listing of the folder, and the listing ahead of the folder inside it, both held on their way
+    gate.holdFirst('d-proj');
+    gate.holdFirst('d-deep');
+    treeButton(d, '20-projetos').click();
+    check('duas listagens a caminho', App._tree.loading.has('d-proj') && App._tree.fetching.has('d-deep'));
+    const before = { stack: App.navStack.length, fwd: App.fwdStack.length, watchers: w.__watchers.length, history: w.history.length };
+    d.getElementById('btn-collapse').click();
+    const after = { stack: App.navStack.length, fwd: App.fwdStack.length, watchers: w.__watchers.length, history: w.history.length };
+    check('a pilha do voltar, o historico e o voltar armado ficam como estavam', JSON.stringify(before) === JSON.stringify(after), { before, after });
+    check('... e o voltar na home continua saindo do app', w.__back() === 'EXIT' && d.body.dataset.view === 'welcome');
+
+    drive.put('n-late', 'chegou-depois.md', 'x', ['d-proj']);
+    gate.release('d-proj');
+    gate.release('d-deep');
+    await until(() => aheadDone(App) && App._tree.loading.size === 0);
+    check('as respostas chegam e nada reabre', openRows(d).length === 0 && App._tree.open.size === 0 && !collapseShown(w), treeRows(d));
+    check('... mas ficam guardadas em memoria', App._folderCache.get('d-proj')?.some((item) => item.name === 'chegou-depois.md') && App._folderCache.has('d-deep'));
+    treeButton(d, '20-projetos').click();
+    check('a pasta reaberta ja mostra o que chegou', treeRows(d).includes('chegou-depois') && !d.querySelector('#tree-list .tree-loading'), treeRows(d));
+    await until(() => aheadDone(App) && App._tree.loading.size === 0);
+  });
+
   done();
 })().catch(e => { console.error('HARNESS ERROR', e); process.exit(2); });

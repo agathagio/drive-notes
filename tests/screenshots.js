@@ -121,6 +121,14 @@ const SETUP = `
       const lines = [...document.querySelectorAll('#tree-list .tree-children')].filter((ul) => getComputedStyle(ul).borderLeftWidth !== '0px').length;
       return { noteNameLeft: Math.round(note.getBoundingClientRect().left), withBackground, childLines: lines };
     })())`).then((r) => console.log(`  (arvore funda: ${r})`));
+    // The same path with the tree scrolled to the end: the two arrows that close every folder, next to the three dots
+    await js(`document.getElementById('home-scroll').scrollTop = 1e6; 'ok'`);
+    await shot('1e-inicio-fechar-pastas');
+    await js(`JSON.stringify((() => {
+      const box = (id) => { const b = document.getElementById(id).getBoundingClientRect(); return [Math.round(b.left), Math.round(b.top), Math.round(b.width), Math.round(b.height)]; };
+      return { shown: getComputedStyle(document.getElementById('btn-collapse')).display !== 'none', arrows: box('btn-collapse'), menu: box('btn-menu'),
+        scrolled: document.getElementById('home-scroll').scrollTop };
+    })())`).then((r) => console.log(`  (fechar pastas: ${r})`));
     for (const name of ['setembro', '2026', 'exames', 'saude', '10-areas']) await tapFolder(name);
     await js(`__App.browseVault().then(() => 'ok')`);
     await shot('2-pastas');

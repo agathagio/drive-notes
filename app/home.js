@@ -167,6 +167,15 @@ Object.assign(App, {
     const tree = document.getElementById('tree');
     if (login) login.hidden = !show;
     if (tree) tree.hidden = show;
+    this.drawCollapseButton();
+  },
+
+  /** The two arrows of the header: only while the tree shows an open folder. Being on the home screen
+      is the stylesheet's part (data-view), as for the three dots. */
+  drawCollapseButton() {
+    const button = document.getElementById('btn-collapse');
+    const tree = document.getElementById('tree');
+    if (button) button.hidden = !tree || tree.hidden || !this.openFoldersInView().length;
   },
 
   /** The tree, from what the device kept, and a fresh listing of everything in view behind it.
@@ -324,6 +333,23 @@ Object.assign(App, {
     this.drawTree();
   },
 
+  /** The two arrows: close every folder at once and go back to the top. Not a navigation either. What
+      was listed stays in memory, so a folder opened again draws at once, and a listing still on its way
+      only lands there: with nothing open it reopens nothing. */
+  collapseTree() {
+    const tree = this._tree;
+    tree.open.clear();
+    tree.shown.clear();
+    tree.ahead = [];
+    this._treeTimes.waiting.clear();
+    // Before the drawing, which leaves the screen where it finds it (or at tree.scroll, see drawTree)
+    tree.scroll = 0;
+    this.homeScroller().scrollTop = 0;
+    this.saveTree();
+    this.drawTree();
+    this.rememberHomeScroll();
+  },
+
   /** Draw the whole tree again, and leave the screen scrolled where it was */
   drawTree() {
     const list = document.getElementById('tree-list');
@@ -336,6 +362,7 @@ Object.assign(App, {
     scroller.scrollTop = top;
     if (list.querySelector('.tree-row')) this._tree.restore = false;
     this.noteTreeWaits();
+    this.drawCollapseButton();
   },
 
   /** The taps whose folder now shows its rows (or its error): how long they waited, into the panel */

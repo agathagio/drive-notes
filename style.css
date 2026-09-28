@@ -1692,10 +1692,13 @@ body[data-view="preview"] #btn-new {
 }
 
 /* On the home screen the new note went down to the bar and the folder is the screen itself; the menu
-   of the three dots only exists there */
+   of the three dots only exists there, and so do the two arrows that close the tree. Those also wait
+   for an open folder: drawCollapseButton sets their hidden attribute, which the .btn display would beat */
 body[data-view="welcome"] #btn-new,
 body[data-view="welcome"] #btn-open,
-body:not([data-view="welcome"]) #btn-menu {
+body:not([data-view="welcome"]) #btn-menu,
+body:not([data-view="welcome"]) #btn-collapse,
+#btn-collapse[hidden] {
   display: none;
 }
 
