@@ -11,6 +11,8 @@ Object.assign(App, {
     this.navStack = [];
     this.fwdStack = [];
     this._pending = null;
+    // The folder button asks for the vault: a search left open behind the note is forgotten
+    this.resetHomeSearch();
     this.goHome();
     this.armWatcher();
   },
@@ -144,9 +146,12 @@ Object.assign(App, {
     return document.getElementById('home-scroll') || this.els.welcome;
   },
 
-  /** Called right before the home screen is left, or the app goes to the background */
+  /** Called right before the home screen is left, or the app goes to the background. Only while the
+      tree is what the screen shows: with the search in its place the scroller is hidden and reads 0,
+      and with no row drawn yet (the app opened straight into a note) there is nothing to remember. */
   rememberHomeScroll() {
-    if (document.body.dataset.view !== 'welcome') return;
+    if (document.body.dataset.view !== 'welcome' || this._homeSearch.open) return;
+    if (!document.querySelector('#tree-list .tree-row')) return;
     this._tree.scroll = this.homeScroller().scrollTop;
     try {
       localStorage.setItem(KEYS.TREE_SCROLL, String(this._tree.scroll));
@@ -160,6 +165,8 @@ Object.assign(App, {
     this.renderDrafts();
     this.renderRecents();
     this.renderTree();
+    // A search left open (back from one of its results) takes the tree's place again
+    this.drawHomeSearch();
   },
 
   showTreeLogin(show) {
@@ -170,12 +177,12 @@ Object.assign(App, {
     this.drawCollapseButton();
   },
 
-  /** The two arrows of the header: only while the tree shows an open folder. Being on the home screen
-      is the stylesheet's part (data-view), as for the three dots. */
+  /** The two arrows of the header: only while the tree shows an open folder, and not while the search is
+      open. Being on the home screen is the stylesheet's part (data-view), as for the three dots. */
   drawCollapseButton() {
     const button = document.getElementById('btn-collapse');
     const tree = document.getElementById('tree');
-    if (button) button.hidden = !tree || tree.hidden || !this.openFoldersInView().length;
+    if (button) button.hidden = !tree || tree.hidden || this._homeSearch.open || !this.openFoldersInView().length;
   },
 
   /** The tree, from what the device kept, and a fresh listing of everything in view behind it.

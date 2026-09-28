@@ -3,7 +3,9 @@
 Object.assign(App, {
   // ── Navigation (back button, Android back gesture) ──
 
-  // A view is described by { view: 'welcome' }, { view: 'file', id, name } or { view: 'browse', id, name, path }.
+  // A view is described by { view: 'welcome' } or { view: 'file', id, name }. Versions up to v66 also had
+  // { view: 'browse', ... }, the folder screen: one kept by them (the reload package, a history entry)
+  // is shown as the home screen.
   //
   // Two ways to make the system back button walk through views instead of closing the app:
   // - CloseWatcher (useWatcher): the API Chrome gives apps for the Android back button. While one is
@@ -14,11 +16,10 @@ Object.assign(App, {
 
   viewState() {
     // Read while a note is still loading, the screen would describe the view before it: two quick steps
-    // (forward twice, two taps on the list) then left the same folder on the back stack more than once
+    // (forward twice, two taps on the list) then left the same view on the back stack more than once
     if (this._opening) return this._opening;
     const file = this.currentFile;
     if (file) return { view: 'file', id: file.id, name: file.name };
-    if (this.folder) return { view: 'browse', ...this.folder };
     return { view: 'welcome' };
   },
 
@@ -33,11 +34,7 @@ Object.assign(App, {
         this._opening = null;
         this.setSaveStatus('', '');
       }
-    } else if (state?.view === 'browse') {
-      if (this._opening || this.currentFile || this.folder?.id !== state.id) {
-        return this.openFolder({ id: state.id, name: state.name, path: state.path || [], query: state.query || '' });
-      }
-    } else if (this.currentFile || this.folder || document.body.dataset.view !== 'welcome') {
+    } else if (this.currentFile || document.body.dataset.view !== 'welcome') {
       // (already there when a failed navigation is being undone: its error message stays on screen)
       this.goHome();
     }
@@ -82,7 +79,8 @@ Object.assign(App, {
       With none active, the system back button leaves the app, which is what the welcome screen wants. */
   armWatcher() {
     if (!this.useWatcher) return;
-    const needed = this.navStack.length > 0 || !!this.sketch || !!document.querySelector('.modal-overlay.visible');
+    const searching = this._homeSearch.open && document.body.dataset.view === 'welcome';
+    const needed = this.navStack.length > 0 || !!this.sketch || searching || !!document.querySelector('.modal-overlay.visible');
     if (needed && !this._watcher) {
       try {
         const watcher = new CloseWatcher();
@@ -101,7 +99,7 @@ Object.assign(App, {
     }
   },
 
-  /** One step back: close the dialog on top, or leave the drawing screen, or else return to the previous view */
+  /** One step back: close the dialog on top, or leave the drawing screen, or close the search of the home screen, or else return to the previous view */
   handleBack() {
     // The system back button is no touch on the page: a lift click still owed to a long press will not
     // come now, and left armed it would swallow the dismiss click below (a first "back" doing nothing)
@@ -120,10 +118,13 @@ Object.assign(App, {
       this._loadSeq++;
       this.cancelNav();
       this.setSaveStatus('', '');
+    } else if (this._homeSearch.open && document.body.dataset.view === 'welcome') {
+      // The search is not a view: "back" closes it and stays on the home screen
+      this.closeHomeSearch();
     } else {
       // The view being left is where a swipe from the right edge returns to. A note not yet on the Drive has no way back.
       const leaving = this.viewState();
-      if (leaving.view === 'browse' || (leaving.view === 'file' && leaving.id)) this.fwdStack.push(leaving);
+      if (leaving.view === 'file' && leaving.id) this.fwdStack.push(leaving);
       // An entry for the view already on screen would make this "back" do nothing: skip it
       const same = (a, b) => a.view === b.view && (a.id || null) === (b.id || null);
       let target = this.navStack.pop();
@@ -161,7 +162,8 @@ Object.assign(App, {
   swipeAllowed(side) {
     if (this.sketch) return false; // a stroke that starts at the edge is a stroke
     const dialog = !!document.querySelector('.modal-overlay.visible');
-    if (side === 'left') return dialog || document.body.dataset.view !== 'welcome';
+    const home = document.body.dataset.view === 'welcome';
+    if (side === 'left') return dialog || !home || this._homeSearch.open;
     return !dialog && (!this.useWatcher || this.fwdStack.length > 0);
   },
 
@@ -239,6 +241,11 @@ Object.assign(App, {
     this.log(`goBack (${from})`);
     if (this.useWatcher) {
       this.handleBack();
+      return;
+    }
+    // History mode has no entry for the search, as it has none for a dialog
+    if (this._homeSearch.open && document.body.dataset.view === 'welcome') {
+      this.closeHomeSearch();
       return;
     }
     this._popped = false;
@@ -338,9 +345,9 @@ Object.assign(App, {
     }
   },
 
-  /** The home screen with nothing on it: no note, no folder, nothing on its way, no dialog, no drawing */
+  /** The home screen with nothing on it: no note, no search open, nothing on its way, no dialog, no drawing */
   safeToReload() {
-    return document.body.dataset.view === 'welcome' && !this.currentFile && !this.folder && !this.isDirty
+    return document.body.dataset.view === 'welcome' && !this.currentFile && !this._homeSearch.open && !this.isDirty
       && !this._opening && !this._pending && !this.sketch && !document.querySelector('.modal-overlay.visible');
   },
 
@@ -404,12 +411,14 @@ Object.assign(App, {
       kept = JSON.parse(sessionStorage.getItem(KEYS.REOPEN));
       sessionStorage.removeItem(KEYS.REOPEN);
     } catch { /* nothing to reopen */ }
-    if (!kept?.view || kept.view.view === 'welcome') return;
+    // The folder screen left the app: what the version before this one kept of it is dropped
+    const known = (stack) => (Array.isArray(stack) ? stack.filter((s) => s?.view !== 'browse') : []);
+    if (!kept?.view || kept.view.view === 'welcome' || kept.view.view === 'browse') return;
     this.log(`reopen ${kept.view.view} ${kept.view.name || ''}`);
     // History mode needs nothing: the reload keeps the session history, entries and all
     if (this.useWatcher) {
-      this.navStack = kept.navStack || [];
-      this.fwdStack = kept.fwdStack || [];
+      this.navStack = known(kept.navStack);
+      this.fwdStack = known(kept.fwdStack);
       this.armWatcher();
     }
     const landed = await this.show(kept.view);

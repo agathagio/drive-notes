@@ -157,24 +157,28 @@ const FAKE_DRIVE = `
     await open(buildPage('current', currentApp));
     check('o navegador tem CloseWatcher e o app escolheu esse modo', await js('typeof CloseWatcher') === 'function' && await js('__App.useWatcher'));
     await js(FAKE_DRIVE);
-    await js(`__App.browseVault().then(() => 'ok')`);
-    const view = () => js(`JSON.stringify({ view: document.body.dataset.view, file: __App.currentFile?.id || null, folder: __App.folder?.id || null, stack: __App.navStack.length, hist: history.length })`).then(JSON.parse);
+    // The page opened without a login: the tree is listed now, with the fake Drive in place
+    await js(`__App.renderHome(); 'ok'`);
+    // A tap on a note of the home tree, by its name
+    const TAP_TREE_NOTE = (name) => `[...document.querySelectorAll('#tree-list .tree-row')]
+      .find(li => li.querySelector('.tree-name').textContent === ${JSON.stringify(name)}).querySelector('.tree-item').click(); 'ok'`;
+    const view = () => js(`JSON.stringify({ view: document.body.dataset.view, file: __App.currentFile?.id || null, stack: __App.navStack.length, hist: history.length })`).then(JSON.parse);
     const back = async () => {
       for (const type of ['rawKeyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
       await sleep(250);
     };
     const hist0 = (await view()).hist;
-    check('pasta raiz aberta', (await view()).view === 'browse', await view());
-    await js(`[...document.querySelectorAll('.browser-item')].find(li => li.textContent.includes('com link')).click(); 'ok'`); await sleep(300);
+    check('home com a arvore do vault', await waitFor(`document.querySelector('#tree-list .tree-row')`, 4000) && (await view()).view === 'welcome', await view());
+    await js(TAP_TREE_NOTE('com link')); await sleep(300);
     await js(`document.querySelector('#preview-container a.wikilink').click(); 'ok'`); await sleep(400);
     let v = await view();
-    check('pasta > nota > link: na nota de destino, 3 telas na pilha', v.file === 'N2' && v.stack === 3, v);
+    check('home > nota > link: na nota de destino, 2 telas na pilha', v.file === 'N2' && v.stack === 2, v);
     await back(); v = await view();
-    check('voltar 1: nota anterior', v.file === 'N1' && v.stack === 2, v);
+    check('voltar 1: nota anterior', v.file === 'N1' && v.stack === 1, v);
     await back(); v = await view();
-    check('voltar 2 (watcher recriado sem toque entre um voltar e outro): pasta', v.view === 'browse' && v.folder === 'ROOT' && v.stack === 1, v);
+    check('voltar 2 (watcher recriado sem toque entre um voltar e outro): home', v.view === 'welcome' && v.file === null && v.stack === 0, v);
     await back(); v = await view();
-    check('voltar 3: tela inicial', v.view === 'welcome' && v.stack === 0, v);
+    check('voltar 3, na home: nada muda (no celular, sai do app)', v.view === 'welcome' && v.stack === 0, v);
     check('historico do navegador nunca foi tocado', v.hist === hist0, [hist0, v.hist]);
 
     // ── 4. Photo: the real canvas shrinks it, the real editor receives the embed ──
@@ -457,11 +461,12 @@ const FAKE_DRIVE = `
     await send('Emulation.setTouchEmulationEnabled', { enabled: true });
     await open(buildPage('swipe', currentApp));
     await js(FAKE_DRIVE);
-    await js(`__App.browseVault().then(() => 'ok')`);
-    await js(`[...document.querySelectorAll('.browser-item')].find(li => li.textContent.includes('com link')).click(); 'ok'`);
+    await js(`__App.renderHome(); 'ok'`);
+    await waitFor(`document.querySelector('#tree-list .tree-row')`);
+    await js(TAP_TREE_NOTE('com link'));
     await waitFor(`__App.currentFile && __App.currentFile.id === 'N1'`);
     await js(`document.querySelector('#preview-container a.wikilink').click(); 'ok'`);
-    await waitFor(`__App.currentFile && __App.currentFile.id === 'N2' && __App.navStack.length === 3`);
+    await waitFor(`__App.currentFile && __App.currentFile.id === 'N2' && __App.navStack.length === 2`);
     // This scenario was the only one that read the state by the clock (`sleep(400)` after letting go), and it was
     // the only flaky one. Two things separate the injected touch from what the app saw:
     //
@@ -514,15 +519,15 @@ const FAKE_DRIVE = `
     let arrow = await drag(4, 140, 400, 'swipe-voltar.png');
     v = await view();
     check('a seta sai da borda esquerda, inteira na tela e roxa', arrow.visible && arrow.armed && arrow.left >= 0 && arrow.bg === 'rgb(139, 108, 239)', arrow);
-    check('soltar volta pra nota anterior', v.file === 'N1' && v.stack === 2, v);
+    check('soltar volta pra nota anterior', v.file === 'N1' && v.stack === 1, v);
     arrow = await drag(386, 250, 400, 'swipe-avancar.png');
     v = await view();
     check('a seta sai da borda direita', arrow.visible && arrow.armed && arrow.right <= 390, arrow);
-    check('soltar avanca pra nota do link', v.file === 'N2' && v.stack === 3, v);
+    check('soltar avanca pra nota do link', v.file === 'N2' && v.stack === 2, v);
     await drag(4, 140, 400);
     await drag(4, 140, 400);
     v = await view();
-    check('mais dois deslizes da esquerda: volta ate a pasta',v.view === 'browse' && v.folder === 'ROOT', v);
+    check('mais dois deslizes da esquerda: volta ate a home', v.view === 'welcome' && v.file === null && v.stack === 0, v);
     await send('Emulation.setTouchEmulationEnabled', { enabled: false });
     await send('Emulation.clearDeviceMetricsOverride');
 
@@ -1544,7 +1549,7 @@ const FAKE_DRIVE = `
       const el = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2);
       return { hit: !!el && !!el.closest('#' + id), top: Math.round(b.top), bottom: Math.round(b.bottom), h: Math.round(b.height) }; }`;
     await js(`document.getElementById('home-scroll').scrollTop = 1e6; 'ok'`);
-    const bar = JSON.parse(await js(`JSON.stringify({ add: (${hitOf})('welcome-new'), search: (${hitOf})('welcome-open'),
+    const bar = JSON.parse(await js(`JSON.stringify({ add: (${hitOf})('welcome-new'), search: (${hitOf})('home-search'),
       last: (() => { const b = document.querySelector('#tree-list > li:last-child').getBoundingClientRect(); return { bottom: Math.round(b.bottom), h: Math.round(b.height) }; })(),
       row: Math.round(document.querySelector('#tree-list .tree-item').getBoundingClientRect().height),
       barTop: Math.round(document.querySelector('.home-bar').getBoundingClientRect().top) })`));
@@ -1574,6 +1579,45 @@ const FAKE_DRIVE = `
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     const menuClosed = await waitFor(`!document.getElementById('menu-overlay').classList.contains('visible')`, 4000);
     check('o voltar de verdade (Esc) fecha o menu', menuClosed);
+
+    console.log('\nHome: a busca, com os resultados colados no campo');
+    // The fake Drive's two notes have no "a" in the name: the index the search reads is handed in whole,
+    // in memory, so that no refresh from the Drive replaces it halfway
+    await js(`__App._noteIndex = [
+      { id: 'A1', name: 'agenda.md', folder: 'ROOT', where: 'vault', modifiedTime: '2026-09-19T10:00:00Z' },
+      { id: 'A2', name: 'casa.md', folder: 'F1', where: 'projetos', modifiedTime: '2026-09-18T10:00:00Z' },
+      { id: 'A3', name: 'plano da semana.md', folder: 'F1', where: 'projetos', modifiedTime: '2026-09-17T10:00:00Z' },
+    ]; 'ok'`);
+    // The search of the home, where layout decides: the results grow upwards from the field, the best one
+    // next to the thumb; the field and the X take the touch; Esc (the back button) closes the search
+    await js(`document.getElementById('home-search').focus(); 'ok'`);
+    await waitFor(`__App._homeSearch.open && !document.getElementById('home-results').hidden`, 2000);
+    await js(`(() => { const i = document.getElementById('home-search'); i.value = 'a'; i.dispatchEvent(new Event('input')); return 'ok'; })()`);
+    await waitFor(`document.querySelectorAll('#home-results .search-row').length >= 2`, 4000);
+    const found = JSON.parse(await js(`JSON.stringify((() => {
+      const rect = (el) => { const b = el.getBoundingClientRect(); return { top: Math.round(b.top), bottom: Math.round(b.bottom), h: Math.round(b.height) }; };
+      const rows = [...document.querySelectorAll('#home-results .search-row')].map(rect);
+      const hit = (id) => { const b = document.getElementById(id).getBoundingClientRect();
+        const el = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2); return !!el && !!el.closest('#' + id); };
+      return { rows, count: rect(document.querySelector('#home-results .search-count')), bar: rect(document.querySelector('.home-bar')),
+        field: hit('home-search'), close: hit('home-search-close'),
+        hitColor: getComputedStyle(document.querySelector('#home-results .search-hit')).color,
+        treeShown: getComputedStyle(document.getElementById('home-scroll')).display,
+        plusShown: getComputedStyle(document.getElementById('welcome-new')).display };
+    })())`));
+    console.log('     busca:', JSON.stringify(found));
+    check('o primeiro resultado e o de baixo, colado na barra', found.rows[0].top > found.rows[1].top && found.bar.top - found.rows[0].bottom <= 12, found);
+    check('a contagem fica em cima dos resultados', found.count.bottom <= found.rows[found.rows.length - 1].top + 1, found);
+    check('linha de resultado com altura de dedo', found.rows.every((r) => r.h >= 44), found);
+    check('o campo e o X recebem o toque', found.field && found.close, found);
+    check('a arvore e o + somem de verdade (o hidden vence o display deles)', found.treeShown === 'none' && found.plusShown === 'none', found);
+    // The keyboard out of the way first, as the phone's back does with the keyboard up. With the caret in a
+    // search field that has text, Chrome keeps Esc for itself (it clears the field) and no close request is
+    // sent: measured in headless Edge, the first Esc empties the field and only the second closes the search
+    await js(`document.getElementById('home-search').blur(); 'ok'`);
+    await back();
+    const closed = await waitFor(`!__App._homeSearch.open && getComputedStyle(document.getElementById('home-scroll')).display !== 'none'`, 2000);
+    check('Esc (o voltar) fecha a busca e devolve a arvore', closed);
 
     console.log('\nHome: as duas setas que fecham todas as pastas');
     await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 740, deviceScaleFactor: 2, mobile: true });

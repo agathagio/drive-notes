@@ -72,7 +72,7 @@
   <!-- ── New version ready, where reloading on its own could lose something (App.watchVersions) ── -->
   <button id="update-bar" class="update-bar hidden" type="button">Versão nova pronta · <span>atualizar</span></button>
 
-  <!-- ── Home: the vault tree (app/home.js) ── -->
+  <!-- ── Home: the vault tree (app/home.js) and the search (app/search.js) ── -->
   <div id="welcome" class="welcome">
     <div id="home-scroll" class="home-scroll">
       <section id="recents-list" class="home-section recents-list hidden">
@@ -100,28 +100,20 @@
         <button id="tree-login-btn" class="btn active" type="button">Entrar</button>
       </div>
     </div>
+    <ul id="home-results" class="home-results" hidden></ul>
     <div class="home-bar">
-      <button id="welcome-open" class="home-search" type="button">
+      <label class="home-search">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        Buscar no vault
-      </button>
+        <input id="home-search" type="search" placeholder="Buscar no vault" aria-label="Buscar no vault"
+               enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false">
+      </label>
       <button id="welcome-new" class="home-new" type="button" title="Nova nota" aria-label="Nova nota">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       </button>
+      <button id="home-search-close" class="home-close" type="button" title="Fechar a busca" aria-label="Fechar a busca" hidden>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
     </div>
-  </div>
-
-  <!-- ── File browser ── -->
-  <div id="browser" class="browser hidden">
-    <div class="browser-top">
-      <div id="browser-path" class="browser-path"></div>
-      <div class="browser-search">
-        <input id="browser-search" type="search" placeholder="Buscar nesta pasta e no vault" aria-label="Buscar"
-               enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false">
-        <button id="browser-search-clear" class="browser-search-clear" title="Limpar busca" aria-label="Limpar busca">&#10005;</button>
-      </div>
-    </div>
-    <ul id="browser-list" class="browser-list"></ul>
   </div>
 
   <!-- ── Editor ── -->
@@ -357,7 +349,7 @@
   <script src="app/editor.js"></script>
   <script src="app/editor-cm6.js"></script>
   <script src="app/auth.js"></script>
-  <script src="app/folders.js"></script>
+  <script src="app/search.js"></script>
   <script src="app/home.js"></script>
   <script src="app/drive.js"></script>
   <script src="app/note.js"></script>

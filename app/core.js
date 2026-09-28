@@ -13,7 +13,7 @@ const CONFIG = {
   CLIENT_ID: '104411957628-eu5gbpopvot1ai5a95qbpdn3frcvko4r.apps.googleusercontent.com',
   // Folder where new notes are created (the vault inbox on Google Drive)
   DEFAULT_FOLDER_ID: '1xONP1bGB7qqNDQ1XNQRSk8rqWKoqCuuV',
-  // Root of the file browser
+  // Root of the vault: the home tree starts here
   VAULT_FOLDER_ID: '1xJYm3FFeafY1IAcvAHuQ5BaMX7KxRM-K',
   VAULT_NAME: 'vault',
   // Attachment folder at the vault root (Obsidian's attachmentFolderPath)
@@ -88,9 +88,6 @@ const App = {
   // Bumped on every file open; a slow load that lost the race is discarded
   _loadSeq: 0,
 
-  // Folder on screen in the file browser: { id, name, path }, or null
-  folder: null,
-
   // Folder listings seen in this session, by folder ID
   _folderCache: new Map(),
 
@@ -105,11 +102,8 @@ const App = {
   // down to it, or null for a folder outside the vault. Used by the dates and by the search.
   _folderTrails: new Map([[CONFIG.VAULT_FOLDER_ID, []]]),
 
-  // What is on screen in the file browser: { folder, items, message }
-  _listing: null,
-
-  // Search of the whole vault for the text in the search field: { query, results, failed }, results being
-  // null while the Drive has not answered. Answers are kept for the session, by query.
+  // Search of the whole vault for the text in the home's search field: { query, results, failed }, results
+  // being null while the Drive has not answered. Answers are kept for the session, by query.
   _search: null,
 
   _searchCache: new Map(),
@@ -184,7 +178,7 @@ const App = {
       btnNew: document.getElementById('btn-new'),
       btnOpen: document.getElementById('btn-open'),
       btnSave: document.getElementById('btn-save'),
-      browserSearch: document.getElementById('browser-search'),
+      homeSearch: document.getElementById('home-search'),
       btnPreview: document.getElementById('btn-preview'),
       photoInput: document.getElementById('photo-input'),
       editorContainer: document.getElementById('editor-container'),
@@ -200,7 +194,6 @@ const App = {
       modalMessage: document.getElementById('modal-message'),
       conflict: document.getElementById('conflict-overlay'),
       conflictText: document.getElementById('conflict-text'),
-      browser: document.getElementById('browser'),
       sketchScreen: document.getElementById('sketch-screen'),
       sketchCanvas: document.getElementById('sketch-canvas'),
       sketchColors: document.getElementById('sketch-colors'),
@@ -254,21 +247,9 @@ const App = {
 
   // ── UI State ──
 
-  showBrowser() {
-    this.rememberHomeScroll(); // before the home screen is hidden: hidden, it forgets how far it was scrolled
-    this._pending = this._opening = null; // a view has landed
-    this.els.welcome.classList.add('hidden');
-    this.els.editorContainer.classList.add('hidden');
-    this.els.previewContainer.classList.remove('visible');
-    this.els.browser.classList.remove('hidden');
-    this.els.browser.scrollTop = 0;
-    document.body.dataset.view = 'browse';
-  },
-
   showWelcome() {
     this._pending = this._opening = null; // a view has landed
     this.els.welcome.classList.remove('hidden');
-    this.els.browser.classList.add('hidden');
     this.els.editorContainer.classList.add('hidden');
     this.els.previewContainer.classList.remove('visible');
     // The stylesheet keys off data-view: the formatting toolbar only exists while editing
@@ -281,7 +262,6 @@ const App = {
     this.rememberHomeScroll(); // before the home screen is hidden: hidden, it forgets how far it was scrolled
     this._pending = this._opening = null; // a view has landed
     this.els.welcome.classList.add('hidden');
-    this.els.browser.classList.add('hidden');
     this.setMode(mode);
   },
 
@@ -311,7 +291,6 @@ const App = {
     this._loadSeq++;
     this._opening = null;
     this.currentFile = null;
-    this.folder = null;
     this.isDirty = false;
     this.syncHistory();
     this.updateFileNameDisplay();
@@ -345,7 +324,7 @@ const App = {
   },
 
   updateFileNameDisplay() {
-    const name = this.currentFile ? this.currentFile.name : (this.folder ? this.folder.name : 'dn');
+    const name = this.currentFile ? this.currentFile.name : 'dn';
     this.els.fileName.textContent = name;
     this.els.fileName.classList.toggle('unsaved', this.isDirty);
     // In reading view the save button only shows while there is something to save (see the stylesheet)
@@ -550,20 +529,6 @@ const App = {
     this.els.btnSave?.addEventListener('click', () => this.save({ manual: true }));
     this.els.btnPreview.addEventListener('click', () => this.togglePreview());
 
-    // Search field of the file browser
-    this.els.browserSearch.addEventListener('input', () => this.onSearchInput());
-    this.els.browserSearch.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter') return;
-      this.els.browserSearch.blur(); // the keyboard gets out of the way of the results
-      this.searchVault({ now: true });
-      this.drawBrowser();
-    });
-    document.getElementById('browser-search-clear').addEventListener('click', () => {
-      this.els.browserSearch.value = '';
-      this.onSearchInput();
-      this.els.browserSearch.focus();
-    });
-
     // The click a lift sends after a long press: swallowed before anything else sees it. It does not
     // land on the held element: what the long press opened is on top by then, and the click goes to
     // it (measured in Edge: the TOC's backdrop, which closed the TOC as it opened). So the one
@@ -716,11 +681,16 @@ const App = {
 
     // Home: the bar at the thumb, the sections that fold, the login of the tree
     document.getElementById('welcome-new')?.addEventListener('click', () => this.newFile());
-    // Until the search moves to the home screen itself, the field opens the one the folder screen has
-    document.getElementById('welcome-open')?.addEventListener('click', async () => {
-      await this.browseVault();
-      if (document.body.dataset.view === 'browse') this.els.browserSearch.focus();
+    // Home: the search field. A real field: the tap gives it the focus and brings the keyboard by itself
+    this.els.homeSearch.addEventListener('focus', () => this.openHomeSearch());
+    this.els.homeSearch.addEventListener('input', () => this.onSearchInput());
+    this.els.homeSearch.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      this.els.homeSearch.blur(); // the keyboard gets out of the way of the results
+      this.searchVault({ now: true });
+      this.drawHomeSearch();
     });
+    document.getElementById('home-search-close')?.addEventListener('click', () => this.closeHomeSearch());
     document.getElementById('tree-login-btn')?.addEventListener('click', () => this.loginFromTree());
     document.querySelectorAll('.home-section-title[data-section]').forEach((button) => {
       button.addEventListener('click', () => this.toggleHomeSection(button));

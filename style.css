@@ -1014,6 +1014,10 @@ body.has-selection .toolbar-btn.toolbar-extract {
 }
 
 /* Each of these has a display of its own, which would beat the hidden attribute */
+.home-scroll[hidden],
+.home-results[hidden],
+.home-new[hidden],
+.home-close[hidden],
 .home-section[hidden],
 .tree-login[hidden],
 .menu-item[hidden],
@@ -1242,11 +1246,36 @@ button.home-section-title {
   border-radius: 12px;
   background: var(--bg-primary);
   color: var(--text-secondary);
+  cursor: text;
+}
+
+.home-search:focus-within {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+.home-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text-primary);
   font: inherit;
-  font-size: 15px;
-  text-align: left;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
+  font-size: 16px; /* under 16px some phones zoom into the field */
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.home-search input::placeholder {
+  color: var(--text-secondary);
+}
+
+/* The X of the bar closes the search: the field needs none of its own */
+.home-search input::-webkit-search-cancel-button {
+  display: none;
 }
 
 /* Filled: the one thing on the screen that asks to be tapped. What sits on a coloured fill is dark. */
@@ -1263,6 +1292,104 @@ button.home-section-title {
   color: var(--bg-primary);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+}
+
+/* The X that takes the place of the + while the search is open. Not filled: closing is not the thing
+   the screen asks for */
+.home-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--button-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── Home search ── */
+
+/* The results take the place of the tree and grow upwards from the field: the first row of the list
+   is the one at the bottom, next to the thumb. column-reverse, and not justify-content: flex-end,
+   which leaves whatever overflows at the top out of reach of the scroll. */
+.home-results {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column-reverse;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+}
+
+.search-row {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+}
+
+.search-item {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  min-height: 56px;
+  padding: 6px 8px;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.search-name {
+  max-width: 100%;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-hit {
+  color: var(--accent-hover);
+  font-weight: 700;
+}
+
+.search-where {
+  max-width: 100%;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-count {
+  flex-shrink: 0;
+  padding: 0 8px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-secondary);
+}
+
+.search-message {
+  flex-shrink: 0;
+  padding: 16px 8px;
+  font-size: 14px;
+  color: var(--text-secondary);
 }
 
 /* The header on the home screen: the "dn" of the icon, and where we are */
@@ -1505,171 +1632,7 @@ body[data-view="welcome"] .file-name {
   border-radius: 3px;
 }
 
-/* ── File browser ── */
-
-.browser {
-  flex: 1 1 0;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  background: var(--bg-editor);
-  -webkit-overflow-scrolling: touch;
-  padding-bottom: env(safe-area-inset-bottom, 0px);
-}
-
-/* Path and search stay in sight while the list scrolls */
-.browser-top {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--bg-primary);
-  border-bottom: 1px solid var(--border);
-}
-
-.browser-path {
-  padding: 8px 16px 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  direction: rtl; /* a long path keeps its end, the current folder, in sight */
-  text-align: left;
-}
-
-.browser-search {
-  position: relative;
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 8px 16px;
-}
-
-.browser-search input {
-  width: 100%;
-  padding: 9px 36px 9px 12px;
-  font: inherit;
-  font-size: 16px; /* under 16px some phones zoom into the field */
-  color: var(--text-primary);
-  background: var(--bg-editor);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  outline: none;
-  appearance: none;
-  -webkit-appearance: none;
-}
-
-.browser-search input:focus {
-  border-color: var(--accent);
-}
-
-.browser-search input::placeholder {
-  color: var(--text-secondary);
-}
-
-/* The field has its own clear button, the same on every browser */
-.browser-search input::-webkit-search-cancel-button {
-  display: none;
-}
-
-.browser-search-clear {
-  position: absolute;
-  right: 18px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 36px;
-  height: 36px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  background: none;
-  border: none;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.browser-search input:placeholder-shown + .browser-search-clear {
-  display: none;
-}
-
-.browser-list {
-  list-style: none;
-  max-width: 720px;
-  margin: 0 auto;
-}
-
-.browser-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 48px;
-  padding: 10px 16px;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
-  font-size: 15px;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.browser-item:hover, .browser-item:active {
-  background: var(--button-bg);
-}
-
-.browser-icon {
-  width: 22px;
-  flex-shrink: 0;
-  text-align: center;
-  font-size: 16px;
-}
-
-.browser-name {
-  flex: 1;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.browser-item.is-folder .browser-name {
-  font-weight: 600;
-}
-
-.browser-meta {
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-/* Search results from the whole vault: the note, and under it the folder it lives in */
-.browser-section {
-  padding: 16px 16px 6px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-
-.browser-main {
-  flex: 1;
-  min-width: 0;
-}
-
-.browser-main .browser-name {
-  display: block;
-}
-
-.browser-where {
-  display: block;
-  margin-top: 2px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  overflow-wrap: anywhere;
-}
-
-.browser-message {
-  padding: 24px 16px;
-  text-align: center;
-  font-size: 14px;
-  color: var(--text-secondary);
-}
-
-/* ── Views (body[data-view] = welcome | browse | edit | preview) ── */
+/* ── Views (body[data-view] = welcome | edit | preview) ── */
 
 /* The formatting toolbar only exists while editing */
 body:not([data-view="edit"]) .toolbar,
@@ -1680,9 +1643,6 @@ body:not([data-view="edit"]) .toolbar-spacer {
 body[data-view="welcome"] .btn-back,
 body[data-view="welcome"] .btn-mode,
 body[data-view="welcome"] #btn-save,
-body[data-view="browse"] .btn-mode,
-body[data-view="browse"] #btn-save,
-body[data-view="browse"] #btn-open,
 /* While reading, saving is only offered when something is unsaved: text the auto-save has not taken yet, a failed save, an expired login, a conflict */
 body[data-view="preview"]:not(.unsaved) #btn-save,
 /* Inside a note the title needs the room: a new note is one "back" away */

@@ -16,7 +16,7 @@ Então fiz o meu. Hoje é por ele que eu leio e escrevo no vault quando estou lo
 
 <p>
   <img src="docs/screenshots/inicio.png" alt="Tela inicial com notas não sincronizadas e recentes" width="200">
-  <img src="docs/screenshots/pastas.png" alt="Navegador de pastas do vault" width="200">
+  <img src="docs/screenshots/busca.png" alt="Busca a partir da tela inicial, com os resultados colados no campo" width="200">
   <img src="docs/screenshots/leitura.png" alt="Modo leitura com callouts, links e checklist" width="200">
   <img src="docs/screenshots/edicao.png" alt="Edição com o markdown da nota e a barra de formatação" width="200">
 </p>
@@ -31,8 +31,8 @@ Então fiz o meu. Hoje é por ele que eu leio e escrevo no vault quando estou lo
 - Nota longa: segurar o dedo no nome da nota abre o sumário dos títulos, e tocar num deles rola até lá. Segurar um link pra outra nota mostra ela num cartão, sem sair do lugar.
 - O quadro kanban do plugin do Obsidian abre como quadro, com as colunas empilhadas e recolhidas como no Obsidian. Vídeo do YouTube embutido vira capa com play, que abre no app do YouTube.
 - A nota reabre no parágrafo em que a leitura parou, e Ler e Editar mantêm o mesmo trecho na tela.
-- Navegador de pastas próprio, na mesma ordem do Obsidian (`2-x` antes de `10-x`), com a data da última edição.
-- Busca na tela de pastas: o que se digita filtra a pasta aberta na hora, sem rede e sem ligar pra acento, e depois de uma pausa procura no vault inteiro, por nome e pelo texto das notas. Cada resultado mostra a pasta onde a nota mora.
+- A tela inicial é a árvore do vault, com as pastas abrindo no lugar, na mesma ordem do Obsidian (`2-x` antes de `10-x`).
+- Busca a partir da tela inicial: o campo de baixo busca ali mesmo, com os resultados colados nele. O nome da nota responde na hora, sem rede e sem ligar pra acento, e depois de uma pausa a busca procura no vault inteiro, por nome e pelo texto das notas. Cada resultado mostra a pasta onde a nota mora.
 
 **Escrever**
 
@@ -48,7 +48,7 @@ Então fiz o meu. Hoje é por ele que eu leio e escrevo no vault quando estou lo
 - Selecionar um trecho e mandar pra uma nota nova, com o link no lugar. Apagar a nota aberta, pra lixeira do Drive.
 - Compartilhar de outro app pro Drive Notes (texto, link, foto, e o .txt da transcrição do gravador, mesmo em UTF-16) cai numa nota nova ou numa nota da inbox. O ícone do app tem atalhos pra nota nova, anotar e buscar.
 - Renomear tocando no título; os `[[links]]` que apontam pra nota são consertados nas outras notas.
-- O botão voltar do Android fecha diálogo, sai da nota e volta de pasta, como em app nativo.
+- O botão voltar do Android fecha diálogo e busca e sai da nota, como em app nativo.
 - Deslizar da borda navega como no Chrome: da esquerda volta, da direita avança, com uma seta que acompanha o dedo e fica roxa quando já dá pra soltar. O gesto é do próprio app: com a barra de três botões o Android não tem gesto de voltar, e o deslizar do Chrome não existe em app instalado.
 
 **Não perder texto**

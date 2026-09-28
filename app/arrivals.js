@@ -93,13 +93,21 @@ Object.assign(App, {
     if (shortcut === 'buscar') return this.startSearch();
   },
 
-  /** The "Buscar" shortcut: the vault's folder screen with the caret in the search field. An opening from
-      the icon is no tap inside the page, and the login popup only opens from one: an expired login asks first. */
+  /** The "Buscar" shortcut: the home screen with the search open and the caret in its field. An opening
+      from the icon is no tap inside the page, and the login popup only opens from one: an expired login
+      asks first, and the answer is the tap. */
   async startSearch() {
-    if (!this.canRenewQuietly()
-      && !(await this.confirmDialog('Buscar no vault', 'O login do Google venceu. Entre pra buscar.', 'Entrar', { danger: false }))) return;
-    await this.browseVault();
-    if (document.body.dataset.view === 'browse') this.els.browserSearch.focus();
+    const quiet = this.canRenewQuietly();
+    if (!quiet && !(await this.confirmDialog('Buscar no vault', 'O login do Google venceu. Entre pra buscar.', 'Entrar', { danger: false }))) return;
+    try {
+      await this.ensureAuth({ quiet });
+    } catch (e) {
+      console.warn('Login for the search shortcut failed:', e);
+      this.setSaveStatus('error', 'Faça login primeiro');
+      return;
+    }
+    this.renderHome();
+    this.els.homeSearch.focus(); // the focus opens the search (see bindEvents)
   },
 
   /** Something shared earlier and never written into a note (the app died on the sheet, or there was no network).

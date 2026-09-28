@@ -130,12 +130,12 @@ const SETUP = `
         scrolled: document.getElementById('home-scroll').scrollTop };
     })())`).then((r) => console.log(`  (fechar pastas: ${r})`));
     for (const name of ['setembro', '2026', 'exames', 'saude', '10-areas']) await tapFolder(name);
-    await js(`__App.browseVault().then(() => 'ok')`);
-    await shot('2-pastas');
-    await js(`__App.els.browserSearch.value = 'voz'; __App.onSearchInput(); 'ok'`);
+    await js(`document.getElementById('home-search').focus(); 'ok'`);
+    await shot('2b-busca-vazia');
+    await js(`(() => { const i = document.getElementById('home-search'); i.value = 'voz'; i.dispatchEvent(new Event('input')); return 'ok'; })()`);
     await sleep(800);
-    await shot('2b-busca');
-    await js(`__App.els.browserSearch.value = ''; __App.onSearchInput(); 'ok'`);
+    await shot('2-busca');
+    await js(`__App.closeHomeSearch(); 'ok'`);
     await js(`__App.navigateTo('N', 'Relatório semanal.md').then(() => 'ok')`);
     await shot('3-leitura');
     // The new version notice, which only shows up outside the home screen (on the home screen the page reloads by itself).

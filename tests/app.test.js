@@ -1144,37 +1144,13 @@ async function scenario(title, block) {
     drive.put('n-sub', 'nota do projeto.md', '# dentro', ['d-proj']);
   };
 
-  await scenario('24. Navegador de pastas', async () => {
-  {
-    const { App, drive, w } = await boot();
-    seedVault(drive);
-    const d = w.document;
-    const rows = () => [...d.querySelectorAll('#browser-list .browser-item')].map(li => li.querySelector('.browser-name').textContent);
-    d.getElementById('welcome-open').click(); await sleep(80);
-    check('abre na raiz do vault', d.body.dataset.view === 'browse' && App.els.fileName.textContent === 'vault' && !App.els.browser.classList.contains('hidden'));
-    check('pastas primeiro, ordem natural por nome, sem .obsidian e sem imagem, .md sem extensao',
-      JSON.stringify(rows()) === JSON.stringify(['_inbox', '2-rascunho', '10-areas', '20-projetos', 'Abacaxi', 'émile', 'lista.txt', 'zebra']), rows());
-    check('nao ha Picker nem gapi na pagina', !d.querySelector('script[src*="apis.google.com"]') && typeof App.openPicker === 'undefined');
-
-    [...d.querySelectorAll('.browser-item')].find(li => li.textContent.includes('20-projetos')).click(); await sleep(80);
-    check('um toque entra na pasta; caminho no topo', App.els.fileName.textContent === '20-projetos' && d.getElementById('browser-path').textContent.includes('vault / 20-projetos') && rows()[0] === 'nota do projeto');
-    d.querySelector('.browser-item').click(); await sleep(80);
-    check('um toque abre a nota em leitura', App.currentFile?.id === 'n-sub' && d.body.dataset.view === 'preview');
-
-    App.els.btnBack.click(); await sleep(80);
-    check('voltar da nota: de volta na pasta', d.body.dataset.view === 'browse' && App.folder?.id === 'd-proj' && App.currentFile === null);
-    App.els.btnBack.click(); await sleep(80);
-    check('voltar: raiz do vault', App.folder?.id === VAULT && rows().length === 8);
-    App.els.btnBack.click(); await sleep(80);
-    check('voltar: tela inicial', d.body.dataset.view === 'welcome' && App.folder === null && App.els.fileName.textContent === 'dn');
-
-    drive.failReads = true;
-    d.getElementById('welcome-open').click(); await sleep(80);
-    check('falha de rede com pasta ja vista: mostra a listagem guardada', rows().length === 8);
-    drive.failReads = false;
-    check('nada escrito no Drive', drive.count('PATCH') === 0 && drive.count('POST') === 0);
-  }
-  });
+  // What the tree shows, row by row: a folder is "name/", an open one "name/*"
+  const treeRows = (d) => [...d.querySelectorAll('#tree-list .tree-row')].map((li) =>
+    li.querySelector('.tree-name').textContent
+      + (li.classList.contains('is-folder') ? (li.classList.contains('is-open') ? '/*' : '/') : ''));
+  const treeButton = (d, name) => [...d.querySelectorAll('#tree-list .tree-row')]
+    .find((li) => li.querySelector('.tree-name').textContent === name)?.querySelector('.tree-item');
+  const showHome = async (App) => { App.renderHome(); await sleep(80); };
 
   await scenario('25. Botao voltar do sistema via CloseWatcher', async () => {
   {
@@ -1185,20 +1161,19 @@ async function scenario(title, block) {
     const len0 = w.history.length;
     check('modo CloseWatcher ativo; na tela inicial o voltar sai do app', App.useWatcher && w.__watchers.length === 0 && w.__back() === 'EXIT');
 
-    d.getElementById('welcome-open').click();
+    await showHome(App);
+    treeButton(d, 'com link').click();
     check('watcher armado dentro do toque', w.__watchers.length === 1);
     await sleep(80);
-    [...d.querySelectorAll('.browser-item')].find(li => li.textContent.includes('com link')).click(); await sleep(80);
     App.els.previewContainer.querySelector('a.wikilink').click(); await sleep(80);
-    check('vault > nota > link: 3 telas na pilha, 1 watcher', App.currentFile?.id === 'n-z' && App.navStack.length === 3 && w.__watchers.length === 1);
+    check('home > nota > link: 2 telas na pilha, 1 watcher', App.currentFile?.id === 'n-z' && App.navStack.length === 2 && w.__watchers.length === 1);
     check('historico do navegador intocado', w.history.length === len0);
 
     check('voltar do sistema: tratado', w.__back() === 'handled'); await sleep(80);
     check('... volta pra nota anterior', App.currentFile?.id === 'L' && w.__watchers.length === 1);
     w.__back(); await sleep(80);
-    check('... volta pra pasta', d.body.dataset.view === 'browse' && App.folder?.id === VAULT);
-    w.__back(); await sleep(80);
-    check('... volta pra tela inicial e desarma o watcher', d.body.dataset.view === 'welcome' && w.__watchers.length === 0);
+    check('... volta pra home', d.body.dataset.view === 'welcome' && App.currentFile === null);
+    check('... a tela inicial desarma o watcher', w.__watchers.length === 0);
     check('proximo voltar sai do app', w.__back() === 'EXIT');
 
     // broken link: the screen does not change, and neither does the stack
@@ -1337,78 +1312,6 @@ async function scenario(title, block) {
     await sleep(30); await App._saveChain;
     check('toque no salvar: o comeco do toque e cancelado (teclado fica) e o fim salva', start.defaultPrevented && drive.files.get('A').content === 'texto editado 2', drive.files.get('A').content);
     check('um toque, uma escrita', drive.count('PATCH') === 2, drive.log);
-  }
-  });
-
-  await scenario('28. Busca: filtra a pasta aberta e procura no vault inteiro', async () => {
-  {
-    const { App, drive, w } = await boot();
-    seedVault(drive);
-    const d = w.document;
-    w.__CONFIG.SEARCH_DELAY = 40;
-    const dir = (id, name, parent) => { drive.put(id, name, '', parent ? [parent] : []); drive.files.get(id).mimeType = FOLDER; };
-    dir('d-cli', 'clientes', 'd-proj'); dir('d-fora', 'documentos', null);
-    drive.put('n-deep', 'Relatório do funil.md', 'texto sobre vendas', ['d-cli']);
-    drive.put('n-text', 'reuniao.md', 'falamos do funil de conversão', ['d-10']);
-    drive.put('x-out', 'Funil pessoal.md', 'x', ['d-fora']);
-    drive.put('x-obs', 'funil-config.md', 'x', ['d-obs']);
-    drive.put('x-xlsx', 'Funil.xlsx', 'x', [VAULT]); drive.files.get('x-xlsx').mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    drive.put('n-quote', "d'água.md", 'x', ['d-10']);
-
-    const input = d.getElementById('browser-search');
-    const search = (text) => { input.value = text; input.dispatchEvent(new w.Event('input')); };
-    const local = () => [...d.querySelectorAll('#browser-list .browser-item:not(.is-result)')].map(li => li.querySelector('.browser-name').textContent);
-    const found = () => [...d.querySelectorAll('#browser-list .browser-item.is-result')].map(li =>
-      [li.querySelector('.browser-name').textContent, li.querySelector('.browser-where').textContent]);
-    const searches = () => drive.count('SEARCH');
-
-    d.getElementById('welcome-open').click(); await sleep(80);
-    check('campo de busca na tela de pastas, vazio', !!input && input.value === '' && local().length === 8);
-
-    search('ab'); await sleep(100);
-    check('digitar filtra a pasta aberta na hora', JSON.stringify(local()) === JSON.stringify(['Abacaxi']), local());
-    check('com menos de 3 letras nao procura no Drive', searches() === 0 && found().length === 0, drive.log);
-    search('EMILE'); await sleep(10);
-    check('sem ligar pra acento nem maiuscula', JSON.stringify(local()) === JSON.stringify(['émile']), local());
-    search('proj 20'); await sleep(10);
-    check('palavras em qualquer ordem; pasta tambem entra no filtro', JSON.stringify(local()) === JSON.stringify(['20-projetos']), local());
-
-    for (const partial of ['fun', 'funi', 'funil']) { search(partial); await sleep(10); }
-    check('nada na pasta aberta com esse nome', local().length === 0, local());
-    await sleep(200);
-    check('uma busca so no Drive, depois que a digitacao para', searches() === 1, drive.log);
-    check('resultados do vault inteiro: nome primeiro, depois o que bate so no texto, cada um com a pasta',
-      JSON.stringify(found()) === JSON.stringify([['Relatório do funil', '20-projetos / clientes'], ['reuniao', '10-areas · no texto']]), found());
-    check('ficam de fora: fora do vault, pasta com ponto, o que nao e nota', !d.getElementById('browser-list').textContent.match(/pessoal|config|xlsx/i));
-    check('titulo da secao', d.querySelector('#browser-list .browser-section')?.textContent === 'No vault inteiro');
-
-    d.querySelector('.browser-item.is-result').click(); await sleep(80);
-    check('tocar no resultado abre a nota', App.currentFile?.id === 'n-deep' && d.body.dataset.view === 'preview');
-    App.els.btnBack.click(); await sleep(120);
-    check('voltar: a busca continua como estava', d.body.dataset.view === 'browse' && input.value === 'funil' && found().length === 2, [input.value, found()]);
-    check('... sem perguntar de novo ao Drive', searches() === 1, drive.log);
-
-    d.getElementById('browser-search-clear').click(); await sleep(10);
-    check('o X limpa: a pasta inteira volta e a secao some', input.value === '' && local().length === 8 && found().length === 0 && !d.querySelector('.browser-section'));
-
-    search('zebra'); await sleep(200);
-    check('nota que ja aparece na pasta aberta nao repete nos resultados', JSON.stringify(local()) === JSON.stringify(['zebra']) && found().length === 0, found());
-
-    search("d'água"); await sleep(200);
-    check('apostrofo na busca nao quebra a consulta', found()[0]?.[0] === "d'água", [found(), drive.log.at(-1)]);
-
-    search('');
-    [...d.querySelectorAll('.browser-item')].find(li => li.textContent.includes('20-projetos')).click(); await sleep(80);
-    check('entrar numa pasta comeca com a busca vazia', input.value === '' && local()[0] === 'clientes', local());
-    search('funil'); await sleep(200);
-    check('dentro de uma subpasta a busca tambem cobre o vault inteiro', found().length === 2 && searches() === 3, [found(), searches()]);
-
-    drive.failReads = true;
-    search('inexistente'); await sleep(200);
-    check('sem rede: avisa, e o filtro da pasta segue funcionando', /não deu/i.test(d.querySelector('.browser-message')?.textContent || ''), d.getElementById('browser-list').textContent);
-    drive.failReads = false;
-    search('inexistente'); await sleep(10); search('inexistentes'); await sleep(200);
-    check('nada encontrado: diz que nao achou', /nada/i.test(d.querySelector('.browser-message')?.textContent || ''), d.getElementById('browser-list').textContent);
   }
   });
 
@@ -1738,10 +1641,10 @@ async function scenario(title, block) {
     await swipe(5, 150);
     check('na tela inicial deslizar nao faz nada', view() === 'welcome' && App.navStack.length === 0);
 
-    d.getElementById('welcome-open').click(); await sleep(80);
-    [...d.querySelectorAll('.browser-item')].find(li => li.textContent.includes('com link')).click(); await sleep(80);
+    await showHome(App);
+    treeButton(d, 'com link').click(); await sleep(80);
     App.els.previewContainer.querySelector('a.wikilink').click(); await sleep(80);
-    check('pasta > nota > link', App.currentFile?.id === 'n-z' && App.navStack.length === 3);
+    check('home > nota > link', App.currentFile?.id === 'n-z' && App.navStack.length === 2);
 
     await swipe(5, 50);
     check('arrasto curto nao volta', App.currentFile?.id === 'n-z');
@@ -1750,7 +1653,7 @@ async function scenario(title, block) {
     await swipe(100, 300);
     check('arrasto que comeca fora da borda nao volta', App.currentFile?.id === 'n-z');
     await swipe(W - 5, W - 150);
-    check('sem nada pra frente, a borda direita nao faz nada', App.currentFile?.id === 'n-z' && App.navStack.length === 3);
+    check('sem nada pra frente, a borda direita nao faz nada', App.currentFile?.id === 'n-z' && App.navStack.length === 2);
 
     // A real finger: it does not land flush on the edge, and the start of a thumb drag is an arc, not a straight line
     await swipe(28, 170);
@@ -1777,14 +1680,14 @@ async function scenario(title, block) {
     check('soltar volta pra nota anterior, e a seta some', App.currentFile?.id === 'L' && !hint.classList.contains('visible'), App.currentFile);
 
     await swipe(W - 5, W - 150);
-    check('borda direita avanca de volta pra nota do link', App.currentFile?.id === 'n-z' && App.navStack.length === 3, [App.currentFile?.id, App.navStack.length]);
+    check('borda direita avanca de volta pra nota do link', App.currentFile?.id === 'n-z' && App.navStack.length === 2, [App.currentFile?.id, App.navStack.length]);
     check('botao voltar do sistema continua voltando depois de avancar', w.__back() === 'handled'); await sleep(80);
     check('... pra nota anterior', App.currentFile?.id === 'L');
 
     await swipe(5, 150);
-    check('voltar de novo: pasta', view() === 'browse' && App.folder?.id === VAULT);
+    check('voltar de novo: home', view() === 'welcome' && App.currentFile === null);
     await swipe(W - 5, W - 150);
-    check('avancar da pasta reabre a nota', App.currentFile?.id === 'L');
+    check('avancar da home reabre a nota', App.currentFile?.id === 'L');
     await swipe(W - 5, W - 150);
     check('... e avanca mais uma, ate a do link', App.currentFile?.id === 'n-z');
 
@@ -1821,51 +1724,49 @@ async function scenario(title, block) {
     seedVault(drive);
     drive.put('L', 'com link.md', 'vai [[zebra]]', [VAULT]);
     const d = w.document;
-    const stack = () => App.navStack.map(s => s.view === 'file' ? s.id : s.view === 'browse' ? `pasta:${s.id === VAULT ? 'vault' : s.id}` : s.view);
-    const item = (text) => [...d.querySelectorAll('.browser-item')].find(li => li.textContent.includes(text));
+    const stack = () => App.navStack.map(s => s.view === 'file' ? s.id : s.view);
+    const item = (text) => treeButton(d, text);
 
-    d.getElementById('welcome-open').click(); await sleep(80);
+    await showHome(App);
     item('com link').click(); await sleep(80);
     App.els.previewContainer.querySelector('a.wikilink').click(); await sleep(80);
     w.__back(); await sleep(80);
     w.__back(); await sleep(80);
-    check('pasta, com duas notas pra frente', d.body.dataset.view === 'browse' && App.fwdStack.length === 2, stack());
+    check('home, com duas notas pra frente', d.body.dataset.view === 'welcome' && App.currentFile === null && App.fwdStack.length === 2, stack());
 
     drive.delay = 60;
     App.goForward();            // starts loading "com link"...
     await sleep(10);
     await App.goForward();      // ...and goes forward again before it arrives
     await sleep(200);
-    check('dois avancar seguidos: chega na nota do link, com a do meio na pilha', App.currentFile?.id === 'n-z' && stack().join(' > ') === 'welcome > pasta:vault > L', stack());
+    check('dois avancar seguidos: chega na nota do link, com a do meio na pilha', App.currentFile?.id === 'n-z' && stack().join(' > ') === 'welcome > L', stack());
 
     w.__back(); await sleep(200);
     check('voltar: a nota do meio', App.currentFile?.id === 'L', App.currentFile?.id);
     w.__back(); await sleep(200);
-    check('voltar: a pasta, uma vez so', d.body.dataset.view === 'browse' && stack().join(' > ') === 'welcome', stack());
+    check('voltar: a home, uma vez so', d.body.dataset.view === 'welcome' && stack().join(' > ') === '', stack());
 
-    // Two taps in a row on the list: the second must not stack the folder again
+    // Two taps in a row on the tree: the second must not stack the home again
     item('zebra').click();
     await sleep(10);
     item('Abacaxi').click();
     await sleep(250);
     check('dois toques seguidos: abre a segunda nota', App.currentFile?.id === 'n-a', App.currentFile?.id);
     w.__back(); await sleep(200);
-    w.__back(); await sleep(200);
-    check('dois voltar bastam pra sair da pasta: nenhum cai no vazio', d.body.dataset.view === 'welcome', [d.body.dataset.view, stack()]);
+    check('um voltar basta pra voltar pra home: nenhum cai no vazio', d.body.dataset.view === 'welcome' && stack().join(' > ') === '', [d.body.dataset.view, stack()]);
 
     // Going back with the note still loading gives up on it: it must not show up on its own later
-    d.getElementById('welcome-open').click(); await sleep(250);
     item('zebra').click();
     await sleep(10);
     w.__back(); await sleep(250);
-    check('voltar no meio do carregamento fica na pasta', d.body.dataset.view === 'browse' && App.currentFile === null && stack().join(' > ') === 'welcome', [d.body.dataset.view, App.currentFile?.id, stack()]);
+    check('voltar no meio do carregamento fica na home', d.body.dataset.view === 'welcome' && App.currentFile === null && stack().join(' > ') === '', [d.body.dataset.view, App.currentFile?.id, stack()]);
 
     // The same from inside a note: the link tapped and abandoned does not show up later
     item('com link').click(); await sleep(250);
     App.els.previewContainer.querySelector('a.wikilink').click();
     await sleep(10);
     w.__back(); await sleep(250);
-    check('voltar com o link ainda carregando fica na nota', App.currentFile?.id === 'L' && stack().join(' > ') === 'welcome > pasta:vault', [App.currentFile?.id, stack()]);
+    check('voltar com o link ainda carregando fica na nota', App.currentFile?.id === 'L' && stack().join(' > ') === 'welcome', [App.currentFile?.id, stack()]);
 
     // A tap that opens nothing, made with another note on its way, must not eat that note's entry
     drive.put('Q', 'quebrada.md', 'vai [[zebra]] e [[nao existe]]', [VAULT]);
@@ -1875,16 +1776,16 @@ async function scenario(title, block) {
     await sleep(10);
     links[1].click();
     await sleep(300);
-    check('o ultimo toque vence: link quebrado tocado com outra nota a caminho desiste dela, avisa e fica', App.currentFile?.id === 'Q' && /não encontrada/.test(App.els.saveStatus.textContent) && stack().join(' > ') === 'welcome > pasta:vault', [App.currentFile?.id, App.els.saveStatus.textContent, stack()]);
+    check('o ultimo toque vence: link quebrado tocado com outra nota a caminho desiste dela, avisa e fica', App.currentFile?.id === 'Q' && /não encontrada/.test(App.els.saveStatus.textContent) && stack().join(' > ') === 'welcome', [App.currentFile?.id, App.els.saveStatus.textContent, stack()]);
 
     // Two backs in a row on a slow network go up two levels: the second must not "give up" on the first
     links[0].click(); await sleep(250);
-    check('nota do link aberta a partir da quebrada', App.currentFile?.id === 'n-z' && stack().join(' > ') === 'welcome > pasta:vault > Q', stack());
+    check('nota do link aberta a partir da quebrada', App.currentFile?.id === 'n-z' && stack().join(' > ') === 'welcome > Q', stack());
     w.__back();
     await sleep(10);
     w.__back(); await sleep(250);
     check('o painel de diagnostico diz quanto cada nota levou pra chegar do Drive', App._log.some(l => /loaded zebra\.md \d+ms/.test(l)), App._log.slice(-6));
-    check('dois voltar seguidos: da nota do link direto pra pasta',d.body.dataset.view === 'browse' && App.currentFile === null && stack().join(' > ') === 'welcome', [d.body.dataset.view, App.currentFile?.id, stack()]);
+    check('dois voltar seguidos: da nota do link direto pra home',d.body.dataset.view === 'welcome' && App.currentFile === null && stack().join(' > ') === '', [d.body.dataset.view, App.currentFile?.id, stack()]);
     drive.delay = 5;
   }
   });
@@ -3208,11 +3109,13 @@ async function scenario(title, block) {
     check('nota sem id: modal sem o botao apagar', App.els.modal.classList.contains('visible') && d.getElementById('modal-delete').hidden);
     App.hideModal();
 
-    d.getElementById('welcome-open').click(); await sleep(80);
-    [...d.querySelectorAll('.browser-item')].find(li => li.textContent.includes('zebra')).click(); await sleep(80);
-    // Three steps behind it: the home screen, the new note from above and the folder. It is to that folder that delete has to go back.
-    check('zebra aberta', App.currentFile?.id === 'n-z' && App.navStack.length === 3
-      && App.navStack[2].view === 'browse' && App.navStack[2].id === VAULT, [App.navStack.length, App.navStack]);
+    // Back from the new note to the home, where the tree is
+    w.__back(); await sleep(80);
+    await showHome(App);
+    treeButton(d, 'zebra').click(); await sleep(80);
+    // One step behind it: the home screen, where it was opened from the tree. It is there that delete has to go back.
+    check('zebra aberta', App.currentFile?.id === 'n-z' && App.navStack.length === 1
+      && App.navStack[0].view === 'welcome', [App.navStack.length, App.navStack]);
     App.els.fileName.click();
     check('nota do Drive: modal com o botao apagar', !d.getElementById('modal-delete').hidden);
 
@@ -3239,7 +3142,7 @@ async function scenario(title, block) {
     check('saiu das recentes', !App.getRecents().some(r => r.id === 'n-z'));
     check('saiu do indice', !App._noteIndex.some(n => n.id === 'n-z'));
     check('sem rascunho sobrando', !w.localStorage.getItem('drivenotes_draft_n-z'));
-    check('voltou pra pasta', d.body.dataset.view === 'browse' && App.folder?.id === VAULT, d.body.dataset.view);
+    check('voltou pra home', d.body.dataset.view === 'welcome' && App.currentFile === null, d.body.dataset.view);
     check('os links das outras notas ficaram', drive.files.get('L1').content === 'vai [[zebra]]' && drive.files.get('L2').content === '[[zebra]] de novo');
     check('nao ha mais nota nenhuma com id n-z criada de novo', [...drive.files.values()].filter(f => f.name === 'zebra.md').length === 1);
 
@@ -3902,16 +3805,28 @@ async function scenario(title, block) {
     }
 
     {
-      // History mode keeps its own entries across a reload; the folder comes back with its search
+      // A package written by the version before this one, which still had a folder screen: home, and "back" leaves the app
       const drive = makeDrive();
       drive.put('B', 'dentro.md', 'b', ['F']);
       const folder = { view: 'browse', id: 'F', name: 'pasta', path: ['vault'], query: 'dentro' };
-      const { App, w } = await boot({ drive, seedStorage: TOKEN,
-        seedSession: { drivenotes_reopen: JSON.stringify({ view: folder, mode: 'edit', navStack: [], fwdStack: [] }) } });
-      await until(() => App.folder?.id === 'F');
-      check('pasta aberta: volta pra mesma pasta, com a busca',
-        App.folder?.id === 'F' && w.document.body.dataset.view === 'browse' && App.els.browserSearch.value === 'dentro',
-        [App.folder, w.document.body.dataset.view]);
+      const { App, w } = await boot({ drive, watcher: true, seedStorage: TOKEN,
+        seedSession: { drivenotes_reopen: JSON.stringify({ view: folder, mode: 'edit', navStack: [{ view: 'welcome' }, folder], fwdStack: [folder] }) } });
+      await sleep(80);
+      check('pacote antigo com tela de pasta: abre na home',
+        w.document.body.dataset.view === 'welcome' && App.currentFile === null, w.document.body.dataset.view);
+      check('... com as pilhas vazias, e o voltar sai do app', App.navStack.length === 0 && App.fwdStack.length === 0 && w.__back() === 'EXIT', [App.navStack, App.fwdStack]);
+      check('... e a marca saiu da sessao', w.sessionStorage.getItem('drivenotes_reopen') === null);
+    }
+    {
+      // The same, with a note on screen and folders left in the stacks: the note opens, the folders are gone
+      const drive = makeDrive();
+      drive.put('B', 'dentro.md', 'b', ['F']);
+      const folder = { view: 'browse', id: 'F', name: 'pasta', path: ['vault'], query: '' };
+      const { App, w } = await boot({ drive, watcher: true, seedStorage: TOKEN,
+        seedSession: { drivenotes_reopen: JSON.stringify({ view: { view: 'file', id: 'B', name: 'dentro.md' }, mode: 'preview', navStack: [{ view: 'welcome' }, folder], fwdStack: [] }) } });
+      await until(() => App.currentFile?.id === 'B');
+      check('pacote antigo com nota: a nota abre, e a pasta saiu da pilha',
+        App.currentFile?.id === 'B' && JSON.stringify(App.navStack) === JSON.stringify([{ view: 'welcome' }]), App.navStack);
     }
   }
   });
@@ -4213,20 +4128,7 @@ async function scenario(title, block) {
         [w.document.body.dataset.view, App.currentFile]);
       check('... e a URL ficou sem o parametro', w.location.search === '' && w.location.pathname === '/index.html', w.location.href);
     }
-    {
-      const drive = makeDrive();
-      drive.put('R', 'recente.md', 'texto');
-      const { App, w } = await boot({ url: 'http://localhost:8000/index.html?atalho=buscar', drive, seedStorage: TOKEN,
-        seedSession: { drivenotes_reopen: JSON.stringify({ view: { view: 'file', id: 'R', name: 'recente.md' }, mode: 'preview', navStack: [], fwdStack: [] }) } });
-      await until(() => w.document.body.dataset.view === 'browse');
-      await sleep(50);
-      check('atalho buscar: a tela de pastas, com o foco no campo de busca',
-        w.document.body.dataset.view === 'browse' && w.document.activeElement === App.els.browserSearch,
-        [w.document.body.dataset.view, w.document.activeElement?.id]);
-      check('... a nota da recarga nao reabriu por cima, e a marca dela saiu da sessao',
-        App.currentFile === null && w.sessionStorage.getItem('drivenotes_reopen') === null,
-        [App.currentFile, w.sessionStorage.getItem('drivenotes_reopen')]);
-    }
+    // The "buscar" shortcut with a login: H30, with the search of the home screen
     {
       const { w } = await boot({ url: 'http://localhost:8000/index.html?atalho=buscar', auth: false });
       await until(() => w.document.getElementById('confirm-overlay').classList.contains('visible'));
@@ -5258,13 +5160,8 @@ async function scenario(title, block) {
   });
 
   // ── Home: the vault tree (home-design) ──
-  // What the tree shows, row by row: a folder is "name/", an open one "name/*"
-  const treeRows = (d) => [...d.querySelectorAll('#tree-list .tree-row')].map((li) =>
-    li.querySelector('.tree-name').textContent
-      + (li.classList.contains('is-folder') ? (li.classList.contains('is-open') ? '/*' : '/') : ''));
-  const treeButton = (d, name) => [...d.querySelectorAll('#tree-list .tree-row')]
-    .find((li) => li.querySelector('.tree-name').textContent === name)?.querySelector('.tree-item');
-  const showHome = async (App) => { App.renderHome(); await sleep(80); };
+  // (treeRows, treeButton and showHome are declared further up, next to seedVault: the navigation
+  // scenarios reach their notes through the tree too)
   const makeDir = (drive, id, name, parent) => { drive.put(id, name, '', [parent]); drive.files.get(id).mimeType = FOLDER; };
   const listsOf = (drive, id) => drive.log.filter((l) => l === `LIST '${id}' in parents and trashed = false`).length;
   const until = async (cond, limit = 3000) => {
@@ -5303,6 +5200,32 @@ async function scenario(title, block) {
       }
     };
     return gate;
+  };
+  // The search of the home screen (home-design, "Busca aberta")
+  const searchInput = (d) => d.getElementById('home-search');
+  const typeSearch = (w, text) => {
+    const input = searchInput(w.document);
+    input.value = text;
+    input.dispatchEvent(new w.Event('input'));
+  };
+  // Rows as drawn, best first (the first in the DOM is the one next to the field): [name, where]
+  const searchRows = (d) => [...d.querySelectorAll('#home-results .search-row')].map((li) =>
+    [li.querySelector('.search-name').textContent, li.querySelector('.search-where').textContent]);
+  const searchSays = (d) => d.querySelector('#home-results .search-message')?.textContent || '';
+  const searchCount = (d) => d.querySelector('#home-results .search-count')?.textContent || '';
+  // The vault of the search scenarios (what scenario 28 used to seed, before the folder screen left)
+  const seedSearch = (drive) => {
+    makeDir(drive, 'd-cli', 'clientes', 'd-proj');
+    // A folder at the top of the Drive, outside the vault: no parent at all
+    drive.put('d-fora', 'documentos', '', []);
+    drive.files.get('d-fora').mimeType = FOLDER;
+    drive.put('n-deep', 'Relatório do funil.md', 'texto sobre vendas', ['d-cli']);
+    drive.put('n-text', 'reuniao.md', 'falamos do funil de conversão', ['d-10']);
+    drive.put('x-out', 'Funil pessoal.md', 'x', ['d-fora']);
+    drive.put('x-obs', 'funil-config.md', 'x', ['d-obs']);
+    drive.put('x-xlsx', 'Funil.xlsx', 'x', [VAULT]);
+    drive.files.get('x-xlsx').mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    drive.put('n-quote', "d'água.md", 'x', ['d-10']);
   };
 
   await scenario('H1. Home: a raiz na ordem do Obsidian, sem as pastas de sistema', async () => {
@@ -5382,18 +5305,51 @@ async function scenario(title, block) {
   await scenario('H4. Home: duas listagens da mesma pasta a caminho, so a ultima desenha', async () => {
     const { App, drive, w } = await boot();
     seedVault(drive);
+    drive.put('n-late', 'so na ultima.md', 'x', ['d-proj']);
+    const d = w.document;
+    const gate = gateFolders(w);
+    gate.holdFirst('d-proj'); // the first listing of the folder to reach the Drive waits at the gate
     await showHome(App);
-    let writes = 0;
-    const set = App._folderCache.set.bind(App._folderCache);
-    App._folderCache.set = (id, items) => { if (id === 'd-proj') writes++; return set(id, items); };
-    drive.delay = 60;
-    const first = App.loadTreeFolder('d-proj');
-    drive.delay = 5;
-    const second = App.loadTreeFolder('d-proj');
-    await Promise.all([first, second]);
-    await sleep(80);
-    check('so uma resposta foi guardada', writes === 1, writes);
-    check('nada ficou marcado como carregando', App._tree.loading.size === 0, [...App._tree.loading]);
+    await until(() => gate.asked.includes('d-proj')); // asked one level ahead, and held: listing A
+    treeButton(d, '20-projetos').click(); // listing B, by the tap, goes through
+    await until(() => treeRows(d).includes('so na ultima'));
+    check('a ultima listagem desenhou', treeRows(d).includes('so na ultima'), treeRows(d));
+
+    await until(() => !App._tree.loading.has('d-proj'));
+    drive.files.delete('n-late'); // what the late answer will bring is a folder without the note
+    const drawn = JSON.stringify(treeRows(d));
+    gate.release('d-proj'); // A arrives now, after everything asked later
+    await until(() => gate.active === 0);
+    await sleep(50);
+    check('a atrasada chegou e nao desenhou por cima', JSON.stringify(treeRows(d)) === drawn && treeRows(d).includes('so na ultima'), treeRows(d));
+    check('... e a pasta nao ficou marcada como carregando', !App._tree.loading.has('d-proj') && !d.querySelector('#tree-list .tree-loading'));
+
+    // The listing held above is the one asked one level ahead (fetchAhead), which never touches _tree.seq:
+    // what stops it is "a listing already there came from a tap". This block proves loadTreeFolder's seq,
+    // with the folder out of reach of the listings ahead
+    {
+      const { App, drive, w } = await boot();
+      seedVault(drive);
+      drive.put('n-late', 'so na ultima.md', 'x', ['d-proj']);
+      const d = w.document;
+      await showHome(App);
+      await until(() => aheadDone(App));
+      treeButton(d, '20-projetos').click();
+      await until(() => treeRows(d).includes('so na ultima'));
+      const gate = gateFolders(w); // from here on: the next listing of the folder is held
+      gate.holdFirst('d-proj');
+      const first = App.loadTreeFolder('d-proj');  // held at the gate
+      await until(() => gate.active === 1);
+      const second = App.loadTreeFolder('d-proj'); // goes through, and draws
+      await second;
+      check('a segunda desenhou com a nota', treeRows(d).includes('so na ultima'), treeRows(d));
+      drive.files.delete('n-late');
+      gate.release('d-proj');
+      await first;
+      check('a primeira chegou depois, sem a nota, e nao desenhou por cima', treeRows(d).includes('so na ultima'), treeRows(d));
+      check('... nem foi guardada', App._folderCache.get('d-proj').some((item) => item.id === 'n-late'));
+      check('... e nada ficou marcado como carregando', App._tree.loading.size === 0, [...App._tree.loading]);
+    }
   });
 
   await scenario('H5. Home: a arvore lembra o que estava aberto, e aguenta o que o aparelho guardou', async () => {
@@ -5435,6 +5391,15 @@ async function scenario(title, block) {
     await showHome(full.App);
     treeButton(full.w.document, '20-projetos').click(); await sleep(80);
     check('storage cheio: a pasta abre do mesmo jeito', treeRows(full.w.document).includes('nota do projeto'), treeRows(full.w.document));
+
+    {
+      // The app opened straight into a note (a shortcut): the tree has drawn no row yet when the home is left
+      const { App, w } = await boot({ seedStorage: { drivenotes_tree_scroll: '240' } });
+      App.rememberHomeScroll();
+      check('sem linha desenhada, sair da home nao grava zero por cima da rolagem guardada',
+        w.localStorage.getItem('drivenotes_tree_scroll') === '240' && App._tree.scroll === 240,
+        [w.localStorage.getItem('drivenotes_tree_scroll'), App._tree.scroll]);
+    }
   });
 
   await scenario('H6. Home: pasta grande mostra 30 e o Ver mais', async () => {
@@ -5514,12 +5479,10 @@ async function scenario(title, block) {
     await showHome(App);
     check('o cabecalho diz dn e vault', App.els.fileName.textContent === 'dn' && d.getElementById('home-label').textContent === 'vault');
     check('as sobras da home antiga sairam', !d.querySelector('#welcome > p') && !d.querySelector('#welcome h2') && !d.querySelector('#welcome > .btn'));
-    check('o + e o campo de busca estao na barra de baixo',
-      !!d.querySelector('.home-bar #welcome-new') && !!d.querySelector('.home-bar #welcome-open'));
+    check('a barra de baixo: o campo de busca e o +', !!d.querySelector('.home-bar #home-search') && !!d.querySelector('.home-bar #welcome-new'));
     check('o + tem nome pra leitor de tela', d.getElementById('welcome-new').getAttribute('aria-label') === 'Nova nota');
-    d.getElementById('welcome-open').click(); await sleep(80);
-    check('nesta fatia o campo abre a busca que ja existe, na raiz', d.body.dataset.view === 'browse' && App.folder?.id === VAULT);
-    App.els.btnBack.click(); await sleep(80);
+    check('o campo e um campo de verdade', d.getElementById('home-search').tagName === 'INPUT' && d.getElementById('home-search').type === 'search');
+    check('a tela de pasta saiu', !d.getElementById('browser') && typeof App.openFolder === 'undefined' && typeof App.browseVault === 'undefined');
     d.getElementById('welcome-new').click(); await sleep(20);
     // With a login the new note goes up to the Drive at once, in the background: by now it may have its id
     const born = App.currentFile;
@@ -5589,7 +5552,7 @@ async function scenario(title, block) {
     App.els.previewContainer.querySelector('a.wikilink').click(); await sleep(80);
     check('duas notas de fundo: duas telas na pilha', App.currentFile?.id === 'n-z' && App.navStack.length === 2, App.navStack);
     App.els.btnOpen.click(); await sleep(80);
-    check('o botao de pasta leva pra home', d.body.dataset.view === 'welcome' && App.currentFile === null && App.folder === null);
+    check('o botao de pasta leva pra home', d.body.dataset.view === 'welcome' && App.currentFile === null);
     check('a home e o fundo da pilha: o voltar sai do app', App.navStack.length === 0 && w.__back() === 'EXIT');
     check('a arvore esta la', treeRows(d).includes('zebra'), treeRows(d));
 
@@ -5930,8 +5893,6 @@ async function scenario(title, block) {
       check('... nem na edicao', d.body.dataset.view === 'edit' && !collapseShown(w));
       App.els.btnBack.click(); await sleep(80);
       check('de volta na home, com a pasta aberta: aparece de novo', d.body.dataset.view === 'welcome' && collapseShown(w));
-      d.getElementById('welcome-open').click(); await sleep(80);
-      check('na tela de pastas: nao aparece', d.body.dataset.view === 'browse' && !collapseShown(w));
     }
     const listings = JSON.stringify({
       [VAULT]: [{ id: 'd-proj', name: '20-projetos', isFolder: true }, { id: 'd-10', name: '10-areas', isFolder: true }],
@@ -5986,6 +5947,252 @@ async function scenario(title, block) {
     treeButton(d, '20-projetos').click();
     check('a pasta reaberta ja mostra o que chegou', treeRows(d).includes('chegou-depois') && !d.querySelector('#tree-list .tree-loading'), treeRows(d));
     await until(() => aheadDone(App) && App._tree.loading.size === 0);
+  });
+
+  // ── Home: the search, from the field at the bottom (v67) ──
+
+  await scenario('H25. Busca na home: abre no lugar da arvore, o nome responde na hora, o Drive depois da pausa', async () => {
+    const { App, drive, w } = await boot({ watcher: true });
+    seedVault(drive);
+    seedSearch(drive);
+    const d = w.document;
+    w.__CONFIG.SEARCH_DELAY = 40;
+    await showHome(App);
+    await App.noteIndex();
+    const searches = () => drive.count('SEARCH');
+
+    check('fechada: a arvore na tela, a lista de resultados escondida, o + na barra',
+      !d.getElementById('home-scroll').hidden && d.getElementById('home-results').hidden
+        && !d.getElementById('welcome-new').hidden && d.getElementById('home-search-close').hidden);
+
+    searchInput(d).dispatchEvent(new w.Event('focus'));
+    check('tocar no campo abre a busca: resultados no lugar da arvore, X no lugar do +',
+      App._homeSearch.open && d.getElementById('home-scroll').hidden && !d.getElementById('home-results').hidden
+        && d.getElementById('welcome-new').hidden && !d.getElementById('home-search-close').hidden);
+    check('a view continua sendo a home, e nada entrou na pilha', d.body.dataset.view === 'welcome' && App.navStack.length === 0);
+    check('o rotulo do cabecalho diz busca', d.getElementById('home-label').textContent === 'busca');
+    check('campo vazio: convite, sem linhas', searchRows(d).length === 0 && /digite/i.test(searchSays(d)), searchSays(d));
+
+    typeSearch(w, 'ab');
+    check('duas letras: o nome responde na hora, sem ir ao Drive',
+      JSON.stringify(searchRows(d)) === JSON.stringify([['Abacaxi', 'vault']]) && searches() === 0, [searchRows(d), drive.log]);
+    typeSearch(w, 'EMILE');
+    check('sem ligar pra acento nem maiuscula', searchRows(d)[0]?.[0] === 'émile', searchRows(d));
+    typeSearch(w, 'unil');
+    check('pedaco do meio da palavra acha pelo nome', searchRows(d).some(([name]) => name === 'Relatório do funil'), searchRows(d));
+    typeSearch(w, 'funil relat');
+    check('palavras em qualquer ordem', JSON.stringify(searchRows(d).map(([name]) => name)) === JSON.stringify(['Relatório do funil']), searchRows(d));
+
+    for (const partial of ['fun', 'funi', 'funil']) { typeSearch(w, partial); await sleep(10); }
+    check('enquanto o Drive nao responde: o que bate no nome ja esta na tela, e a linha diz que esta buscando',
+      searchRows(d)[0]?.[0] === 'Relatório do funil' && /buscando/i.test(searchSays(d)), [searchRows(d), searchSays(d)]);
+    await sleep(200);
+    check('uma busca so no Drive, depois que a digitacao para', searches() === 1, drive.log);
+    check('nome primeiro, depois o que bate so no texto, cada um com a pasta',
+      JSON.stringify(searchRows(d)) === JSON.stringify([['Relatório do funil', '20-projetos / clientes'], ['reuniao', '10-areas · no texto']]), searchRows(d));
+    check('a contagem em cima', searchCount(d) === '2 notas', searchCount(d));
+    check('ficam de fora: fora do vault, pasta com ponto, o que nao e nota', !d.getElementById('home-results').textContent.match(/pessoal|config|xlsx/i));
+    check('nota que veio pelo nome nao repete quando o Drive responde', searchRows(d).filter(([name]) => name === 'Relatório do funil').length === 1);
+
+    typeSearch(w, 'zebra'); await sleep(200);
+    check('uma nota: contagem no singular', searchCount(d) === '1 nota', searchCount(d));
+  });
+
+  await scenario('H26. Busca na home: o destaque do trecho, nome com acento decomposto, com HTML e com apostrofo', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    seedSearch(drive);
+    // "Convocação" in decomposed form (NFD): the c and the a carry their marks as separate characters
+    const nfd = 'Convocação';
+    drive.put('n-nfd', `${nfd} geral.md`, 'x', [VAULT]);
+    drive.put('n-html', '<b>negrito</b> forte.md', 'x', [VAULT]);
+    const d = w.document;
+    w.__CONFIG.SEARCH_DELAY = 40;
+    await showHome(App);
+    await App.noteIndex();
+    const hits = (name) => {
+      const row = [...d.querySelectorAll('#home-results .search-row')].find((li) => li.querySelector('.search-name').textContent === name);
+      return row ? [...row.querySelectorAll('.search-hit')].map((el) => el.textContent) : null;
+    };
+    const parts = (text, words) => {
+      const box = d.createElement('div');
+      box.appendChild(App.markedName(text, words));
+      return [...box.childNodes].map((n) => (n.nodeType === 1 ? `[${n.textContent}]` : n.textContent)).join('');
+    };
+
+    check('um trecho no meio', parts('drive-notes-backlog-detalhes', ['backlog']) === 'drive-notes-[backlog]-detalhes');
+    check('duas palavras, dois trechos', parts('Relatório do funil', ['funil', 'relat']) === '[Relat]ório do [funil]');
+    check('acento no nome, busca sem acento', parts('Relatório', ['relatorio']) === '[Relatório]');
+    check('acento decomposto: a marca fica junto da letra', parts(nfd, ['convocacao']) === `[${nfd}]`, parts(nfd, ['convocacao']));
+    check('a mesma palavra duas vezes', parts('funil do funil', ['funil']) === '[funil] do [funil]');
+    check('sem palavra: o nome inteiro, sem marca', parts('zebra', []) === 'zebra');
+    check('palavra que nao esta no nome (bateu no texto): sem marca', parts('reuniao', ['funil']) === 'reuniao');
+
+    searchInput(d).dispatchEvent(new w.Event('focus'));
+    typeSearch(w, 'convocacao');
+    check('na linha: o trecho que bateu vem marcado', JSON.stringify(hits(`${nfd} geral`)) === JSON.stringify([nfd]), hits(`${nfd} geral`));
+    typeSearch(w, 'negrito');
+    check('nome com < e > e texto, nao HTML', d.querySelectorAll('#home-results b').length === 0 && searchRows(d)[0]?.[0] === '<b>negrito</b> forte', searchRows(d));
+    typeSearch(w, "d'água"); await sleep(200);
+    check('apostrofo na busca nao quebra a consulta', searchRows(d)[0]?.[0] === "d'água", [searchRows(d), drive.log.at(-1)]);
+    typeSearch(w, '   ');
+    check('so espacos: como campo vazio', searchRows(d).length === 0 && /digite/i.test(searchSays(d)));
+  });
+
+  await scenario('H27. Busca na home: resposta atrasada nao desenha, sem rede avisa, nada encontrado diz', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    seedSearch(drive);
+    const d = w.document;
+    w.__CONFIG.SEARCH_DELAY = 10;
+    await showHome(App);
+    await App.noteIndex();
+    searchInput(d).dispatchEvent(new w.Event('focus'));
+
+    // The first search is held at the fetch; the second one answers first
+    const inner = w.fetch;
+    let release;
+    const held = new Promise((r) => { release = r; });
+    w.fetch = async (url, opts) => {
+      const q = new URL(String(url)).searchParams.get('q') || '';
+      if (/fullText contains 'funil'/.test(q)) await held;
+      return inner(url, opts);
+    };
+    typeSearch(w, 'funil'); await sleep(40);
+    typeSearch(w, 'zebra'); await sleep(80);
+    check('a segunda busca desenhou', JSON.stringify(searchRows(d).map(([n]) => n)) === JSON.stringify(['zebra']), searchRows(d));
+    release(); await sleep(80);
+    check('a primeira chegou atrasada e nao desenhou por cima', JSON.stringify(searchRows(d).map(([n]) => n)) === JSON.stringify(['zebra']), searchRows(d));
+    w.fetch = inner;
+
+    drive.failReads = true;
+    typeSearch(w, 'reuniao'); await sleep(80);
+    check('sem rede: o nome continua respondendo, e a linha avisa', searchRows(d)[0]?.[0] === 'reuniao' && /não deu/i.test(searchSays(d)), [searchRows(d), searchSays(d)]);
+    drive.failReads = false;
+    typeSearch(w, 'inexistentes'); await sleep(80);
+    check('nada encontrado: diz que nao achou, sem contagem', searchRows(d).length === 0 && /nada/i.test(searchSays(d)) && searchCount(d) === '', [searchSays(d), searchCount(d)]);
+    typeSearch(w, 'xq');
+    check('menos de 3 letras e nada no nome: explica a regra', /3 letras/.test(searchSays(d)), searchSays(d));
+  });
+
+  await scenario('H28. Busca na home: voltar de um resultado cai na busca, e fechar devolve a arvore como estava', async () => {
+    const { App, drive, w } = await boot({ watcher: true });
+    seedVault(drive);
+    seedSearch(drive);
+    const d = w.document;
+    w.__CONFIG.SEARCH_DELAY = 10;
+    await showHome(App);
+    await until(() => aheadDone(App));
+    await App.noteIndex();
+    treeButton(d, '20-projetos').click();
+    const before = JSON.stringify(treeRows(d));
+    // jsdom has no layout: scrollTop is a plain property there, which is enough to follow who writes it
+    const scroller = d.getElementById('home-scroll');
+    scroller.scrollTop = 120;
+    const kept = () => Number(w.localStorage.getItem('drivenotes_tree_scroll'));
+
+    searchInput(d).dispatchEvent(new w.Event('focus'));
+    check('abrir a busca guarda a rolagem da arvore', kept() === 120 && App._tree.scroll === 120, [kept(), App._tree.scroll]);
+    scroller.scrollTop = 0; // what hiding the element does in a browser
+    App.rememberHomeScroll(); // what the app going to the background calls (visibilitychange, pagehide)
+    check('com a busca aberta, ir pro fundo nao grava zero por cima', kept() === 120 && App._tree.scroll === 120, [kept(), App._tree.scroll]);
+    typeSearch(w, 'funil'); await sleep(80);
+    const searches = drive.count('SEARCH');
+
+    d.querySelector('#home-results .search-item').click(); await sleep(80);
+    check('tocar no resultado abre a nota', App.currentFile?.id === 'n-deep' && d.body.dataset.view === 'preview');
+    check('... sem gravar zero por cima da rolagem guardada', kept() === 120 && App._tree.scroll === 120, [kept(), App._tree.scroll]);
+    check('... e a nota entra nos recentes', App.getRecents()[0]?.id === 'n-deep');
+    w.__back(); await sleep(120);
+    check('voltar: a home, com a busca como estava',
+      d.body.dataset.view === 'welcome' && App._homeSearch.open && searchInput(d).value === 'funil' && searchRows(d).length === 2
+        && d.getElementById('home-scroll').hidden, [d.body.dataset.view, App._homeSearch, searchRows(d)]);
+    check('... sem perguntar de novo ao Drive', drive.count('SEARCH') === searches, drive.log);
+    check('... e sem o foco no campo (teclado fechado)', d.activeElement !== searchInput(d));
+
+    check('o voltar fecha a busca', w.__back() === 'handled' && !App._homeSearch.open);
+    check('a arvore volta com as mesmas pastas abertas', JSON.stringify(treeRows(d)) === before && !d.getElementById('home-scroll').hidden, treeRows(d));
+    check('... na mesma rolagem', scroller.scrollTop === 120, scroller.scrollTop);
+    check('... campo limpo, + de volta, rotulo vault', searchInput(d).value === '' && !d.getElementById('welcome-new').hidden
+      && d.getElementById('home-search-close').hidden && d.getElementById('home-label').textContent === 'vault');
+    check('home limpa: o voltar seguinte sai do app', App.navStack.length === 0 && w.__back() === 'EXIT');
+
+    searchInput(d).dispatchEvent(new w.Event('focus'));
+    typeSearch(w, 'zebra');
+    d.getElementById('home-search-close').click();
+    check('o X fecha do mesmo jeito', !App._homeSearch.open && !d.getElementById('home-scroll').hidden && searchInput(d).value === '');
+    searchInput(d).dispatchEvent(new w.Event('focus'));
+    check('reabrir comeca vazio', searchRows(d).length === 0 && App._homeSearch.query === '');
+  });
+
+  await scenario('H29. Busca na home: voltar com a nota a caminho, o botao de pasta, as duas setas e a versao nova', async () => {
+    const { App, drive, w } = await boot({ watcher: true });
+    seedVault(drive);
+    seedSearch(drive);
+    const d = w.document;
+    w.__CONFIG.SEARCH_DELAY = 10;
+    await showHome(App);
+    await until(() => aheadDone(App));
+    await App.noteIndex();
+    treeButton(d, '20-projetos').click();
+    check('com pasta aberta, as duas setas aparecem', !d.getElementById('btn-collapse').hidden);
+
+    searchInput(d).dispatchEvent(new w.Event('focus'));
+    check('com a busca aberta, as duas setas somem', d.getElementById('btn-collapse').hidden);
+    check('com a busca aberta, a home nao recarrega sozinha pra versao nova', App.safeToReload() === false);
+    typeSearch(w, 'funil'); await sleep(80);
+
+    drive.delay = 300;
+    d.querySelector('#home-results .search-item').click(); await sleep(30);
+    check('nota a caminho', !!App._pending && d.body.dataset.view === 'welcome');
+    w.__back(); await sleep(30);
+    check('voltar com a nota a caminho: desiste dela e fica na busca',
+      !App._pending && App._homeSearch.open && searchRows(d).length === 2 && App.navStack.length === 0, [App._pending, App.navStack]);
+    await sleep(400);
+    check('... e a nota atrasada nao abre por cima', d.body.dataset.view === 'welcome' && App.currentFile === null);
+    drive.delay = 5; // the fake Drive's own default
+
+    d.querySelector('#home-results .search-item').click(); await sleep(80);
+    App.els.btnOpen.click(); await sleep(30);
+    check('botao de pasta da nota: a arvore, com a busca esquecida',
+      d.body.dataset.view === 'welcome' && !App._homeSearch.open && !d.getElementById('home-scroll').hidden && searchInput(d).value === '');
+    check('... e de novo pode recarregar sozinha', App.safeToReload() === true);
+  });
+
+  await scenario('H30. Busca na home: a tecla de buscar, o atalho do icone e o deslizar da borda', async () => {
+    {
+      const { App, drive, w } = await boot();
+      seedVault(drive);
+      seedSearch(drive);
+      const d = w.document;
+      w.__CONFIG.SEARCH_DELAY = 5000;
+      await showHome(App);
+      await App.noteIndex();
+      searchInput(d).focus();
+      // With the accent: the fake Drive matches the text on whole words, accents and all
+      typeSearch(w, 'conversão');
+      searchInput(d).dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter' }));
+      await sleep(80);
+      check('a tecla de buscar nao espera a pausa', drive.count('SEARCH') === 1 && searchRows(d)[0]?.[0] === 'reuniao', [drive.log, searchRows(d)]);
+      check('... e tira o foco do campo, pro teclado sair da frente', d.activeElement !== searchInput(d));
+      check('deslizar da borda esquerda vale com a busca aberta', App.swipeAllowed('left') === true);
+      App.closeHomeSearch();
+      check('... e nao vale na home limpa', App.swipeAllowed('left') === false);
+    }
+    {
+      const TOKEN = { drivenotes_token: 'fake', drivenotes_token_expires: String(Date.now() + 3600e3) };
+      const drive = makeDrive();
+      drive.put('R', 'recente.md', 'texto');
+      const { App, w } = await boot({ url: 'http://localhost:8000/index.html?atalho=buscar', drive, seedStorage: TOKEN,
+        seedSession: { drivenotes_reopen: JSON.stringify({ view: { view: 'file', id: 'R', name: 'recente.md' }, mode: 'preview', navStack: [], fwdStack: [] }) } });
+      await until(() => App._homeSearch.open);
+      await sleep(50);
+      check('atalho buscar: a home, com a busca aberta e o foco no campo',
+        w.document.body.dataset.view === 'welcome' && App._homeSearch.open && w.document.activeElement === App.els.homeSearch,
+        [w.document.body.dataset.view, w.document.activeElement?.id]);
+      check('... a nota da recarga nao reabriu por cima, e a marca dela saiu da sessao',
+        App.currentFile === null && w.sessionStorage.getItem('drivenotes_reopen') === null);
+    }
   });
 
   done();
