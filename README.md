@@ -15,7 +15,7 @@ Então fiz o meu. Hoje é por ele que eu leio e escrevo no vault quando estou lo
 ## Telas
 
 <p>
-  <img src="docs/screenshots/inicio.png" alt="Tela inicial com notas não sincronizadas e recentes" width="200">
+  <img src="docs/screenshots/inicio.png" alt="Tela inicial com a árvore do vault, os recentes e a busca embaixo" width="200">
   <img src="docs/screenshots/busca.png" alt="Busca a partir da tela inicial, com os resultados colados no campo" width="200">
   <img src="docs/screenshots/leitura.png" alt="Modo leitura com callouts, links e checklist" width="200">
   <img src="docs/screenshots/edicao.png" alt="Edição com o markdown da nota e a barra de formatação" width="200">
