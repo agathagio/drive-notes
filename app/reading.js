@@ -638,13 +638,13 @@ Object.assign(App, {
   },
 
   /** The Drive file an `![[picture]]` names, or null. Same name in more than one place: the one in the
-      attachment folder wins, then the newest. Showing the picture and binning it have to land on the
-      same file, so both ask here. */
+      attachment folder of the open note's root wins, then the newest. Showing the picture and binning it
+      have to land on the same file, so both ask here. */
   async findEmbedFile(name) {
     const images = (await this.driveFindByName([name])).filter(f => (f.mimeType || '').startsWith('image/'));
     if (!images.length) return null;
     if (images.length === 1) return images[0];
-    const media = await this.getMediaFolderId().catch(() => null);
+    const media = await this.getMediaFolderId(await this.currentRoot()).catch(() => null);
     return images.find(f => media && f.parents?.includes(media)) || images[0];
   },
 
@@ -719,9 +719,9 @@ Object.assign(App, {
   },
 
   /** The note a link's target names, picked the way a tap picks it: same name in more than one place,
-      the one next to the open note wins, then .md over the rest. { base, note }, or { base, error } with
-      'missing' or 'type'. Throws when the Drive cannot be asked. The tap and the peek both come here, so
-      they always land on the same note. */
+      the one next to the open note wins, then the one in the open note's root, then .md over the rest.
+      { base, note }, or { base, error } with 'missing' or 'type'. Throws when the Drive cannot be asked.
+      The tap and the peek both come here, so they always land on the same note. */
   async findLinkedNote(target) {
     const base = target.split('/').pop().trim();
     const names = /\.md$/i.test(base) ? [base] : [`${base}.md`, base];
@@ -729,10 +729,20 @@ Object.assign(App, {
     const notes = matches.filter(f => this.isNote(f));
     if (!notes.length) return { base, error: matches.length ? 'type' : 'missing' };
     const folder = this.currentFile?.parents?.[0];
-    const note = notes.find(f => folder && f.parents?.includes(folder))
-      || notes.find(f => /\.md$/i.test(f.name))
-      || notes[0];
-    return { base, note };
+    const near = notes.find(f => folder && f.parents?.includes(folder));
+    if (near || notes.length === 1) return { base, note: near || notes[0] };
+
+    // The same name in more than one place: the open note's folder wins, then its root, then the
+    // order of CONFIG.ROOTS. While the vault is being moved over, a copy may exist on both sides.
+    const rootIndex = async (f) => {
+      const root = f.parents?.[0] ? await this.rootOf(f.parents[0]).catch(() => null) : null;
+      return root ? CONFIG.ROOTS.indexOf(root) : CONFIG.ROOTS.length;
+    };
+    const here = CONFIG.ROOTS.indexOf(await this.currentRoot());
+    const ranked = await Promise.all(notes.map(async (f) => ({ f, at: await rootIndex(f) })));
+    ranked.sort((a, b) => (a.at === here ? -1 : a.at) - (b.at === here ? -1 : b.at)
+      || Number(/\.md$/i.test(b.f.name)) - Number(/\.md$/i.test(a.f.name)));
+    return { base, note: ranked[0].f };
   },
 
   /** { target, heading } of a link to another note (a wikilink, or a relative link to a .md), or null:

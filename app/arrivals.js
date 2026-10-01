@@ -98,7 +98,7 @@ Object.assign(App, {
       asks first, and the answer is the tap. */
   async startSearch() {
     const quiet = this.canRenewQuietly();
-    if (!quiet && !(await this.confirmDialog('Buscar no vault', 'O login do Google venceu. Entre pra buscar.', 'Entrar', { danger: false }))) return;
+    if (!quiet && !(await this.confirmDialog('Buscar nas notas', 'O login do Google venceu. Entre pra buscar.', 'Entrar', { danger: false }))) return;
     try {
       await this.ensureAuth({ quiet });
     } catch (e) {
@@ -118,11 +118,12 @@ Object.assign(App, {
     if (pending && !this.els.arrivalOverlay.classList.contains('visible')) this.openArrivalSheet(pending);
   },
 
-  /** The notes of the vault inbox, most recently edited first. CLAUDE.md is the folder's rules, not a note to write in. */
+  /** The notes of the inbox (the one of personal-os), most recently edited first. CLAUDE.md and README.md
+      are the folder's rules, not notes to write in. */
   async inboxNotes() {
     const items = await this.driveListFolder(CONFIG.DEFAULT_FOLDER_ID);
     return items
-      .filter((f) => !f.isFolder && f.name.toLowerCase() !== 'claude.md')
+      .filter((f) => !f.isFolder && !['claude.md', 'readme.md'].includes(f.name.toLowerCase()))
       .sort((a, b) => String(b.modifiedTime || '').localeCompare(String(a.modifiedTime || '')));
   },
 

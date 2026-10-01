@@ -11,6 +11,14 @@ const { check, done } = reporter();
 // The last version with the dictation bug: proves the composition check can actually fail
 const COMMIT_WITH_DICTATION_BUG = '2d8b20b';
 
+// The fake Drive has one root, 'ROOT', with the name, the dates and the embed prefix of the root it stands
+// for. The app was born with the real CONFIG.ROOTS: its trails and its open roots are rebuilt for this one
+// (localStorage is clear by now, so the root is new to this device, and starts open).
+const ONE_ROOT = (name, dates, embedPrefix) => `
+  CONFIG.ROOTS = [{ id: 'ROOT', name: ${JSON.stringify(name)}, dates: ${dates}, embedPrefix: ${JSON.stringify(embedPrefix)} }];
+  __App._folderTrails = new Map([['ROOT', [${JSON.stringify(name)}]], [CONFIG.DEFAULT_FOLDER_ID, CONFIG.DEFAULT_FOLDER_TRAIL]]);
+  __App.initTree();`;
+
 const FAKE_DRIVE = `
   localStorage.clear();
   // The device's kept notes too: the profile outlives the run, and a fake Drive that always answers the
@@ -38,7 +46,7 @@ const FAKE_DRIVE = `
       : q.includes("'" + f.name + "'"));
     return ok({ files: list.map(f => ({ ...f, modifiedTime: '2026-09-19T10:00:00Z' })) });
   };
-  CONFIG.VAULT_FOLDER_ID = 'ROOT';
+  ${ONE_ROOT('vault', true, '')}
   'ok'`;
 
 (async () => {
@@ -188,7 +196,9 @@ const FAKE_DRIVE = `
     const photo = JSON.parse(await js(`(async () => {
       localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
       __App.accessToken = 'fake';
-      CONFIG.VAULT_FOLDER_ID = 'ROOT';
+      // The note is new, so it sits in the inbox: the root is personal-os, and its embeds carry _media/
+      ${ONE_ROOT('personal-os', false, '_media/')}
+      localStorage.removeItem('drivenotes_media_folder_ROOT');
       const posts = [];
       window.fetch = async (url, opts = {}) => {
         const ok = (o) => ({ ok: true, status: 200, json: async () => o });
@@ -220,7 +230,7 @@ const FAKE_DRIVE = `
     check('foto de 4000x3000 sai com 2000 no lado maior, em JPEG', photo.width === 2000 && photo.height === 1500 && photo.type === 'image/jpeg', photo);
     check('o que sobe e bem menor que o original', photo.sent > 0 && photo.sent < photo.original / 2, photo);
     check('imagem pequena sobe como esta', photo.untouched === true);
-    check('embed entra onde o cursor estava antes do seletor abrir, com o nome da nota (t.md)', /^linha um\n!\[\[t-foto-\d{6}\.jpg\]\]\n\nlinha dois$/.test(photo.content), photo.content);
+    check('embed entra onde o cursor estava antes do seletor abrir, com o nome da nota (t.md) e o prefixo da raiz', /^linha um\n!\[\[_media\/t-foto-\d{6}\.jpg\]\]\n\nlinha dois$/.test(photo.content), photo.content);
     check('nota marcada como nao salva, aviso na tela', photo.dirty === true && photo.status === 'Foto inserida', photo);
 
     // ── 5. Pictures while editing: a background of the line, never part of the text ──
@@ -308,7 +318,8 @@ const FAKE_DRIVE = `
         if (opts.method === 'POST') return ok({ id: 'NEW', name: 'n.md', parents: [CONFIG.DEFAULT_FOLDER_ID], modifiedTime: 't1' });
         if (opts.method === 'PATCH') { window.__written.push(opts.body); return ok({ id: 'OLD', modifiedTime: 't1' }); }
         if (new URL(url).searchParams.get('alt') === 'media') return ok('---\\ncreated: 2026-01-02\\nupdated: 2026-01-03\\n---\\n\\ntexto');
-        return ok({ id: 'OLD', name: 'velha.md', parents: [CONFIG.VAULT_FOLDER_ID], modifiedTime: 't1' });
+        // The real vault, the root that keeps dates (the app's trails know it from the start)
+        return ok({ id: 'OLD', name: 'velha.md', parents: [CONFIG.ROOTS.find((r) => r.dates).id], modifiedTime: 't1' });
       };
       return 'ok';
     })()`);
@@ -317,7 +328,7 @@ const FAKE_DRIVE = `
     await sleep(200);
     await send('Input.insertText', { text: 'ideia' });
     await sleep(200);
-    check('nota nova: o que se digita cai embaixo das propriedades', await js('__App.getContent()') === `---\ncreated: ${today}\nupdated: ${today}\n---\n\nideia`, await js('__App.getContent()'));
+    check('nota nova (no inbox da personal-os): nasce em branco, e o que se digita e tudo', await js('__App.getContent()') === 'ideia', await js('__App.getContent()'));
 
     await js(`__App.isDirty = false; __App.openFile('OLD', 'velha.md').then(() => 'ok')`);
     await js(`__App.setMode('edit'); __App.Editor.focus(); ${SELECT({ row: 5, col: 5 })} 'ok'`);
@@ -1543,8 +1554,9 @@ const FAKE_DRIVE = `
       };
       __App.renderHome();
       return 'ok'; })()`);
-    const homeDrawn = await waitFor(`document.querySelectorAll('#tree-list .tree-row').length === 30`, 4000);
-    check('a raiz desenha 30 linhas', homeDrawn, await js(`document.querySelectorAll('#tree-list .tree-row').length`));
+    // The root's own row, and the 30 rows under it
+    const homeDrawn = await waitFor(`document.querySelectorAll('#tree-list .tree-row').length === 31`, 4000);
+    check('a linha da raiz e as 30 dela', homeDrawn, await js(`document.querySelectorAll('#tree-list .tree-row').length`));
     const hitOf = `(id) => { const b = document.getElementById(id).getBoundingClientRect();
       const el = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2);
       return { hit: !!el && !!el.closest('#' + id), top: Math.round(b.top), bottom: Math.round(b.bottom), h: Math.round(b.height) }; }`;
@@ -1564,7 +1576,7 @@ const FAKE_DRIVE = `
     await js(`__App.navigateTo('N1', 'com link.md').then(() => 'ok')`);
     await waitFor(`document.body.dataset.view === 'preview'`, 4000);
     await js(`__App.goBack(); 'ok'`);
-    await waitFor(`document.body.dataset.view === 'welcome' && document.querySelectorAll('#tree-list .tree-row').length === 30`, 4000);
+    await waitFor(`document.body.dataset.view === 'welcome' && document.querySelectorAll('#tree-list .tree-row').length === 31`, 4000);
     const homeScrollAfter = await js(`document.getElementById('home-scroll').scrollTop`);
     check('voltar de uma nota devolve a home na mesma rolagem', homeScrollBefore === 400 && Math.abs(homeScrollAfter - homeScrollBefore) <= 2, { homeScrollBefore, homeScrollAfter });
 
@@ -1585,8 +1597,8 @@ const FAKE_DRIVE = `
     // in memory, so that no refresh from the Drive replaces it halfway
     await js(`__App._noteIndex = [
       { id: 'A1', name: 'agenda.md', folder: 'ROOT', where: 'vault', modifiedTime: '2026-09-19T10:00:00Z' },
-      { id: 'A2', name: 'casa.md', folder: 'F1', where: 'projetos', modifiedTime: '2026-09-18T10:00:00Z' },
-      { id: 'A3', name: 'plano da semana.md', folder: 'F1', where: 'projetos', modifiedTime: '2026-09-17T10:00:00Z' },
+      { id: 'A2', name: 'casa.md', folder: 'F1', where: 'vault / projetos', modifiedTime: '2026-09-18T10:00:00Z' },
+      { id: 'A3', name: 'plano da semana.md', folder: 'F1', where: 'vault / projetos', modifiedTime: '2026-09-17T10:00:00Z' },
     ]; 'ok'`);
     // The search of the home, where layout decides: the results grow upwards from the field, the best one
     // next to the thumb; the field and the X take the touch; Esc (the back button) closes the search
@@ -1623,12 +1635,12 @@ const FAKE_DRIVE = `
     await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 740, deviceScaleFactor: 2, mobile: true });
     await sleep(200);
     const arrowsShown = `getComputedStyle(document.getElementById('btn-collapse')).display !== 'none'`;
-    check('tudo fechado: as setas nao aparecem', await js(arrowsShown) === false);
-    // Three folders open (empty ones, in this Drive), then the tree scrolled to the end
+    check('a raiz aberta conta como pasta aberta: as setas ja aparecem', await js(arrowsShown) === true);
+    // Three folders open (empty ones, in this Drive) under the open root, then the tree scrolled to the end
     await js(`(() => { for (const name of ['pasta-00', 'pasta-01', 'pasta-02']) {
       [...document.querySelectorAll('#tree-list .tree-row')].find((li) => li.querySelector('.tree-name').textContent === name).querySelector('.tree-item').click(); }
       return 'ok'; })()`);
-    await waitFor(`document.querySelectorAll('#tree-list .tree-row.is-open').length === 3 && !document.querySelector('#tree-list .tree-loading')`, 4000);
+    await waitFor(`document.querySelectorAll('#tree-list .tree-row.is-open').length === 4 && !document.querySelector('#tree-list .tree-loading')`, 4000);
     await js(`document.getElementById('home-scroll').scrollTop = 1e6; 'ok'`);
     const arrows = JSON.parse(await js(`JSON.stringify((() => {
       const box = (id) => { const b = document.getElementById(id).getBoundingClientRect(); return { left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top), w: Math.round(b.width), h: Math.round(b.height) }; };

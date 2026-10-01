@@ -93,30 +93,33 @@ Object.assign(App, {
     return picked.length;
   },
 
-  /** Shrink, upload to the vault's attachment folder, and only then write ![[name]] into the note:
-      a failed upload leaves no broken embed behind. Answers whether the queue can carry on. */
+  /** Shrink, upload to the attachment folder of the note's root, and only then write ![[name]] into the
+      note, with the root's prefix: a failed upload leaves no broken embed behind. Answers whether the
+      queue can carry on. */
   async insertPhoto(picked, taken, status = 'Enviando foto...') {
     const file = this.currentFile;
     this.setSaveStatus('saving', status);
 
     let name;
+    let root = null;
     try {
       await this.ensureAuth();
-      const folderId = await this.getMediaFolderId();
+      root = await this.currentRoot();
+      const folderId = await this.getMediaFolderId(root);
       if (!folderId) {
-        this.setSaveStatus('error', `Pasta ${CONFIG.MEDIA_FOLDER} não encontrada no vault`);
+        this.setSaveStatus('error', `Pasta ${CONFIG.MEDIA_FOLDER} não encontrada em ${root.name}`);
         return false;
       }
       const photo = await this.shrinkPhoto(picked);
       name = await this.freeMediaName(this.mediaName(photo, picked.name, 'foto', taken), folderId, taken);
       await this.driveUploadBlob(name, photo, folderId);
-      // The reading view shows it straight from here, without asking Drive for it back
+      // The reading view shows it straight from here, without asking Drive for it back. By the bare
+      // name: reading cuts the root's prefix off the ![[...]] before looking
       this._embedUrls.set(name, Promise.resolve(URL.createObjectURL(photo)));
     } catch (e) {
       console.error('Photo upload failed:', e);
       this.log(`photo failed: ${e?.name || 'Error'} ${String(e?.message ?? e).slice(0, 80)}`);
-      // In case it was the remembered folder that went away: look it up again next time
-      localStorage.removeItem(KEYS.MEDIA_FOLDER);
+      if (root) this.forgetMediaFolder(root);
       this.setSaveStatus('error', 'Erro ao enviar a foto');
       return false;
     }
@@ -127,7 +130,7 @@ Object.assign(App, {
     }
     // Back from the picker the editor may have no cursor, and every photo of a batch would fall back
     // on the same spot, the last one on top: the next one goes below the one just inserted
-    this._photoAt = this.insertOnOwnLine(`![[${name}]]`, this._photoAt) || this._photoAt;
+    this._photoAt = this.insertOnOwnLine(`![[${root.embedPrefix}${name}]]`, this._photoAt) || this._photoAt;
     this.markDirty();
     this.setSaveStatus('saved', 'Foto inserida');
     return true;

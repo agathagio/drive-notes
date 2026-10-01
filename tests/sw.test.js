@@ -24,7 +24,8 @@ if (COMMIT) console.log(`(controle: servindo o app do commit ${COMMIT})`);
 const DEBUG_PORT = 9336;
 const PORT = 8336;
 const ORIGIN = `http://127.0.0.1:${PORT}`;
-const VAULT = /VAULT_FOLDER_ID: '([^']+)'/.exec(appSource())[1];
+// The vault root (an entry of CONFIG.ROOTS): its notes keep their dates, as they did when it was the only root
+const VAULT = /id: '([^']+)', name: 'vault'/.exec(appSource())[1];
 
 // The version the server is publishing. A deploy is changing this number.
 let version = 1;

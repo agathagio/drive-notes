@@ -11,12 +11,16 @@
 // =====================================================
 const CONFIG = {
   CLIENT_ID: '104411957628-eu5gbpopvot1ai5a95qbpdn3frcvko4r.apps.googleusercontent.com',
-  // Folder where new notes are created (the vault inbox on Google Drive)
-  DEFAULT_FOLDER_ID: '1xONP1bGB7qqNDQ1XNQRSk8rqWKoqCuuV',
-  // Root of the vault: the home tree starts here
-  VAULT_FOLDER_ID: '1xJYm3FFeafY1IAcvAHuQ5BaMX7KxRM-K',
-  VAULT_NAME: 'vault',
-  // Attachment folder at the vault root (Obsidian's attachmentFolderPath)
+  // The folders the app treats as vaults, in the order the home tree shows them. `dates`: whether notes
+  // there keep `created` and `updated`. `embedPrefix`: what goes before the file name in ![[...]].
+  ROOTS: [
+    { id: '1TCH0v4H54qjKgrmFcscg-PCkhhP1LLsu', name: 'personal-os', dates: false, embedPrefix: '_media/' },
+    { id: '1xJYm3FFeafY1IAcvAHuQ5BaMX7KxRM-K', name: 'vault', dates: true, embedPrefix: '' },
+  ],
+  // Folder where new notes are created (the inbox of personal-os), and where it sits: root name first
+  DEFAULT_FOLDER_ID: '1Ml4sSMybGV9GftOIBaItI6h-eSnl_Xs2',
+  DEFAULT_FOLDER_TRAIL: ['personal-os', '_inbox'],
+  // Attachment folder at the top of each root (Obsidian's attachmentFolderPath)
   MEDIA_FOLDER: '_media',
   // Notes that keep their dates as they are: the same exceptions as the vault's own date automation
   NO_DATES_FOLDERS: ['.obsidian', '.claude', '_media', '_tasknotes', '_archive', '_templates', '_source-docs', '_evernote', 'referencia-cnd'],
@@ -50,17 +54,25 @@ const KEYS = {
   REFRESH_TOKEN: 'drivenotes_refresh_token', // lasts until revoked: it is what makes the login permanent
   LOGIN_HINT: 'drivenotes_login_hint',
   RECENTS: 'drivenotes_recents',
-  MEDIA_FOLDER: 'drivenotes_media_folder',
-  NOTE_INDEX: 'drivenotes_note_index',
+  // Followed by the root's id: one attachment folder per root. A new value on purpose: the old key held
+  // one id for the only root there was (see STALE_KEYS)
+  MEDIA_FOLDER: 'drivenotes_media_folder_',
+  // A new value on purpose: the notes kept under the old one had no root in their `where` (see STALE_KEYS)
+  NOTE_INDEX: 'drivenotes_note_index_v2',
   PLACES: 'drivenotes_places',
-  TREE_OPEN: 'drivenotes_tree_open',         // the folders left open in the home tree (ids)
-  TREE_LISTINGS: 'drivenotes_tree_listings', // what the vault root and those folders held, to draw before the Drive answers
+  TREE_OPEN: 'drivenotes_tree_open',         // the folders left open in the home tree (ids), the roots among them
+  TREE_LISTINGS: 'drivenotes_tree_listings', // what the open roots and folders held, to draw before the Drive answers
+  TREE_ROOTS: 'drivenotes_tree_roots',       // the ids of the roots this device has seen, so a new root starts open once only
   TREE_SCROLL: 'drivenotes_tree_scroll',     // how far down the home screen was scrolled
   SHOW_SYSTEM: 'drivenotes_show_system',     // '1' while the home tree shows CONFIG.HIDDEN_FOLDERS
   REOPEN: 'drivenotes_reopen',          // sessionStorage: the note to reopen after the new version reloads
   DRAFT_PREFIX: 'drivenotes_draft_',    // followed by the file id, or by `new_<timestamp>` for a note not on the Drive yet
   DRAFT_LATEST: 'drivenotes_draft_latest', // a pointer versions before the drafts list used; init removes it
 };
+
+// Keys written in a format the app no longer reads (the note index and the attachment folder of the
+// single-root versions, before CONFIG.ROOTS). init removes them, so they do not sit on the device forever.
+const STALE_KEYS = ['drivenotes_note_index', 'drivenotes_media_folder'];
 
 // =====================================================
 
@@ -98,9 +110,13 @@ const App = {
   // or null while it is on its way (or was not found: not asked again until another note is opened)
   _embedInfo: new Map(),
 
-  // Where a folder sits in the vault: folder ID -> (a promise of) the folder names from the vault root
-  // down to it, or null for a folder outside the vault. Used by the dates and by the search.
-  _folderTrails: new Map([[CONFIG.VAULT_FOLDER_ID, []]]),
+  // Where a folder sits: folder ID -> (a promise of) the folder names from its root down to it, the root's
+  // own name first, or null for a folder outside every root. Used by the dates, the search and the
+  // attachments. Born knowing the roots and the inbox, so neither ever costs a trip to the Drive.
+  _folderTrails: new Map([
+    ...CONFIG.ROOTS.map((r) => [r.id, [r.name]]),
+    [CONFIG.DEFAULT_FOLDER_ID, CONFIG.DEFAULT_FOLDER_TRAIL],
+  ]),
 
   // Search of the whole vault for the text in the home's search field: { query, results, failed }, results
   // being null while the Drive has not answered. Answers are kept for the session, by query.
@@ -220,6 +236,7 @@ const App = {
 
     // Pointer used by older versions; drafts are now found by scanning their keys
     localStorage.removeItem(KEYS.DRAFT_LATEST);
+    for (const key of STALE_KEYS) localStorage.removeItem(key);
 
     this.useWatcher = typeof CloseWatcher !== 'undefined';
     this.log('init');

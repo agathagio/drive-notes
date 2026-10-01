@@ -1392,7 +1392,8 @@ button.home-section-title {
   color: var(--text-secondary);
 }
 
-/* The header on the home screen: the "dn" of the icon, and where we are */
+/* The header on the home screen: the "dn" of the icon, and "busca" while the search is open. Empty on
+   the tree (the roots name themselves there), and then out of the flex row, or its gap would show */
 .home-label {
   display: none;
   font-family: var(--font-mono);
@@ -1400,7 +1401,7 @@ button.home-section-title {
   color: var(--text-secondary);
 }
 
-body[data-view="welcome"] .home-label {
+body[data-view="welcome"] .home-label:not(:empty) {
   display: inline;
 }
 

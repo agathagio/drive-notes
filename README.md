@@ -31,17 +31,17 @@ Então fiz o meu. Hoje é por ele que eu leio e escrevo no vault quando estou lo
 - Nota longa: segurar o dedo no nome da nota abre o sumário dos títulos, e tocar num deles rola até lá. Segurar um link pra outra nota mostra ela num cartão, sem sair do lugar.
 - O quadro kanban do plugin do Obsidian abre como quadro, com as colunas empilhadas e recolhidas como no Obsidian. Vídeo do YouTube embutido vira capa com play, que abre no app do YouTube.
 - A nota reabre no parágrafo em que a leitura parou, e Ler e Editar mantêm o mesmo trecho na tela.
-- A tela inicial é a árvore do vault, com as pastas abrindo no lugar, na mesma ordem do Obsidian (`2-x` antes de `10-x`).
+- A tela inicial é a árvore do vault, com as pastas abrindo no lugar, na mesma ordem do Obsidian (`2-x` antes de `10-x`). Enquanto as notas mudam de pasta-raiz, a árvore mostra as duas (`personal-os` em cima, `vault` embaixo), e a busca e o `[[` enxergam as duas juntas.
 - Busca a partir da tela inicial: o campo de baixo busca ali mesmo, com os resultados colados nele. O nome da nota responde na hora, sem rede e sem ligar pra acento, e depois de uma pausa a busca procura no vault inteiro, por nome e pelo texto das notas. Cada resultado mostra a pasta onde a nota mora.
 
 **Escrever**
 
 - Nota nova abre direto no editor, sem pedir nome antes. O nome sai do horário e o arquivo é criado no Drive em segundo plano.
-- Datas no padrão do vault: nota nova nasce com `created` e `updated` nas propriedades, e salvar uma edição troca o `updated` pra data do dia. `created` nunca é inventado em nota antiga, e pastas como `_templates` e `_archive` ficam de fora.
+- Datas no padrão do vault: salvar uma edição troca o `updated` pra data do dia. `created` nunca é inventado em nota antiga, e pastas como `_templates` e `_archive` ficam de fora. A `personal-os` não usa datas: nota nova nasce em branco, no inbox dela, e nada ali ganha data.
 - Barra de formatação fixa acima do teclado virtual, sem fechar o teclado a cada toque.
 - Funciona com ditado por voz, e a página encolhe junto com o teclado pra ele não cobrir o texto.
 - Modo datilografia: a linha que se escreve para no meio da tela e o texto sobe uma linha por vez, em vez de afundar até a borda do teclado.
-- Foto direto na nota, com um botão pra câmera e outro pra galeria: a imagem é reduzida no aparelho, sobe pra pasta de anexos do vault e entra como `![[foto-...jpg]]`, do jeito que o Obsidian espera.
+- Foto direto na nota, com um botão pra câmera e outro pra galeria: a imagem é reduzida no aparelho, sobe pra pasta de anexos da raiz onde a nota mora e entra como `![[foto-...jpg]]` (ou `![[_media/foto-...jpg]]`, na `personal-os`), do jeito que o Obsidian espera.
 - Na edição o texto é markdown cru, mas a linha do `![[foto.jpg]]` mostra a imagem embaixo: dá pra escrever olhando pro que se está descrevendo.
 - Desenhar na nota: tela cheia pra rabiscar com o dedo, seis cores, três espessuras, borracha e desfazer. Sai um PNG de fundo transparente, recortado no traço, que funciona tanto no tema escuro do app quanto no claro do Obsidian.
 - Digitar `[[` lista as notas do vault e filtra a cada letra.

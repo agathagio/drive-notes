@@ -234,11 +234,13 @@ Object.assign(App, {
     this.currentFile = file;
     this.syncHistory();
     const today = this.today();
-    this.setContent(`---\ncreated: ${today}\nupdated: ${today}\n---\n\n${body}`);
+    // A root that keeps no dates gets its new notes bare, like the captures already in its inbox
+    const dated = CONFIG.ROOTS.find((r) => r.name === CONFIG.DEFAULT_FOLDER_TRAIL[0])?.dates;
+    this.setContent(dated ? `---\ncreated: ${today}\nupdated: ${today}\n---\n\n${body}` : body);
     this.showEditor();
     this.updateFileNameDisplay();
     this.focusEditor();
-    this.caretToEnd(); // typing starts below the properties
+    this.caretToEnd(); // typing starts below the properties, if any, and after what came in the body
     const born = this.getContent();
 
     // Create on Drive in background, not awaited, so the user can type immediately.
@@ -455,10 +457,11 @@ Object.assign(App, {
   },
 
   // ── Dates (created / updated) ──
-  // The vault keeps `created` and `updated` (YYYY-MM-DD) in the properties of its notes. A new note is born
-  // with both. After that, `updated` is set in the text on its way to the Drive, not in the editor: replacing
-  // the editor's text while the keyboard is up loses the caret and breaks dictation. The editor catches up
-  // when it is out of sight (showSavedDates).
+  // A root with `dates` (the vault) keeps `created` and `updated` (YYYY-MM-DD) in the properties of its notes.
+  // A note born there gets both. After that, `updated` is set in the text on its way to the Drive, not in the
+  // editor: replacing the editor's text while the keyboard is up loses the caret and breaks dictation. The
+  // editor catches up when it is out of sight (showSavedDates). A root without `dates` (personal-os, where
+  // new notes are born) is never stamped: its notes are born bare and go up the way they were written.
 
   today() {
     const now = new Date();
@@ -483,26 +486,41 @@ Object.assign(App, {
     }
   },
 
-  /** True for a folder inside the vault and outside NO_DATES_FOLDERS */
+  /** True for a folder inside a root that keeps dates, and outside NO_DATES_FOLDERS. The inbox, where new
+      notes are born, never costs a request: its trail is known from the start (see _folderTrails). */
   async folderKeepsDates(folderId) {
-    if (folderId === CONFIG.DEFAULT_FOLDER_ID) return true; // new notes are born here: never costs a request
     const trail = await this.folderTrail(folderId);
-    return !!trail && !trail.some(name => CONFIG.NO_DATES_FOLDERS.includes(name));
+    const root = trail && CONFIG.ROOTS.find((r) => r.name === trail[0]);
+    return !!root && root.dates && !trail.some((name) => CONFIG.NO_DATES_FOLDERS.includes(name));
   },
 
-  /** The folder names from the vault root down to this folder, or null outside the vault.
-      Walks up the Drive, one request per level, once per folder. */
+  /** The folder names from a root down to this folder, the root's own name first, or null outside every
+      root. A root answers [root.name]. Walks up the Drive, one request per level, once per folder, until
+      it reaches a folder already known (the roots and the inbox are known from the start). */
   folderTrail(folderId) {
     if (!this._folderTrails.has(folderId)) {
       const trail = this.driveGetFileMeta(folderId, 'name,parents').then(async (folder) => {
         const parent = folder.parents?.[0];
-        const above = parent ? await this.folderTrail(parent) : null; // top of the Drive: not in the vault
+        const above = parent ? await this.folderTrail(parent) : null; // top of the Drive: not in a root
         return above && [...above, folder.name];
       });
       this._folderTrails.set(folderId, trail);
       trail.catch(() => this._folderTrails.delete(folderId));
     }
     return this._folderTrails.get(folderId);
+  },
+
+  /** The CONFIG.ROOTS entry a folder sits under, or null outside every root */
+  async rootOf(folderId) {
+    const trail = await this.folderTrail(folderId);
+    return (trail && CONFIG.ROOTS.find((r) => r.name === trail[0])) || null;
+  },
+
+  /** The root of the open note. A note not on the Drive yet is in the inbox; one outside every root
+      borrows the first root, so a photo still has a folder to go to. */
+  async currentRoot() {
+    const folder = this.currentFile?.parents?.[0] || CONFIG.DEFAULT_FOLDER_ID;
+    return (await this.rootOf(folder).catch(() => null)) || CONFIG.ROOTS[0];
   },
 
   /** Set `updated` to `today` in the note's properties, adding the line (or the whole block) when missing.

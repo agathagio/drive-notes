@@ -166,15 +166,22 @@ Object.assign(App, {
     return (await response.json()).files || [];
   },
 
-  /** ID of the vault's attachment folder, or null. Looked up once per device. */
-  async getMediaFolderId() {
-    const cached = localStorage.getItem(KEYS.MEDIA_FOLDER);
+  /** ID of a root's attachment folder, or null. Looked up once per device and per root: there is one
+      `_media` in each root, and the one found must sit right under this root. */
+  async getMediaFolderId(root) {
+    const key = KEYS.MEDIA_FOLDER + root.id;
+    const cached = localStorage.getItem(key);
     if (cached) return cached;
-    const folder = (await this.driveFindByName([CONFIG.MEDIA_FOLDER])).find(f =>
-      f.mimeType === 'application/vnd.google-apps.folder' && f.parents?.includes(CONFIG.VAULT_FOLDER_ID));
+    const folder = (await this.driveFindByName([CONFIG.MEDIA_FOLDER])).find((f) =>
+      f.mimeType === 'application/vnd.google-apps.folder' && f.parents?.includes(root.id));
     if (!folder) return null;
-    localStorage.setItem(KEYS.MEDIA_FOLDER, folder.id);
+    localStorage.setItem(key, folder.id);
     return folder.id;
+  },
+
+  /** In case it was the remembered folder that went away: look it up again next time */
+  forgetMediaFolder(root) {
+    localStorage.removeItem(KEYS.MEDIA_FOLDER + root.id);
   },
 
   /** Fetch file content by ID */
@@ -291,8 +298,8 @@ Object.assign(App, {
   },
 
   // ── Note index ──
-  // Every note of the vault, for the link list: [{ id, name, folder, where, modifiedTime }], `where`
-  // being the folder trail as text ("onryo / personagens"), what the list shows under the name.
+  // Every note of the roots, for the link list: [{ id, name, folder, where, modifiedTime }], `where`
+  // being the folder trail as text, root first ("vault / onryo / personagens"), what the list shows under the name.
   // Built from two listings of the whole Drive (folders, then the note files) instead of walking
   // folder by folder, kept in localStorage, and refreshed in the background from the second session
   // on. The app keeps it in step with what it does itself (create, rename, delete) without waiting.
@@ -346,14 +353,14 @@ Object.assign(App, {
     return this._noteIndexRefresh;
   },
 
-  /** Two listings of the whole Drive, then the tree: the folders under the vault (minus dot-folders), then the .md notes in them */
+  /** Two listings of the whole Drive, then the tree: the folders under the roots (minus dot-folders), then the .md notes in them */
   async buildNoteIndex() {
     await this.ensureAuth();
     const FOLDER = 'application/vnd.google-apps.folder';
     const folders = await this.driveListAll(`mimeType = '${FOLDER}' and trashed = false`, 'id,name,parents');
     const byId = new Map(folders.map(f => [f.id, f]));
-    // Trail of names from the vault root, or null outside it. Memoized: each folder is walked once.
-    const trails = new Map([[CONFIG.VAULT_FOLDER_ID, []]]);
+    // Trail of names from a root, the root's name first, or null outside every root. Memoized: each folder is walked once.
+    const trails = new Map(CONFIG.ROOTS.map((r) => [r.id, [r.name]]));
     const trailOf = (id, depth = 0) => {
       if (trails.has(id)) return trails.get(id);
       const folder = byId.get(id);
@@ -375,19 +382,19 @@ Object.assign(App, {
       const folder = f.parents?.[0];
       const trail = folder ? trailOf(folder) : null;
       if (!trail) continue;
-      notes.push({ id: f.id, name: f.name, folder, where: trail.join(' / ') || CONFIG.VAULT_NAME, modifiedTime: f.modifiedTime });
+      notes.push({ id: f.id, name: f.name, folder, where: trail.join(' / '), modifiedTime: f.modifiedTime });
     }
     return notes;
   },
 
-  /** A note the app just created on the Drive. Outside the vault, or with the index not loaded yet, nothing to do. */
+  /** A note the app just created on the Drive. Outside every root, or with the index not loaded yet, nothing to do. */
   async noteIndexAdd(file) {
     if (!this._noteIndex || !file?.id || !this.isNote(file)) return;
     const folder = file.parents?.[0];
     const trail = folder ? await Promise.resolve(this.folderTrail(folder)).catch(() => null) : null;
     if (!trail) return;
     this._noteIndex = this._noteIndex.filter(n => n.id !== file.id);
-    this._noteIndex.push({ id: file.id, name: file.name, folder, where: trail.join(' / ') || CONFIG.VAULT_NAME, modifiedTime: file.modifiedTime });
+    this._noteIndex.push({ id: file.id, name: file.name, folder, where: trail.join(' / '), modifiedTime: file.modifiedTime });
     this.writeNoteIndex();
   },
 

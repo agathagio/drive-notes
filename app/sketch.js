@@ -219,7 +219,7 @@ Object.assign(App, {
     return out;
   },
 
-  /** ✓: crop, upload to the vault's attachment folder, and only then write ![[name]] into the note,
+  /** ✓: crop, upload to the attachment folder of the note's root, and only then write ![[name]] into the note,
       the same order as a photo. What differs: a failed upload leaves the screen open with the
       drawing still on it, because a drawing cannot be picked again. */
   async sketchFinish() {
@@ -237,11 +237,14 @@ Object.assign(App, {
     this.setSaveStatus('saving', 'Enviando desenho...');
 
     let name;
+    let root = null;
     try {
       await this.ensureAuth();
-      const folderId = await this.getMediaFolderId();
+      // The attachment folder of the root the note lives in, and the embed the way that root writes it
+      root = await this.currentRoot();
+      const folderId = await this.getMediaFolderId(root);
       if (!folderId) {
-        this.setSaveStatus('error', `Pasta ${CONFIG.MEDIA_FOLDER} não encontrada no vault`);
+        this.setSaveStatus('error', `Pasta ${CONFIG.MEDIA_FOLDER} não encontrada em ${root.name}`);
         return;
       }
       const blob = await new Promise(resolve => out.toBlob(resolve, 'image/png'));
@@ -252,8 +255,7 @@ Object.assign(App, {
       this._embedUrls.set(name, Promise.resolve(URL.createObjectURL(blob)));
     } catch (e) {
       console.error('Sketch upload failed:', e);
-      // In case it was the remembered folder that went away: look it up again next time
-      localStorage.removeItem(KEYS.MEDIA_FOLDER);
+      if (root) this.forgetMediaFolder(root);
       this.setSaveStatus('error', 'Erro ao enviar o desenho');
       return;
     } finally {
@@ -268,7 +270,7 @@ Object.assign(App, {
       this.setSaveStatus('error', `Desenho salvo, mas a nota mudou: ${name}`);
       return;
     }
-    this.insertOnOwnLine(`![[${name}]]`, at);
+    this.insertOnOwnLine(`![[${root.embedPrefix}${name}]]`, at);
     this.markDirty();
     this.setSaveStatus('saved', 'Desenho inserido');
   },
