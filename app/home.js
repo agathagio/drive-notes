@@ -170,6 +170,7 @@ Object.assign(App, {
 
   /** Everything the home screen shows */
   renderHome() {
+    this.renderCheckin();
     this.renderDrafts();
     this.renderRecents();
     this.renderTree();

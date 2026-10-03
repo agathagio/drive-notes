@@ -5744,7 +5744,9 @@ async function scenario(title, block) {
     const lines = panel().split('\n');
     const head = lines.find((l) => l.startsWith('árvore: ')) || '';
     const [, count, middle, worst] = /^árvore: (\d+) idas ao Drive, mediana (\d+) ms, pior (\d+) ms$/.exec(head) || [];
-    check('a contagem bate com as listagens feitas', Number(count) === App._treeTimes.count && Number(count) === drive.count('LIST') && Number(count) >= 6, { head, log: drive.log.length });
+    // Folder listings only: the check-in of the home looks its folder up by name, which is not the tree's
+    const folderLists = drive.log.filter((l) => l.startsWith('LIST ') && l.includes(' in parents')).length;
+    check('a contagem bate com as listagens feitas', Number(count) === App._treeTimes.count && Number(count) === folderLists && Number(count) >= 6, { head, log: drive.log.length });
     check('a pior e a da pasta lenta, a mediana nao', Number(worst) >= 300 && Number(middle) < 300, head);
     const tap = (name) => lines.find((l) => l.startsWith(`  ${name}: `));
     check('os toques aparecem com a espera: a lenta esperou', Number(/(\d+) ms$/.exec(tap('10-areas') || '')?.[1]) >= 100, lines);
@@ -6373,6 +6375,470 @@ async function scenario(title, block) {
         [w.document.body.dataset.view, w.document.activeElement?.id]);
       check('... a nota da recarga nao reabriu por cima, e a marca dela saiu da sessao',
         App.currentFile === null && w.sessionStorage.getItem('drivenotes_reopen') === null);
+    }
+  });
+
+  // ── Check-in of the home: the tracker in the frontmatter of the day's journal note (app/checkin.js) ──
+
+  await scenario('C1. Check-in: ler o tracker do frontmatter (validos, false, lixo, nota sem frontmatter)', async () => {
+    const { App } = await boot({ auth: false });
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const valid = App.readTracker('---\ntype: journal\nworkout: true\ndiet: true\nwater: true\nreading: true\nsleep: 7.5\nmood: 4\nenergy: 1\n---\ncorpo');
+    check('chaves validas viram valores', same(valid, { workout: true, diet: true, water: true, reading: true, sleep: 7.5, mood: 4, energy: 1 }), valid);
+    const junk = App.readTracker('---\nworkout: false\ndiet: "true"\nwater: True\nreading: yes\nsleep: 0\nmood: 6\nenergy: 2.5\nother: true\n---\n');
+    check('false, aspas, maiuscula, zero, fora da escala e chave estranha: como se nao existissem', same(junk, {}), junk);
+    const odd = App.readTracker('---\nsleep: "7"\nmood: 0\nenergy: abc\n  workout: true\n- water: true\n# diet: true\n---\n');
+    check('aspas no numero, indentado, item de lista e comentario nao contam', same(odd, {}), odd);
+    check('nota sem frontmatter: tracker vazio', same(App.readTracker('workout: true\ntexto'), {}) && same(App.readTracker(''), {}));
+    check('CRLF le igual', same(App.readTracker('---\r\ntype: journal\r\nwater: true\r\nsleep: 6\r\n---\r\n'), { water: true, sleep: 6 }));
+    check('espaco no fim da linha nao atrapalha, e a primeira linha da chave e a que vale',
+      same(App.readTracker('---\nwater: true  \nmood: 3\nmood: 5\n---\n'), { water: true, mood: 3 }));
+  });
+
+  await scenario('C2. Check-in: gravar mexe so nas linhas do tracker, o resto fica igual e na mesma ordem', async () => {
+    const { App } = await boot({ auth: false });
+    const note = [
+      '---',
+      'type: journal',
+      '# a comment of the person',
+      'tags:',
+      '  - one',
+      '  - two',
+      'water: true',
+      'aliases: [a, b]',
+      'sleep: 6',
+      '---',
+      'Texto do dia.',
+      '',
+      '- item',
+      '',
+    ].join('\n');
+    const out = App.writeTracker(note, { workout: true, water: null, sleep: 7.5, mood: 4 });
+    const expected = [
+      '---',
+      'type: journal',
+      '# a comment of the person',
+      'tags:',
+      '  - one',
+      '  - two',
+      'aliases: [a, b]',
+      'sleep: 7.5',
+      'workout: true',
+      'mood: 4',
+      '---',
+      'Texto do dia.',
+      '',
+      '- item',
+      '',
+    ].join('\n');
+    check('troca a linha que existe, tira a de null, acrescenta as novas no fim do bloco', out === expected, out);
+    check('reler da o que foi gravado', JSON.stringify(App.readTracker(out)) === JSON.stringify({ sleep: 7.5, workout: true, mood: 4 }));
+    check('sem nada a mudar, o texto volta identico', App.writeTracker(note, {}) === note && App.writeTracker(note, { diet: null }) === note);
+    const bare = App.writeTracker('Texto escrito no PC.\n', { water: true });
+    check('nota sem frontmatter ganha o bloco com type: journal na frente', bare === '---\ntype: journal\nwater: true\n---\nTexto escrito no PC.\n', bare);
+    check('nota sem frontmatter e nada a gravar: fica como esta', App.writeTracker('Texto.', { water: null }) === 'Texto.');
+    const listed = App.writeTracker('---\ntype: journal\nsleep:\n  - 7\nmood: 2\n---\n', { sleep: 8 });
+    check('valor da chave em varias linhas sai junto com a linha dela', listed === '---\ntype: journal\nsleep: 8\nmood: 2\n---\n', listed);
+  });
+
+  await scenario('C3. Check-in: corpo com CRLF e sem quebra no fim, so as linhas das chaves mudam', async () => {
+    const { App } = await boot({ auth: false });
+    const note = '---\r\ntype: journal\r\ncustom: x\r\nwater: true\r\n---\r\nEscrito no Windows.\r\n\r\nSegundo paragrafo sem quebra no fim';
+    const out = App.writeTracker(note, { water: null, workout: true });
+    const before = note.split('\r\n');
+    const after = out.split('\r\n');
+    const keyLine = (l) => /^(water|workout):/.test(l);
+    check('fora das linhas das chaves, nada mudou e na mesma ordem',
+      JSON.stringify(before.filter(l => !keyLine(l))) === JSON.stringify(after.filter(l => !keyLine(l))), after);
+    check('todas as quebras continuam CRLF, nenhuma LF solta', !/[^\r]\n/.test(out) && out.includes('workout: true\r\n---\r\n'), JSON.stringify(out));
+    check('e o arquivo continua sem quebra no fim', out.endsWith('sem quebra no fim'));
+    const only = '---\ntype: journal\n---';
+    check('nota que e so o bloco, sem quebra no fim, continua sem', App.writeTracker(only, { diet: true }) === '---\ntype: journal\ndiet: true\n---');
+  });
+
+  await scenario('C4. Check-in: tirar a ultima chave do tracker deixa o type: journal e o corpo', async () => {
+    const { App } = await boot({ auth: false });
+    const out = App.writeTracker('---\ntype: journal\nreading: true\n---\nCorpo.\n', { reading: null });
+    check('sobra o type: journal, as cercas e o corpo', out === '---\ntype: journal\n---\nCorpo.\n', out);
+    const bare = App.writeTracker('---\nwater: true\n---\nCorpo.\n', { water: null });
+    check('bloco que so tinha o tracker fica vazio, mas continua sendo um bloco', bare === '---\n\n---\nCorpo.\n'
+      && App.splitFrontmatter(bare).body === 'Corpo.\n', JSON.stringify(bare));
+    const again = App.writeTracker(bare, { diet: true });
+    check('... e a chave seguinte entra nele, sem bloco em dobro', again === '---\ndiet: true\n---\nCorpo.\n', JSON.stringify(again));
+  });
+
+  // The journal folder under the root, apart from seedRoots: scenarios that read the first file put stay as they are
+  const JOURNAL = 'journal-folder';
+  const seedJournal = (drive) => {
+    drive.put(JOURNAL, 'journal', '', [ROOT_ID]);
+    drive.files.get(JOURNAL).mimeType = FOLDER;
+  };
+  // The check-in's clock: ten in the morning of that day, local time
+  const setDay = (App, y, m, d, h = 10) => { App.checkinNow = () => new Date(y, m - 1, d, h, 0); };
+  const journalFiles = (drive) => [...drive.files.values()].filter(f => /-journal\.md$/.test(f.name));
+  const keptCheckin = (w) => JSON.parse(w.localStorage.getItem('drivenotes_checkin'));
+
+  await scenario('C5. Check-in: o primeiro toque cria a nota do dia na pasta journal, com o nome do dia e o conteudo exato', async () => {
+    const { App, drive, w } = await boot();
+    seedJournal(drive);
+    // Another "journal" folder elsewhere on the Drive, newer, so the search by name brings it first
+    drive.put('stray-journal', 'journal', '', ['elsewhere']);
+    drive.files.get('stray-journal').mimeType = FOLDER;
+    setDay(App, 2026, 10, 3);
+    check('o dia e o da hora local, e o nome sai dele', App.checkinDate() === '2026-10-03' && App.journalFileName('2026-10-03') === '2026-10-03-journal.md');
+    check('nenhuma nota nasce antes do toque', journalFiles(drive).length === 0);
+    await App.setCheckin('workout', true);
+    const notes = journalFiles(drive);
+    check('uma nota, com o nome do dia, dentro da pasta journal da raiz',
+      notes.length === 1 && notes[0].name === '2026-10-03-journal.md' && notes[0].parents.length === 1 && notes[0].parents[0] === JOURNAL,
+      notes.map(n => [n.name, n.parents]));
+    check('conteudo exato: cercas, type: journal e a chave', notes[0]?.content === '---\ntype: journal\nworkout: true\n---\n', JSON.stringify(notes[0]?.content));
+    check('nada ficou por subir, e o aparelho guardou o tracker',
+      Object.keys(App._checkin.pending).length === 0 && keptCheckin(w).tracker.workout === true);
+    check('a pasta journal ficou guardada no aparelho', w.localStorage.getItem('drivenotes_journal_folder') === JOURNAL);
+  });
+
+  await scenario('C6. Check-in: o segundo toque da um PATCH na mesma nota', async () => {
+    const { App, drive } = await boot();
+    seedJournal(drive);
+    setDay(App, 2026, 10, 3);
+    await App.setCheckin('workout', true);
+    await App.setCheckin('diet', true);
+    const notes = journalFiles(drive);
+    check('um POST e um PATCH, uma nota so', drive.count('POST') === 1 && drive.count('PATCH') === 1 && notes.length === 1, drive.log);
+    check('a nota tem as duas chaves', notes[0]?.content === '---\ntype: journal\nworkout: true\ndiet: true\n---\n', JSON.stringify(notes[0]?.content));
+  });
+
+  await scenario('C7. Check-in: dois toques seguidos antes de o primeiro voltar fazem um POST so', async () => {
+    {
+      const { App, drive } = await boot();
+      seedJournal(drive);
+      setDay(App, 2026, 10, 3);
+      const first = App.setCheckin('workout', true);
+      const second = App.setCheckin('water', true);
+      await Promise.all([first, second]);
+      check('dois toques na mesma hora: um POST, uma nota com as duas chaves',
+        drive.count('POST') === 1 && journalFiles(drive).length === 1 && journalFiles(drive)[0].content === '---\ntype: journal\nworkout: true\nwater: true\n---\n',
+        [drive.log, journalFiles(drive).map(f => f.content)]);
+    }
+    {
+      const { App, drive } = await boot();
+      seedJournal(drive);
+      setDay(App, 2026, 10, 3);
+      drive.delay = 20;
+      const first = App.setCheckin('workout', true);
+      // The second tap lands while the first is still on its way to the Drive
+      await sleep(30);
+      const second = App.setCheckin('water', true);
+      await Promise.all([first, second]);
+      check('segundo toque com o primeiro a caminho: ainda um POST so, e a segunda chave chega na mesma nota',
+        drive.count('POST') === 1 && journalFiles(drive).length === 1 && /water: true/.test(journalFiles(drive)[0].content) && /workout: true/.test(journalFiles(drive)[0].content),
+        [drive.log, journalFiles(drive).map(f => f.content)]);
+    }
+  });
+
+  await scenario('C8. Check-in: texto escrito no PC entre dois toques sobrevive', async () => {
+    const { App, drive } = await boot();
+    seedJournal(drive);
+    setDay(App, 2026, 10, 3);
+    await App.setCheckin('workout', true);
+    const id = journalFiles(drive)[0].id;
+    drive.remoteEdit(id, '---\r\ntype: journal\r\nworkout: true\r\n---\r\nEscrevi isto no PC agora.\r\n\r\nE mais isto, sem quebra no fim');
+    await App.setCheckin('reading', true);
+    check('o corpo novo sobe intacto, com CRLF e sem quebra no fim, e a chave entra no bloco',
+      drive.files.get(id).content === '---\r\ntype: journal\r\nworkout: true\r\nreading: true\r\n---\r\nEscrevi isto no PC agora.\r\n\r\nE mais isto, sem quebra no fim',
+      JSON.stringify(drive.files.get(id).content));
+  });
+
+  await scenario('C9. Check-in: chave mexida a mao no Obsidian nao e apagada por um toque em outro habito', async () => {
+    const { App, drive } = await boot();
+    seedJournal(drive);
+    setDay(App, 2026, 10, 3);
+    await App.setCheckin('workout', true);
+    const id = journalFiles(drive)[0].id;
+    drive.remoteEdit(id, '---\ntype: journal\nworkout: true\nsleep: 6\n---\n');
+    await App.setCheckin('water', true);
+    check('sobem sleep: 6 e water: true', drive.files.get(id).content === '---\ntype: journal\nworkout: true\nsleep: 6\nwater: true\n---\n', JSON.stringify(drive.files.get(id).content));
+    check('o tracker na tela passa a ter o sono escrito a mao', App._checkin.tracker.sleep === 6 && App._checkin.tracker.water === true, App._checkin.tracker);
+  });
+
+  await scenario('C10. Check-in: toque sem rede fica guardado e sobe depois, sem nota em dobro', async () => {
+    {
+      const { App, drive, w } = await boot();
+      seedJournal(drive);
+      setDay(App, 2026, 10, 3);
+      drive.failWrites = true;
+      const answer = await App.setCheckin('water', true);
+      check('sem rede: o toque fica marcado, e por subir no aparelho',
+        answer === false && App._checkin.tracker.water === true && App._checkin.pending['2026-10-03']?.water === true
+          && keptCheckin(w).pending['2026-10-03'].water === true && journalFiles(drive).length === 0,
+        [App._checkin, drive.log]);
+      await App.setCheckin('diet', true);
+      drive.failWrites = false;
+      await App.refreshCheckin();
+      await App._saveChain;
+      const notes = journalFiles(drive);
+      check('com rede: o refreshCheckin sobe e limpa, uma nota so com as duas chaves',
+        notes.length === 1 && notes[0].content === '---\ntype: journal\ndiet: true\nwater: true\n---\n'
+          && Object.keys(App._checkin.pending).length === 0 && Object.keys(keptCheckin(w).pending).length === 0,
+        [notes.map(n => n.content), App._checkin.pending, drive.log]);
+    }
+    {
+      // Login gone: nothing goes to the Drive, no window opens, and the tap stays
+      const { App, drive, w } = await boot();
+      seedJournal(drive);
+      setDay(App, 2026, 10, 3);
+      const popup = fakePopup(App);
+      App.accessToken = null;
+      w.localStorage.removeItem('drivenotes_token_expires');
+      const before = drive.log.length;
+      await App.setCheckin('reading', true);
+      check('sem login: nenhuma ida ao Drive, nenhuma janela, o toque fica por subir',
+        drive.log.length === before && popup.count === 0 && App._checkin.pending['2026-10-03']?.reading === true, drive.log);
+    }
+    {
+      // What the device kept may be broken, or from another version
+      const kept = JSON.stringify({ date: 'ontem', tracker: { water: 'sim', mood: 4 }, fileId: 7,
+        pending: { '2026-10-02': { water: true, mood: 9, bogus: 1, sleep: null }, 'x': { water: true }, '2026-10-01': 'lixo' } });
+      const { App } = await boot({ seedStorage: { drivenotes_checkin: kept } });
+      const c = App._checkin;
+      check('guardado estranho: so o que vale fica', JSON.stringify(c.pending) === JSON.stringify({ '2026-10-02': { water: true, sleep: null } })
+        && c.fileId === null && c.tracker.water === undefined, c);
+      const broken = await boot({ seedStorage: { drivenotes_checkin: '{quebrado' } });
+      check('guardado quebrado: o app abre do zero', JSON.stringify(broken.App._checkin.pending) === '{}' && JSON.stringify(broken.App._checkin.tracker) === '{}');
+    }
+  });
+
+  await scenario('C11. Check-in: virada do dia com pendencia de ontem', async () => {
+    const { App, drive } = await boot();
+    seedJournal(drive);
+    // A note with yesterday's name outside the journal folder: not the one to write
+    drive.put('stray-day', '2026-10-03-journal.md', 'outra coisa', ['elsewhere']);
+    setDay(App, 2026, 10, 3, 23);
+    drive.failWrites = true;
+    await App.setCheckin('workout', true);
+    drive.failWrites = false;
+    setDay(App, 2026, 10, 4, 0);
+    await App.refreshCheckin();
+    await App._saveChain;
+    const yesterday = journalFiles(drive).filter(f => f.parents.includes(JOURNAL));
+    check('a pendencia foi pra nota de ontem, na pasta journal',
+      yesterday.length === 1 && yesterday[0].name === '2026-10-03-journal.md' && yesterday[0].content === '---\ntype: journal\nworkout: true\n---\n',
+      journalFiles(drive).map(f => [f.name, f.parents, f.content]));
+    check('a nota de mesmo nome fora da pasta ficou como estava', drive.files.get('stray-day').content === 'outra coisa');
+    check('nenhuma nota de hoje nasceu, e o tracker de hoje esta vazio',
+      !journalFiles(drive).some(f => f.name === '2026-10-04-journal.md') && App._checkin.date === '2026-10-04'
+        && JSON.stringify(App._checkin.tracker) === '{}' && Object.keys(App._checkin.pending).length === 0, App._checkin);
+  });
+
+  const checkinCount = (d) => d.getElementById('checkin-count').textContent;
+  const habitButton = (d, key) => d.querySelector(`#checkin-rounds [data-habit="${key}"]`);
+  const pressed = (d, key) => habitButton(d, key)?.getAttribute('aria-pressed') === 'true';
+  // A tap on a habit, and the write it queued
+  const tapHabit = async (App, d, key) => { habitButton(d, key).click(); await App._saveChain; };
+
+  await scenario('C12. Check-in: a secao Hoje e a primeira da home, com a data e 0 de 7 sem nota no dia', async () => {
+    const { App, drive, w } = await boot();
+    seedJournal(drive);
+    setDay(App, 2026, 10, 3);
+    await showHome(App);
+    const d = w.document;
+    const section = d.getElementById('checkin');
+    check('primeira coisa dentro do #home-scroll, e a vista', d.getElementById('home-scroll').firstElementChild === section && !section.hidden);
+    check('o titulo diz o dia, sem ponto e sem "de"', d.getElementById('checkin-day').textContent === 'Hoje · sáb, 3 out', d.getElementById('checkin-day').textContent);
+    check('a contagem e 0 de 7', checkinCount(d) === '0 de 7', checkinCount(d));
+    const names = [...d.querySelectorAll('.checkin-round .checkin-round-name')].map(s => s.textContent);
+    const discs = [...d.querySelectorAll('.checkin-round .checkin-disc')].map(s => s.textContent);
+    check('cinco botoes redondos: os quatro habitos, com a inicial no circulo, e "mais"',
+      JSON.stringify(names) === JSON.stringify(['Treino', 'Dieta', 'Água', 'Leitura', 'mais']) && JSON.stringify(discs.slice(0, 4)) === JSON.stringify(['T', 'D', 'Á', 'L']), [names, discs]);
+    check('nenhum marcado', ['workout', 'diet', 'water', 'reading'].every(k => habitButton(d, k).getAttribute('aria-pressed') === 'false'));
+    check('abrir a home nao cria a nota do dia', journalFiles(drive).length === 0 && drive.count('POST') === 0, drive.log);
+    check('o rotulo de outros dias sai dos nomes fixos', App.checkinDayLabel('2026-01-01') === 'qui, 1 jan' && App.checkinDayLabel('2026-12-27') === 'dom, 27 dez');
+    check('a linha da pasta nao encontrada fica escondida', d.getElementById('checkin-missing').hidden && !d.getElementById('checkin-rounds').hidden);
+  });
+
+  await scenario('C13. Check-in: toque em Treino marca e sobe, o segundo desmarca e tira a linha', async () => {
+    const { App, drive, w } = await boot({ watcher: true });
+    seedJournal(drive);
+    setDay(App, 2026, 10, 3);
+    await showHome(App);
+    const d = w.document;
+    const historyBefore = w.history.length;
+    await tapHabit(App, d, 'workout');
+    const note = () => journalFiles(drive)[0];
+    check('marcado, 1 de 7, e workout: true na nota', pressed(d, 'workout') && checkinCount(d) === '1 de 7' && note()?.content === '---\ntype: journal\nworkout: true\n---\n',
+      [checkinCount(d), note()?.content]);
+    await tapHabit(App, d, 'workout');
+    check('segundo toque: desmarcado, 0 de 7, e a linha saiu da nota', !pressed(d, 'workout') && checkinCount(d) === '0 de 7' && note()?.content === '---\ntype: journal\n---\n',
+      [checkinCount(d), note()?.content]);
+    check('marcar nao mexe no historico nem na pilha do voltar, e o voltar continua saindo do app',
+      w.history.length === historyBefore && App.navStack.length === 0 && w.__watchers.length === 0 && d.body.dataset.view === 'welcome');
+  });
+
+  await scenario('C14. Check-in: abrir a home com a nota do dia ja no Drive desenha o que esta nela', async () => {
+    {
+      const { App, drive, w } = await boot();
+      seedJournal(drive);
+      drive.put('today', '2026-10-03-journal.md', '---\ntype: journal\nworkout: true\nmood: 3\nwater: false\n---\nTexto.', [JOURNAL]);
+      setDay(App, 2026, 10, 3);
+      App.renderHome();
+      const d = w.document;
+      await until(() => checkinCount(d) === '2 de 7');
+      check('Treino marcado, Agua (false) nao, e o humor conta: 2 de 7', pressed(d, 'workout') && !pressed(d, 'water') && checkinCount(d) === '2 de 7', checkinCount(d));
+      check('nada foi escrito por abrir', drive.count('PATCH') === 0 && drive.count('POST') === 0, drive.log);
+    }
+    {
+      // The read of the opening comes back after a tap already reached the Drive: it must not undo the tap
+      const { App, drive, w } = await boot();
+      seedJournal(drive);
+      drive.put('today', '2026-10-03-journal.md', '---\ntype: journal\nworkout: true\n---\n', [JOURNAL]);
+      setDay(App, 2026, 10, 3);
+      const fetch = w.fetch;
+      let slow = 'waiting';
+      w.fetch = async (url, opts) => {
+        if (slow === 'waiting' && String(url).includes('alt=media')) {
+          slow = 'on its way';
+          await sleep(150);
+          const answer = await fetch(url, opts);
+          slow = 'answered';
+          return answer;
+        }
+        return fetch(url, opts);
+      };
+      App.renderHome();
+      const d = w.document;
+      await until(() => slow === 'on its way');
+      await tapHabit(App, d, 'diet');
+      check('(o toque chegou ao Drive antes da leitura da abertura)', slow === 'on its way' && /diet: true/.test(drive.files.get('today').content), [slow, drive.files.get('today').content]);
+      await until(() => slow === 'answered');
+      await sleep(20);
+      check('a resposta atrasada nao desfaz o toque: Dieta continua marcada, com o Treino da nota',
+        pressed(d, 'diet') && pressed(d, 'workout') && checkinCount(d) === '2 de 7', [checkinCount(d), App._checkin.tracker]);
+    }
+  });
+
+  await scenario('C15. Check-in: sem login a secao nao aparece', async () => {
+    const { App, drive, w } = await boot({ auth: false });
+    seedJournal(drive);
+    setDay(App, 2026, 10, 3);
+    await showHome(App);
+    const d = w.document;
+    check('escondida, como a arvore, e sem ida ao Drive', d.getElementById('checkin').hidden && !drive.log.some(l => l.includes("name = 'journal'")), drive.log);
+    App.accessToken = 'fake';
+    w.localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
+    await showHome(App);
+    check('com login, aparece', !d.getElementById('checkin').hidden && checkinCount(d) === '0 de 7');
+  });
+
+  const openSheet = (d) => d.querySelector('#checkin-rounds [data-checkin-more]').click();
+  const sheetShown = (d) => d.getElementById('checkin-overlay').classList.contains('visible');
+  const sleepButton = (d, dir) => d.querySelector(`#checkin-overlay [data-sleep="${dir}"]`);
+  const pip = (d, key, value) => d.querySelector(`#checkin-overlay [data-scale="${key}"] [data-value="${value}"]`);
+
+  await scenario('C16. Check-in: o sono sobe 7, depois 7.5, e descendo ate o fim a linha sai', async () => {
+    const { App, drive, w } = await boot();
+    seedJournal(drive);
+    setDay(App, 2026, 10, 3);
+    await showHome(App);
+    const d = w.document;
+    openSheet(d);
+    check('a folha abre com o dia e "sem registro"', sheetShown(d) && d.getElementById('checkin-sheet-title').textContent === 'Hoje · sáb, 3 out'
+      && d.getElementById('checkin-sleep').textContent === 'sem registro');
+    sleepButton(d, 1).click(); await App._saveChain;
+    const note = () => journalFiles(drive)[0]?.content;
+    check('primeiro toque: sleep: 7', note() === '---\ntype: journal\nsleep: 7\n---\n' && d.getElementById('checkin-sleep').textContent === '7 h', [note(), d.getElementById('checkin-sleep').textContent]);
+    sleepButton(d, 1).click(); await App._saveChain;
+    check('segundo: 7.5 na nota, 7,5 h na tela, e conta como 1 de 7', /\nsleep: 7\.5\n/.test(note()) && d.getElementById('checkin-sleep').textContent === '7,5 h' && checkinCount(d) === '1 de 7',
+      [note(), d.getElementById('checkin-sleep').textContent]);
+    for (let i = 0; i < 15; i++) sleepButton(d, -1).click();
+    await App._saveChain;
+    check('descendo de meia em meia ate abaixo de meia hora, a linha sai', note() === '---\ntype: journal\n---\n' && d.getElementById('checkin-sleep').textContent === 'sem registro', note());
+    sleepButton(d, -1).click();
+    for (let i = 0; i < 20; i++) sleepButton(d, 1).click();
+    await App._saveChain;
+    check('o menos tambem comeca em 7, e o mais para em 14', /\nsleep: 14\n/.test(note()) && App._checkin.tracker.sleep === 14, note());
+  });
+
+  await scenario('C17. Check-in: humor 4 grava mood: 4, tocar no 4 de novo tira', async () => {
+    const { App, drive, w } = await boot();
+    seedJournal(drive);
+    setDay(App, 2026, 10, 3);
+    await showHome(App);
+    const d = w.document;
+    openSheet(d);
+    check('cinco bolinhas em cada escala, com nome', d.querySelectorAll('#checkin-overlay [data-scale="mood"] .checkin-pip').length === 5
+      && pip(d, 'energy', 3).getAttribute('aria-label') === 'Energia 3');
+    pip(d, 'mood', 4).click(); await App._saveChain;
+    const note = () => journalFiles(drive)[0]?.content;
+    check('mood: 4 na nota, e a bolinha marcada', note() === '---\ntype: journal\nmood: 4\n---\n' && pip(d, 'mood', 4).getAttribute('aria-pressed') === 'true', note());
+    pip(d, 'energy', 2).click(); await App._saveChain;
+    pip(d, 'mood', 2).click(); await App._saveChain;
+    check('outra bolinha troca o numero, e a energia fica a parte', note() === '---\ntype: journal\nmood: 2\nenergy: 2\n---\n'
+      && pip(d, 'mood', 4).getAttribute('aria-pressed') === 'false', note());
+    pip(d, 'mood', 2).click(); await App._saveChain;
+    check('tocar no mesmo numero de novo tira a chave', note() === '---\ntype: journal\nenergy: 2\n---\n' && pip(d, 'mood', 2).getAttribute('aria-pressed') === 'false', note());
+  });
+
+  await scenario('C18. Check-in: o voltar com a folha aberta fecha a folha e continua na home', async () => {
+    const { App, drive, w } = await boot({ watcher: true });
+    seedJournal(drive);
+    setDay(App, 2026, 10, 3);
+    await showHome(App);
+    const d = w.document;
+    check('fechada: o voltar sai do app', !sheetShown(d) && w.__back() === 'EXIT');
+    openSheet(d);
+    check('o toque em "mais" abre, e arma o voltar', sheetShown(d) && w.__watchers.length === 1);
+    check('o voltar fecha a folha', w.__back() === 'handled' && !sheetShown(d));
+    check('... fica na home, sem nada na pilha, e o voltar seguinte sai do app', d.body.dataset.view === 'welcome' && App.navStack.length === 0 && w.__back() === 'EXIT');
+    openSheet(d);
+    d.querySelector('#checkin-overlay .checkin-sheet').click();
+    check('toque dentro da folha nao fecha', sheetShown(d));
+    d.getElementById('checkin-overlay').click();
+    check('toque no fundo escurecido fecha', !sheetShown(d) && w.__watchers.length === 0);
+    // A new version that arrives with the sheet open waits for it to close, as with the search
+    let reloads = 0;
+    App.reloadPage = () => { reloads++; };
+    openSheet(d);
+    App._updateReady = true;
+    App.offerUpdate();
+    await sleep(30);
+    check('com a folha aberta, a home nao recarrega sozinha', reloads === 0 && App.safeToReload() === false);
+    w.__back();
+    await until(() => reloads === 1);
+    check('... e fechar a folha deixa a versao nova entrar', reloads === 1 && !sheetShown(d));
+  });
+
+  await scenario('C19. Check-in: Escrever sem nota no dia cria uma nota so e abre nela', async () => {
+    {
+      const { App, drive, w } = await boot();
+      seedJournal(drive);
+      setDay(App, 2026, 10, 3);
+      await showHome(App);
+      const d = w.document;
+      openSheet(d);
+      const write = d.getElementById('checkin-write');
+      write.click();
+      write.click();
+      await until(() => App.currentFile?.name === '2026-10-03-journal.md' && d.body.dataset.view !== 'welcome');
+      const notes = journalFiles(drive);
+      check('dois toques, uma nota, so com type: journal, na pasta journal',
+        notes.length === 1 && drive.count('POST') === 1 && notes[0].content === '---\ntype: journal\n---\n' && notes[0].parents[0] === JOURNAL,
+        [notes.map(n => [n.name, n.content]), drive.log]);
+      check('a folha fechou e a nota do dia esta aberta', !sheetShown(d) && App.currentFile?.id === notes[0]?.id && d.body.dataset.view !== 'welcome', d.body.dataset.view);
+    }
+    {
+      // With the day's note already there (a habit tapped earlier): it opens that one, nothing is created
+      const { App, drive, w } = await boot({ watcher: true });
+      seedJournal(drive);
+      drive.put('today', '2026-10-03-journal.md', '---\ntype: journal\nwater: true\n---\nJa escrevi.', [JOURNAL]);
+      setDay(App, 2026, 10, 3);
+      await showHome(App);
+      const d = w.document;
+      openSheet(d);
+      d.getElementById('checkin-write').click();
+      await until(() => App.currentFile?.id === 'today');
+      check('abre a nota que existe, sem criar outra', App.currentFile?.id === 'today' && drive.count('POST') === 0 && App.getContent().includes('Ja escrevi.'), drive.log);
+      check('... e o voltar leva de volta pra home', w.__back() === 'handled' && (await until(() => d.body.dataset.view === 'welcome'), d.body.dataset.view === 'welcome'));
     }
   });
 

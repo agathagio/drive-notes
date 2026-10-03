@@ -1021,7 +1021,9 @@ body.has-selection .toolbar-btn.toolbar-extract {
 .home-section[hidden],
 .tree-login[hidden],
 .menu-item[hidden],
-.home-section ul[hidden] {
+.home-section ul[hidden],
+.checkin-rounds[hidden],
+.checkin-missing[hidden] {
   display: none;
 }
 
@@ -1221,6 +1223,192 @@ button.home-section-title {
   min-height: 44px;
   padding: 10px 20px;
   font-size: 15px;
+}
+
+/* ── Home: the day's check-in (app/checkin.js) ── */
+
+/* The title lines up with the names, like the tree's; the count reads "2 de 7", in lower case */
+.checkin-title {
+  padding-left: 30px;
+}
+
+.checkin-count {
+  text-transform: none;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Four habits and "mais", side by side across the whole width */
+.checkin-rounds {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 2px 4px 12px;
+}
+
+.checkin-round {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The tap target stays the button (the edge swipe decides by it), not the disc or the name inside */
+.checkin-round > span {
+  pointer-events: none;
+}
+
+.checkin-disc {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--button-bg);
+  color: var(--text-secondary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.checkin-round-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.checkin-round[aria-pressed="true"] {
+  color: var(--text-primary);
+}
+
+/* Marked: filled with the accent, the letter dark on top of it (text over a fill is dark, not white) */
+.checkin-round[aria-pressed="true"] .checkin-disc {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-primary);
+}
+
+.checkin-missing {
+  padding-left: 30px;
+}
+
+/* The sheet of "mais": it rises from the bottom instead of sitting in the middle like a dialog */
+.checkin-overlay {
+  align-items: flex-end;
+  padding: 0;
+}
+
+.checkin-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 480px;
+  padding: 16px 16px calc(20px + env(safe-area-inset-bottom, 0px));
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 18px 18px 0 0;
+  background: var(--bg-secondary);
+}
+
+.checkin-sheet-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.checkin-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+}
+
+.checkin-row-label {
+  flex: none;
+  width: 62px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.checkin-step,
+.checkin-scale {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.checkin-step-btn,
+.checkin-pip {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  background: var(--button-bg);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.checkin-step-btn {
+  border-radius: 10px;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.checkin-sleep {
+  min-width: 92px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.checkin-sleep.is-empty {
+  color: var(--text-secondary);
+}
+
+.checkin-pip {
+  border-radius: 50%;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.checkin-pip[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-primary);
+  font-weight: 600;
+}
+
+.checkin-write {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent-hover);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.checkin-write:disabled {
+  opacity: 0.5;
 }
 
 /* The bar at the thumb: the search, and the new note */

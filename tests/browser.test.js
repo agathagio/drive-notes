@@ -27,6 +27,8 @@ const FAKE_DRIVE = `
   const FOLDER = 'application/vnd.google-apps.folder';
   const files = {
     F1: { id: 'F1', name: 'projetos', mimeType: FOLDER, parents: ['ROOT'] },
+    // The journal folder the home's check-in looks up by name: without it the section has no buttons
+    J1: { id: 'J1', name: 'journal', mimeType: FOLDER, parents: ['ROOT'] },
     N1: { id: 'N1', name: 'com link.md', mimeType: 'text/markdown', parents: ['ROOT'], content: 'vai [[destino]]' },
     N2: { id: 'N2', name: 'destino.md', mimeType: 'text/markdown', parents: ['F1'], content: '# Destino' },
   };
@@ -1670,6 +1672,46 @@ const FAKE_DRIVE = `
     const afterEsc = JSON.parse(await js(`JSON.stringify({ view: document.body.dataset.view, backs: window.__backs, state: ${backState} })`));
     check('o voltar (Esc) na home segue sem nada pra fechar: o do celular sai do app, como antes',
       afterEsc.view === 'welcome' && afterEsc.backs === 0 && afterEsc.state === backBefore, afterEsc);
+
+    console.log('\nHome: a secao Hoje do check-in e a folha do "mais", em largura de celular');
+    // "Visible" and "tappable" are different questions: elementFromPoint at the centre of each button has
+    // to answer the button itself, not the disc or the name inside it, and not something on top
+    await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 740, deviceScaleFactor: 2, mobile: true });
+    await open(buildPage('checkin', currentApp));
+    await js(FAKE_DRIVE);
+    // The check-in the app read as it opened came from the profile of an earlier run: read again, now empty
+    await js(`__App.initCheckin(); __App.renderHome(); 'ok'`);
+    const sectionReady = await waitFor(`localStorage.getItem('drivenotes_journal_folder') === 'J1' && !document.getElementById('checkin').hidden
+      && !document.getElementById('checkin-rounds').hidden && document.querySelectorAll('#checkin-rounds .checkin-round').length === 5`, 4000);
+    check('a secao aparece com os cinco botoes, achada a pasta journal', sectionReady, await js(`document.getElementById('checkin').outerHTML.slice(0, 300)`));
+    const HIT = `(el) => { const b = el.getBoundingClientRect(); const at = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+      return { same: at === el, at: at ? (at.className || at.tagName) : null, left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top), bottom: Math.round(b.bottom) }; }`;
+    const checkinRounds = JSON.parse(await js(`JSON.stringify({ rounds: [...document.querySelectorAll('#checkin-rounds .checkin-round')].map(${HIT}),
+      disc: Math.round(document.querySelector('#checkin-rounds .checkin-disc').getBoundingClientRect().width),
+      first: document.getElementById('home-scroll').firstElementChild.id })`));
+    console.log('     botoes:', JSON.stringify(checkinRounds));
+    check('o centro de cada botao da secao e o proprio botao, e os cinco cabem nos 360px',
+      checkinRounds.rounds.every((r) => r.same && r.left >= 0 && r.right <= 360), checkinRounds);
+    check('circulo de 44px, e a secao e a primeira da home', checkinRounds.disc === 44 && checkinRounds.first === 'checkin', checkinRounds);
+
+    await js(`document.querySelector('#checkin-rounds [data-checkin-more]').click(); 'ok'`);
+    await waitFor(`document.getElementById('checkin-overlay').classList.contains('visible')`, 2000);
+    const checkinSheet = JSON.parse(await js(`JSON.stringify((() => {
+      const box = document.querySelector('#checkin-overlay .checkin-sheet').getBoundingClientRect();
+      return { pips: [...document.querySelectorAll('#checkin-overlay .checkin-pip')].map(${HIT}),
+        steps: [...document.querySelectorAll('#checkin-overlay .checkin-step-btn')].map(${HIT}),
+        write: (${HIT})(document.getElementById('checkin-write')),
+        box: { left: Math.round(box.left), right: Math.round(box.right), top: Math.round(box.top), bottom: Math.round(box.bottom) } }; })())`));
+    const cs = checkinSheet;
+    console.log('     folha:', JSON.stringify({ box: cs.box, pip: cs.pips[0], step: cs.steps[0], write: cs.write }));
+    check('o centro de cada bolinha e de cada botao do sono e o proprio botao, dentro da tela',
+      cs.pips.length === 10 && cs.steps.length === 2 && [...cs.pips, ...cs.steps].every((r) => r.same && r.left >= 0 && r.right <= 360), cs);
+    check('o Escrever recebe o toque, e a folha fica colada embaixo, inteira na tela',
+      cs.write.same && cs.box.bottom === 740 && cs.box.left >= 0 && cs.box.right <= 360 && cs.box.top > 0, cs);
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    const sheetClosed = await waitFor(`!document.getElementById('checkin-overlay').classList.contains('visible')`, 4000);
+    check('o voltar de verdade (Esc) fecha a folha e fica na home', sheetClosed && await js(`document.body.dataset.view`) === 'welcome');
     await send('Emulation.setTouchEmulationEnabled', { enabled: false });
     await send('Emulation.clearDeviceMetricsOverride');
   } finally {

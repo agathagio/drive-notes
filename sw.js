@@ -1,5 +1,5 @@
 // Drive Notes: Service Worker
-const CACHE_NAME = 'drivenotes-v69';
+const CACHE_NAME = 'drivenotes-v70';
 
 // Renderer and sanitizer come from CDNs; without them offline the reading view falls back to
 // plain text. Must match the script tags in index.html, hash included (scenario 0 of
@@ -39,6 +39,7 @@ const STATIC_ASSETS = [
   './app/auth.js',
   './app/search.js',
   './app/home.js',
+  './app/checkin.js',
   './app/drive.js',
   './app/note.js',
   './app/note-actions.js',

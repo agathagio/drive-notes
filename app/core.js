@@ -18,6 +18,23 @@ const CONFIG = {
   DEFAULT_FOLDER_TRAIL: ['_inbox'],
   // Attachment folder at the top of the root (Obsidian's attachmentFolderPath). An embed names it: ![[_media/photo.jpg]]
   MEDIA_FOLDER: '_media',
+  // Folder of the journal at the top of the root: one note a day, <YYYY-MM-DD>-journal.md, whose frontmatter
+  // holds the habit tracker of the home's "Hoje" section (app/checkin.js)
+  JOURNAL_FOLDER: 'journal',
+  // The tracker: habits are yes or no (only `true` is ever written), sleep is hours in half-hour steps,
+  // mood and energy go from 1 to scaleMax. Changing the list needs a deploy.
+  CHECKIN: {
+    habits: [
+      { key: 'workout', label: 'Treino' },
+      { key: 'diet', label: 'Dieta' },
+      { key: 'water', label: 'Água' },
+      { key: 'reading', label: 'Leitura' },
+    ],
+    sleepStep: 0.5,
+    sleepStart: 7,
+    sleepMax: 14,
+    scaleMax: 5,
+  },
   // Pause in the typing, in ms, before a search goes to the Drive
   SEARCH_DELAY: 500,
   // Folders the home tree keeps out of sight until "Mostrar pastas de sistema" is on (by name, at any depth)
@@ -55,6 +72,8 @@ const KEYS = {
   TREE_LISTINGS: 'drivenotes_tree_listings', // what the root and the open folders held, to draw before the Drive answers
   TREE_SCROLL: 'drivenotes_tree_scroll',     // how far down the home screen was scrolled
   SHOW_SYSTEM: 'drivenotes_show_system',     // '1' while the home tree shows CONFIG.HIDDEN_FOLDERS
+  JOURNAL_FOLDER: 'drivenotes_journal_folder', // the id of CONFIG.JOURNAL_FOLDER, found once per device
+  CHECKIN: 'drivenotes_checkin',             // the day's tracker and what is still to go up (App._checkin)
   REOPEN: 'drivenotes_reopen',          // sessionStorage: the note to reopen after the new version reloads
   DRAFT_PREFIX: 'drivenotes_draft_',    // followed by the file id, or by `new_<timestamp>` for a note not on the Drive yet
   DRAFT_LATEST: 'drivenotes_draft_latest', // a pointer versions before the drafts list used; init removes it
@@ -245,6 +264,7 @@ const App = {
     this.bindEvents();
     this.initToolbarKeyboardHandler();
     this.initTree();
+    this.initCheckin();
     this.showWelcome();
     this.syncHistory();
     this.renderHome();
@@ -706,6 +726,28 @@ const App = {
       button.addEventListener('click', () => this.toggleHomeSection(button));
     });
 
+    // Home: the check-in of the day. A tap on a habit marks it or takes the mark away, "mais" opens the
+    // sheet. Neither is a navigation: nothing goes on the back stack or in the history.
+    document.getElementById('checkin-rounds')?.addEventListener('click', (e) => {
+      const button = e.target.closest?.('button');
+      if (!button) return;
+      if (button.dataset.habit) this.toggleHabit(button.dataset.habit);
+      else if ('checkinMore' in button.dataset) this.openCheckinSheet();
+    });
+    // The sheet of "mais". A tap on the dimmed backdrop closes, like the system back button
+    const checkinSheet = document.getElementById('checkin-overlay');
+    checkinSheet?.addEventListener('click', (e) => {
+      if (e.target === checkinSheet) {
+        this.closeCheckinSheet();
+        return;
+      }
+      const button = e.target.closest?.('button');
+      if (button?.dataset.sleep) this.stepSleep(Number(button.dataset.sleep));
+      else if (button?.dataset.value && button.parentElement?.dataset.scale) this.setScale(button.parentElement.dataset.scale, Number(button.dataset.value));
+    });
+    document.getElementById('checkin-close')?.addEventListener('click', () => this.closeCheckinSheet());
+    document.getElementById('checkin-write')?.addEventListener('click', () => this.writeJournalToday());
+
     // Home: the two arrows next to the three dots close every open folder of the tree
     document.getElementById('btn-collapse')?.addEventListener('click', () => this.collapseTree());
 
@@ -763,7 +805,12 @@ const App = {
     // saveDraft is sync (localStorage) so it always runs; save() is async best-effort.
     // The place in the note too: an app killed in the background never gets to leave the note.
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState !== 'hidden') return;
+      if (document.visibilityState !== 'hidden') {
+        // Back from the background on the home, maybe on another day or after writing on the PC: the
+        // check-in catches up (renderCheckin reads the Drive at most once a minute)
+        if (document.body.dataset.view === 'welcome') this.renderCheckin();
+        return;
+      }
       this.rememberPlace();
       this.rememberHomeScroll();
       if (this.isDirty) {

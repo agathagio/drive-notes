@@ -75,6 +75,15 @@
   <!-- ── Home: the tree of the root (app/home.js) and the search (app/search.js) ── -->
   <div id="welcome" class="welcome">
     <div id="home-scroll" class="home-scroll">
+      <!-- The day's check-in (app/checkin.js): the habits in one tap, "mais" opens the sheet below -->
+      <section id="checkin" class="home-section checkin" aria-labelledby="checkin-day" hidden>
+        <h3 class="home-section-title checkin-title">
+          <span id="checkin-day" class="home-section-name">Hoje</span>
+          <span id="checkin-count" class="home-section-count checkin-count"></span>
+        </h3>
+        <div id="checkin-rounds" class="checkin-rounds"></div>
+        <p id="checkin-missing" class="tree-message checkin-missing" hidden>Pasta journal não encontrada</p>
+      </section>
       <section id="recents-list" class="home-section recents-list hidden">
         <button class="home-section-title" type="button" data-section aria-expanded="false">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
@@ -327,6 +336,33 @@
     </div>
   </div>
 
+  <!-- ── Check-in sheet ("mais" in the home's Hoje): sleep, mood, energy and the day's journal (app/checkin.js) ── -->
+  <div id="checkin-overlay" class="modal-overlay checkin-overlay">
+    <div class="checkin-sheet" role="dialog" aria-modal="true" aria-labelledby="checkin-sheet-title">
+      <h3 id="checkin-sheet-title" class="checkin-sheet-title">Hoje</h3>
+      <div class="checkin-row">
+        <span class="checkin-row-label">Sono</span>
+        <div class="checkin-step">
+          <button type="button" class="checkin-step-btn" data-sleep="-1" aria-label="Menos meia hora">&minus;</button>
+          <span id="checkin-sleep" class="checkin-sleep" aria-live="polite">sem registro</span>
+          <button type="button" class="checkin-step-btn" data-sleep="1" aria-label="Mais meia hora">+</button>
+        </div>
+      </div>
+      <div class="checkin-row">
+        <span class="checkin-row-label">Humor</span>
+        <div class="checkin-scale" data-scale="mood" data-label="Humor" role="group" aria-label="Humor"></div>
+      </div>
+      <div class="checkin-row">
+        <span class="checkin-row-label">Energia</span>
+        <div class="checkin-scale" data-scale="energy" data-label="Energia" role="group" aria-label="Energia"></div>
+      </div>
+      <p id="checkin-sheet-message" class="modal-message" hidden></p>
+      <button id="checkin-write" type="button" class="checkin-write">Escrever no journal de hoje</button>
+      <!-- What the system back button presses: it has no face, a tap outside the sheet does the same -->
+      <button id="checkin-close" type="button" data-dismiss hidden></button>
+    </div>
+  </div>
+
   <!-- ── Diagnostics (the menu of the home screen, or five taps on "dn") ── -->
   <div id="debug-overlay" class="modal-overlay">
     <div class="modal modal-wide">
@@ -351,6 +387,7 @@
   <script src="app/auth.js"></script>
   <script src="app/search.js"></script>
   <script src="app/home.js"></script>
+  <script src="app/checkin.js"></script>
   <script src="app/drive.js"></script>
   <script src="app/note.js"></script>
   <script src="app/note-actions.js"></script>

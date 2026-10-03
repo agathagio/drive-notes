@@ -17,6 +17,9 @@ const NOTE = [
   '```js', 'const x = "bloco de código comprido pra testar a rolagem lateral";', '```', '', '![[diagrama.png]]', '', 'Fim.',
 ].join('\n');
 
+// Today's journal note for the check-in of the home: sample values, two habits and two numbers
+const DAY = ['---', 'type: journal', 'workout: true', 'water: true', 'sleep: 7.5', 'mood: 4', '---', ''].join('\n');
+
 const SETUP = `
   localStorage.clear();
   // The device's kept notes too: the profile outlives the run, and a fake Drive that always answers the
@@ -44,6 +47,10 @@ const SETUP = `
   };
   window.fetch = async (url) => {
     const u = new URL(url); const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
+    // The home's check-in: the journal folder under the root, and today's note in it with sample keys
+    if ((u.searchParams.get('q') || '').includes("name = 'journal'")) return ok({ files: [{ id: 'J', name: 'journal', mimeType: FOLDER, parents: ['ROOT'] }] });
+    if ((u.searchParams.get('q') || '').includes("-journal.md'")) return ok({ files: [{ id: 'JDAY', name: 'dia-journal.md', mimeType: 'text/markdown', parents: ['J'] }] });
+    if (u.pathname.endsWith('/JDAY')) return ok(${JSON.stringify(DAY)});
     // The embedded image of the sample note: found by name, then downloaded as a blob
     if ((u.searchParams.get('q') || '').includes("name = 'diagrama.png'")) return ok({ files: [{ id: 'IMG', name: 'diagrama.png', mimeType: 'image/png', parents: ['d2'] }] });
     if (u.pathname.endsWith('/IMG')) {
@@ -79,6 +86,7 @@ const SETUP = `
   __App._folderTrails = new Map([['ROOT', []], [CONFIG.DEFAULT_FOLDER_ID, CONFIG.DEFAULT_FOLDER_TRAIL]]);
   // The app read the home tree's memory as it opened, from the profile of the previous run: read again, now empty
   __App.initTree();
+  __App.initCheckin();
   __App.goHome();
   'ok'`;
 
@@ -100,6 +108,10 @@ const SETUP = `
     };
 
     await shot('1-inicio');
+    // The check-in's sheet ("mais" in the Hoje section): sleep, mood, energy and the day's journal
+    await js(`__App.openCheckinSheet(); 'ok'`);
+    await shot('1f-checkin-folha');
+    await js(`__App.closeCheckinSheet(); 'ok'`);
     // The home tree with a folder open, and the menu of the three dots
     await js(`[...document.querySelectorAll('#tree-list .tree-row.is-folder .tree-item')].find((b) => b.textContent.includes('20-projetos')).click(); 'ok'`);
     await shot('1b-inicio-pasta-aberta');
