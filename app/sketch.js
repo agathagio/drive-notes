@@ -203,7 +203,7 @@ Object.assign(App, {
     for (const stroke of s.strokes) this.sketchPaintStroke(stroke);
   },
 
-  /** The PNG that goes to the vault: only the part with ink on it, at the screen's pixel density.
+  /** The PNG that goes to the attachment folder: only the part with ink on it, at the screen's pixel density.
       Null when nothing was drawn. */
   sketchExport() {
     const s = this.sketch;
@@ -219,7 +219,7 @@ Object.assign(App, {
     return out;
   },
 
-  /** ✓: crop, upload to the attachment folder of the note's root, and only then write ![[name]] into the note,
+  /** ✓: crop, upload to the attachment folder, and only then write ![[_media/name]] into the note,
       the same order as a photo. What differs: a failed upload leaves the screen open with the
       drawing still on it, because a drawing cannot be picked again. */
   async sketchFinish() {
@@ -237,14 +237,11 @@ Object.assign(App, {
     this.setSaveStatus('saving', 'Enviando desenho...');
 
     let name;
-    let root = null;
     try {
       await this.ensureAuth();
-      // The attachment folder of the root the note lives in, and the embed the way that root writes it
-      root = await this.currentRoot();
-      const folderId = await this.getMediaFolderId(root);
+      const folderId = await this.getMediaFolderId();
       if (!folderId) {
-        this.setSaveStatus('error', `Pasta ${CONFIG.MEDIA_FOLDER} não encontrada em ${root.name}`);
+        this.setSaveStatus('error', `Pasta ${CONFIG.MEDIA_FOLDER} não encontrada`);
         return;
       }
       const blob = await new Promise(resolve => out.toBlob(resolve, 'image/png'));
@@ -255,7 +252,7 @@ Object.assign(App, {
       this._embedUrls.set(name, Promise.resolve(URL.createObjectURL(blob)));
     } catch (e) {
       console.error('Sketch upload failed:', e);
-      if (root) this.forgetMediaFolder(root);
+      this.forgetMediaFolder();
       this.setSaveStatus('error', 'Erro ao enviar o desenho');
       return;
     } finally {
@@ -270,7 +267,7 @@ Object.assign(App, {
       this.setSaveStatus('error', `Desenho salvo, mas a nota mudou: ${name}`);
       return;
     }
-    this.insertOnOwnLine(`![[${root.embedPrefix}${name}]]`, at);
+    this.insertOnOwnLine(`![[${CONFIG.MEDIA_FOLDER}/${name}]]`, at);
     this.markDirty();
     this.setSaveStatus('saved', 'Desenho inserido');
   },

@@ -4,8 +4,8 @@ Object.assign(App, {
   // ── Search ──
   // One field, two reaches. What is typed is matched at once against the names the device knows (the
   // note index, the one the link list uses). After a pause the same text goes to the Drive, which looks
-  // at names and at the text of the notes. Only notes inside the roots are shown, each with the folder
-  // it lives in, root first. The search is a state of the home screen, not a view: opening and closing it is not a
+  // at names and at the text of the notes. Only notes inside the root are shown, each with the folders
+  // it lives in below the root. The search is a state of the home screen, not a view: opening and closing it is not a
   // navigation, and the back stack never hears of it.
 
   // open: the results are in the tree's place. query: the text of the field, kept while the app is
@@ -76,7 +76,7 @@ Object.assign(App, {
     this.drawHomeSearch();
   },
 
-  /** Line up the vault search for the text in the field. `now` skips the pause (the search key was pressed). */
+  /** Line up the Drive search for the text in the field. `now` skips the pause (the search key was pressed). */
   searchVault({ now = false } = {}) {
     clearTimeout(this._searchTimer);
     const seq = ++this._searchSeq;
@@ -98,7 +98,7 @@ Object.assign(App, {
         results = await this.findNotes(words);
         this._searchCache.set(query, results);
       } catch (e) {
-        console.error('Vault search failed:', e);
+        console.error('Drive search failed:', e);
       }
       if (seq !== this._searchSeq) return; // the text has changed since
       this._search = { query, results, failed: !results };
@@ -106,7 +106,7 @@ Object.assign(App, {
     }, now ? 0 : CONFIG.SEARCH_DELAY);
   },
 
-  /** Notes of the roots with every word in the name or in the text: name matches first */
+  /** Notes of the root with every word in the name or in the text: name matches first */
   async findNotes(words) {
     const files = (await this.driveSearch(words)).filter(f => this.isNote(f));
     const placed = await Promise.all(files.map(async (f) => {
@@ -117,12 +117,12 @@ Object.assign(App, {
 
     const plainWords = words.map(w => this.plain(w));
     return placed
-      // Outside every root, or inside a dot-folder (.obsidian, .trash): not a note of the roots
+      // Outside the root, or inside a dot-folder (.obsidian, .trash): not a note of the root
       .filter(({ trail }) => trail && !trail.some(name => name.startsWith('.')))
       .map(({ f, trail }) => ({
         id: f.id,
         name: f.name,
-        where: trail.join(' / '),
+        where: trail.join(' / ') || CONFIG.ROOT.name,
         inName: plainWords.every(w => this.plain(f.name).includes(w)),
       }))
       .sort((a, b) => b.inName - a.inName);
@@ -202,7 +202,7 @@ Object.assign(App, {
     list.hidden = !open;
     document.getElementById('welcome-new').hidden = open;
     document.getElementById('home-search-close').hidden = !open;
-    // On the tree the roots name themselves: the label only says where we are while the search is open
+    // No label on the tree: the label only says where we are while the search is open
     document.getElementById('home-label').textContent = open ? 'busca' : '';
     this.drawCollapseButton();
     list.innerHTML = '';

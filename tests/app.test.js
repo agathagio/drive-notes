@@ -13,14 +13,9 @@ const { ROOT, LIBS, sleep, cdnVersions, installedVersions, appScripts, appSource
 const { check, done } = reporter();
 
 const FOLDER = 'application/vnd.google-apps.folder';
-// A note saved inside the vault goes up with its dates (scenario 26); the other scenarios look at the text under them
-const bodyOf = (content) => content.replace(/^---\n[\s\S]*?\n---\n\n?/, '');
-// The tree, the note index and the attachment folders hang off whatever roots the app is configured with
-// (CONFIG.ROOTS): personal-os first, then the vault
-const rootId = (name) => new RegExp(`id: '([^']+)', name: '${name}'`).exec(appSource())[1];
-const VAULT = rootId('vault');
-const POS = rootId('personal-os');
-// Where a new note is born, the inbox of personal-os: the note index puts it in only if the folder answers a trail
+// The tree, the note index and the attachment folder hang off the one root the app is configured with (CONFIG.ROOT)
+const ROOT_ID = /ROOT: \{ id: '([^']+)'/.exec(appSource())[1];
+// Where a new note is born, the inbox: the note index puts it in only if the folder answers a trail
 const INBOX = /DEFAULT_FOLDER_ID: '([^']+)'/.exec(appSource())[1];
 
 function makeDrive() {
@@ -37,11 +32,11 @@ function makeDrive() {
       this.files.get(id).bytes = bytes;
     },
     remoteEdit(id, content) { const f = this.files.get(id); f.content = content; delete f.bytes; f.modifiedTime = this.tick(); },
-    // The two folders of personal-os the app writes to: its _inbox (where new notes are born) and its
-    // _media (photos and drawings of its notes). Not there by default: scenarios read the first file put.
+    // The two folders of the root the app writes to: its _inbox (where new notes are born) and its
+    // _media (photos and drawings). Not there by default: scenarios read the first file put.
     seedRoots() {
       for (const [id, name] of [[INBOX, '_inbox'], ['pos-media', '_media']]) {
-        this.put(id, name, '', [POS]);
+        this.put(id, name, '', [ROOT_ID]);
         this.files.get(id).mimeType = FOLDER;
       }
     },
@@ -534,7 +529,7 @@ async function scenario(title, block) {
     App.accessToken = 'fake';
     App.els.fileName.ownerDocument.defaultView.localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
     await App.save();
-    check('criado uma vez no Drive', drive.count('POST') === 1 && bodyOf([...drive.files.values()][0].content) === 'ideia', drive.log);
+    check('criado uma vez no Drive', drive.count('POST') === 1 && [...drive.files.values()][0].content === 'ideia', drive.log);
     check('rascunho limpo depois de sincronizar', App.listDrafts().length === 0, App.listDrafts());
     type('ideia 2');
     await App.save();
@@ -555,7 +550,7 @@ async function scenario(title, block) {
     await Promise.all([p1, p2]); await App._saveChain;
     const all = [...drive.files.values()];
     check('um arquivo so', all.length === 1 && drive.count('POST') === 1, drive.log);
-    check('conteudo final e o mais novo', bodyOf(all[0].content) === 't1 t2', all[0].content);
+    check('conteudo final e o mais novo', all[0].content === 't1 t2', all[0].content);
     check('limpo, sem rascunho', !App.isDirty && App.listDrafts().length === 0, App.listDrafts());
   }
   });
@@ -574,7 +569,7 @@ async function scenario(title, block) {
     a.App.currentFile = null; a.App.isDirty = false;
     a.App.openDraft(d.key);
     await a.App.save();
-    check('salvar o rascunho faz PATCH, nao um segundo POST', a.drive.count('POST') === 1 && bodyOf(a.drive.files.get('new1').content) === 'texto', a.drive.log);
+    check('salvar o rascunho faz PATCH, nao um segundo POST', a.drive.count('POST') === 1 && a.drive.files.get('new1').content === 'texto', a.drive.log);
     check('rascunho limpo', a.App.listDrafts().length === 0);
   }
   });
@@ -751,9 +746,9 @@ async function scenario(title, block) {
     const { App, drive, w } = await boot();
     const made = [];
     w.URL.createObjectURL = (blob) => { made.push(blob.of); return `blob:fake/${blob.of}`; };
-    // The notes of the photo scenarios sit in folderA, outside both roots: they borrow the first root,
-    // personal-os, and its _media (and its `_media/` in front of every embed they write)
-    drive.put('media', '_media', '', [POS]); drive.files.get('media').mimeType = FOLDER;
+    // The notes of the photo scenarios sit in folderA, outside the root: their photos still go to the
+    // root's _media, with `_media/` in front of every embed they write
+    drive.put('media', '_media', '', [ROOT_ID]); drive.files.get('media').mimeType = FOLDER;
     const image = (id, name, parent, type = 'image/jpeg') => { drive.put(id, name, 'bin', [parent]); drive.files.get(id).mimeType = type; };
     image('I1', 'foto.jpg', 'media');
     image('D1', 'repetida.png', 'media', 'image/png');
@@ -769,7 +764,7 @@ async function scenario(title, block) {
     check('|300 vira largura, nao legenda', imgs[1].getAttribute('width') === '300' && imgs[1].alt === 'foto.jpg');
     check('|texto vira legenda (alt)', imgs[2].alt === 'legenda' && !imgs[2].hasAttribute('width'));
     check('nome repetido: ganha a que esta no _media', imgs[2].getAttribute('src') === 'blob:fake/D1', imgs[2].outerHTML);
-    check('pasta _media lembrada no aparelho, pela raiz', w.localStorage.getItem(`drivenotes_media_folder_${POS}`) === 'media');
+    check('pasta _media lembrada no aparelho', w.localStorage.getItem('drivenotes_attachments') === 'media');
     const labels = [...c.querySelectorAll('.wikilink-file')].map(l => l.textContent);
     check('pdf e imagem sumida ficam como rotulo', labels.join('|') === 'doc.pdf|sumiu.webp', labels);
 
@@ -792,7 +787,7 @@ async function scenario(title, block) {
   {
     const { App, drive, w } = await boot();
     w.URL.createObjectURL = () => 'blob:fake/local';
-    drive.put('media', '_media', '', [POS]); drive.files.get('media').mimeType = FOLDER;
+    drive.put('media', '_media', '', [ROOT_ID]); drive.files.get('media').mimeType = FOLDER;
     drive.put('A', 'a.md', 'linha um\nlinha dois');
     drive.put('B', 'b.md', 'outra nota');
     await App.openFile('A', 'a.md');
@@ -839,10 +834,10 @@ async function scenario(title, block) {
     await slow;
     check('trocou de nota durante o envio: a outra nota fica intacta', App.getContent() === 'outra nota' && uploaded().length === 2 && /mas a nota mudou/.test(App.els.saveStatus.textContent), App.els.saveStatus.textContent);
 
-    drive.files.delete('media'); w.localStorage.removeItem(`drivenotes_media_folder_${POS}`);
+    drive.files.delete('media'); w.localStorage.removeItem('drivenotes_attachments');
     App.setMode('edit');
     await App.insertPhoto(photo());
-    check('sem pasta _media no vault: avisa e nao sobe', uploaded().length === 2 && /_media/.test(App.els.saveStatus.textContent), App.els.saveStatus.textContent);
+    check('sem pasta _media na raiz: avisa e nao sobe', uploaded().length === 2 && /_media/.test(App.els.saveStatus.textContent), App.els.saveStatus.textContent);
   }
   });
 
@@ -850,7 +845,7 @@ async function scenario(title, block) {
   {
     const { App, drive, w } = await boot();
     w.URL.createObjectURL = () => 'blob:fake/local';
-    drive.put('media', '_media', '', [POS]); drive.files.get('media').mimeType = FOLDER;
+    drive.put('media', '_media', '', [ROOT_ID]); drive.files.get('media').mimeType = FOLDER;
     drive.put('A', 'a.md', 'linha um');
     await App.openFile('A', 'a.md');
     App.setMode('edit');
@@ -1149,11 +1144,11 @@ async function scenario(title, block) {
 
   const seedVault = (drive) => {
     const dir = (id, name, parent) => { drive.put(id, name, '', [parent]); drive.files.get(id).mimeType = FOLDER; };
-    dir('d-proj', '20-projetos', VAULT); dir('d-inbox', '_inbox', VAULT); dir('d-obs', '.obsidian', VAULT); dir('d-10', '10-areas', VAULT); dir('d-2', '2-rascunho', VAULT);
-    drive.put('n-z', 'zebra.md', 'z', [VAULT]); drive.put('n-a', 'Abacaxi.md', 'a', [VAULT]); drive.put('n-e', 'émile.md', 'e', [VAULT]);
-    drive.put('n-img', 'foto.png', 'bin', [VAULT]); drive.files.get('n-img').mimeType = 'image/png';
+    dir('d-proj', '20-projetos', ROOT_ID); dir('d-inbox', '_inbox', ROOT_ID); dir('d-obs', '.obsidian', ROOT_ID); dir('d-10', '10-areas', ROOT_ID); dir('d-2', '2-rascunho', ROOT_ID);
+    drive.put('n-z', 'zebra.md', 'z', [ROOT_ID]); drive.put('n-a', 'Abacaxi.md', 'a', [ROOT_ID]); drive.put('n-e', 'émile.md', 'e', [ROOT_ID]);
+    drive.put('n-img', 'foto.png', 'bin', [ROOT_ID]); drive.files.get('n-img').mimeType = 'image/png';
     // The Drive types a .txt as text/plain, and the note index only lists text/markdown
-    drive.put('n-txt', 'lista.txt', 't', [VAULT]); drive.files.get('n-txt').mimeType = 'text/plain';
+    drive.put('n-txt', 'lista.txt', 't', [ROOT_ID]); drive.files.get('n-txt').mimeType = 'text/plain';
     drive.put('n-sub', 'nota do projeto.md', '# dentro', ['d-proj']);
   };
 
@@ -1169,7 +1164,7 @@ async function scenario(title, block) {
   {
     const { App, drive, type, w } = await boot({ watcher: true });
     seedVault(drive);
-    drive.put('L', 'com link.md', 'vai [[zebra]]', [VAULT]);
+    drive.put('L', 'com link.md', 'vai [[zebra]]', [ROOT_ID]);
     const d = w.document;
     const len0 = w.history.length;
     check('modo CloseWatcher ativo; na tela inicial o voltar sai do app', App.useWatcher && w.__watchers.length === 0 && w.__back() === 'EXIT');
@@ -1203,7 +1198,7 @@ async function scenario(title, block) {
 
     App.els.btnPreview.click(); type('editado');
     w.__back(); await sleep(80); await App._saveChain;
-    check('voltar com edicao pendente salva antes', bodyOf(drive.files.get('L').content) === 'editado' && d.body.dataset.view === 'welcome');
+    check('voltar com edicao pendente salva antes', drive.files.get('L').content === 'editado' && d.body.dataset.view === 'welcome');
 
     for (let i = 0; i < 5; i++) d.getElementById('file-name').click();
     const dbg = d.getElementById('debug-text').textContent;
@@ -1213,90 +1208,18 @@ async function scenario(title, block) {
   }
   });
 
-  await scenario('26. created e updated: nota nova nasce sem nenhuma (personal-os), salvar na vault troca o updated', async () => {
-  {
+  await scenario('26. Salvar nao mexe nas propriedades: created e updated ficam como estavam', async () => {
     const { App, drive, type } = await boot();
-    const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    drive.put('proj', 'projeto', '', [VAULT]);
-    drive.put('tpl', '_templates', '', [VAULT]);
-    drive.put('tplsub', 'diario', '', ['tpl']);
-    drive.put('fora', 'documentos', '', []);
-
-    // New notes are born in the inbox of personal-os, which keeps no dates (R6 has it on the real editor)
-    App.newFile();
-    check('nota nova abre em branco, sem propriedades', App.getContent() === '' && !App.isDirty, App.getContent());
-    await App._saveChain;
-    check('e criada no Drive em branco', drive.files.get('new1')?.content === '', drive.files.get('new1')?.content);
-    type('ideia');
-    await App.save();
-    check('salvar nao poe data nenhuma', drive.files.get('new1').content === 'ideia' && drive.count('POST') === 1, drive.files.get('new1').content);
-
     const old = '---\ntags: [a]\ncreated: 2026-01-02\nupdated: 2026-01-03\n---\n\ntexto';
-    drive.put('A', 'a.md', old, ['proj']);
-    await App.openFile('A', 'a.md');
-    await App.save(); App.flushCurrent(); await App._saveChain;
-    check('abrir sem editar nao troca o updated', drive.files.get('A').content === old && drive.count('PATCH') === 1, drive.log);
-    App.setMode('edit'); // notes open in reading view
-    type(old + ' editado');
-    await App.save();
-    const saved = `---\ntags: [a]\ncreated: 2026-01-02\nupdated: ${today}\n---\n\ntexto editado`;
-    check('editar e salvar troca o updated, o resto fica', drive.files.get('A').content === saved, drive.files.get('A').content);
-    check('nota limpa, sem rascunho', !App.isDirty && App.listDrafts().length === 0, App.listDrafts());
-    check('na edicao o texto nao e trocado debaixo do teclado', App.getContent() === old + ' editado');
-    App.setMode('preview');
-    check('ao ir pra leitura o editor alcanca o Drive, sem sujar', App.getContent() === saved && !App.isDirty, App.getContent());
-    check('e as propriedades mostram a data nova', App.els.previewContainer.querySelector('details.frontmatter pre').textContent.includes(`updated: ${today}`));
-    const patches = drive.count('PATCH');
-    await App.save(); App.flushCurrent(); await App._saveChain;
-    check('alcancar o Drive nao gera outra escrita', drive.count('PATCH') === patches, drive.log);
-
+    drive.put('D', 'datada.md', old, [ROOT_ID]);
+    await App.openFile('D', 'datada.md');
     App.setMode('edit');
-    drive.delay = 40;
-    type(saved + ' 1');
-    const p = App.save();
-    await sleep(20);
-    type(saved + ' 12');
-    await p;
-    check('texto digitado durante o save continua pendente', App.isDirty && drive.files.get('A').content === saved + ' 1');
-    await App.save();
-    check('e vai no save seguinte', !App.isDirty && drive.files.get('A').content === saved + ' 12');
-    drive.delay = 5;
-
-    const lookups = drive.log.filter(l => l === 'GET meta proj').length;
-    check('a pasta e conferida uma vez so', lookups === 1, lookups);
-
-    drive.put('B', 'b.md', '---\ntags: [a]\n---\ncorpo', ['proj']);
-    await App.openFile('B', 'b.md');
-    type('---\ntags: [a]\n---\ncorpo 2');
-    await App.save();
-    check('propriedades sem updated: ganha updated, nao inventa created', drive.files.get('B').content === `---\ntags: [a]\nupdated: ${today}\n---\ncorpo 2`, drive.files.get('B').content);
-
-    drive.put('C', 'c.md', 'so texto', ['proj']);
-    await App.openFile('C', 'c.md');
-    type('so texto 2');
-    await App.save();
-    check('nota sem propriedades: ganha so o updated', drive.files.get('C').content === `---\nupdated: ${today}\n---\n\nso texto 2`, drive.files.get('C').content);
-
-    const untouched = [
-      ['T', 'modelo.md', ['tplsub'], 'dentro de _templates'],
-      ['K', 'CLAUDE.md', ['proj'], 'CLAUDE.md'],
-      ['O', 'guia-antigo.md', ['proj'], 'arquivo -antigo'],
-      ['X', 'lista.txt', ['proj'], 'arquivo .txt'],
-      ['F', 'f.md', ['fora'], 'fora do vault'],
-    ];
-    for (const [id, name, parents, label] of untouched) {
-      drive.put(id, name, '---\nupdated: 2026-01-03\n---\nx', parents);
-      await App.openFile(id, name);
-      type('---\nupdated: 2026-01-03\n---\nx 2');
-      await App.save();
-      check(`${label}: updated fica como esta`, drive.files.get(id).content === '---\nupdated: 2026-01-03\n---\nx 2', drive.files.get(id).content);
-    }
-
-    check('regua no topo nao e propriedade', App.stampDates('---\num titulo solto\n---\ncorpo', today, false) === '---\num titulo solto\n---\ncorpo');
-    check('CRLF e preservado', App.stampDates('---\r\nupdated: 2026-01-03\r\n---\r\nx', today, false) === `---\r\nupdated: ${today}\r\n---\r\nx`);
-    check('nota criada agora sem created ganha as duas', App.stampDates('ideia', today, true) === `---\ncreated: ${today}\nupdated: ${today}\n---\n\nideia`);
-  }
+    type(old + ' editado');
+    await App.save({ manual: true });
+    check('o texto sobe exatamente como esta no editor, data e tudo', drive.files.get('D').content === old + ' editado', drive.files.get('D').content);
+    check('nenhuma ida ao Drive pra saber onde a nota mora', !drive.log.some((l) => l.startsWith('GET meta') && l !== 'GET meta D'), drive.log);
+    App.setMode('preview');
+    check('ir pra leitura nao troca o texto do editor', App.getContent() === old + ' editado' && !App.isDirty, App.getContent());
   });
 
   await scenario('27. Salvar a partir da leitura, e o botao de salvar sem roubar o foco', async () => {
@@ -1486,7 +1409,7 @@ async function scenario(title, block) {
     const { App, drive, w } = await boot();
     w.URL.createObjectURL = () => 'blob:fake/sketch';
     w.devicePixelRatio = 2;
-    drive.put('media', '_media', '', [POS]); drive.files.get('media').mimeType = FOLDER;
+    drive.put('media', '_media', '', [ROOT_ID]); drive.files.get('media').mimeType = FOLDER;
     drive.put('A', 'a.md', 'linha um\nlinha dois');
     await App.openFile('A', 'a.md');
     App.setMode('edit');
@@ -1539,7 +1462,7 @@ async function scenario(title, block) {
   {
     const { App, drive, w } = await boot();
     w.URL.createObjectURL = () => 'blob:fake/sketch';
-    drive.put('media', '_media', '', [POS]); drive.files.get('media').mimeType = FOLDER;
+    drive.put('media', '_media', '', [ROOT_ID]); drive.files.get('media').mimeType = FOLDER;
     drive.put('A', 'a.md', 'nota');
     await App.openFile('A', 'a.md');
     App.setMode('edit');
@@ -1617,7 +1540,7 @@ async function scenario(title, block) {
     check('tarefa dentro de citacao', App.getContent().includes('> - [x] na citacao'), App.getContent());
 
     await App.save(); await App._saveChain;
-    check('e vai pro Drive', bodyOf(drive.files.get('A').content).includes('- [x] Agatha') && drive.files.get('A').content.includes('1. [x] numerada'), drive.files.get('A').content);
+    check('e vai pro Drive', drive.files.get('A').content.includes('- [x] Agatha') && drive.files.get('A').content.includes('1. [x] numerada'), drive.files.get('A').content);
 
     // If the text and the screen disagree on how many tasks there are, checking the wrong one is worse than not checking
     drive.put('B', 'b.md', 'texto\n\n    - [ ] isto e bloco de codigo por recuo\n\n- [ ] uma\n');
@@ -1630,7 +1553,7 @@ async function scenario(title, block) {
   {
     const { App, drive, w } = await boot({ watcher: true });
     seedVault(drive);
-    drive.put('L', 'com link.md', 'vai [[zebra]]', [VAULT]);
+    drive.put('L', 'com link.md', 'vai [[zebra]]', [ROOT_ID]);
     const d = w.document;
     const W = w.innerWidth;
     const touch = (type, x, y) => {
@@ -1734,7 +1657,7 @@ async function scenario(title, block) {
     // stopped three times on the same folder. The screen left behind was read while the note was still loading.
     const { App, drive, w } = await boot({ watcher: true });
     seedVault(drive);
-    drive.put('L', 'com link.md', 'vai [[zebra]]', [VAULT]);
+    drive.put('L', 'com link.md', 'vai [[zebra]]', [ROOT_ID]);
     const d = w.document;
     const stack = () => App.navStack.map(s => s.view === 'file' ? s.id : s.view);
     const item = (text) => treeButton(d, text);
@@ -1781,7 +1704,7 @@ async function scenario(title, block) {
     check('voltar com o link ainda carregando fica na nota', App.currentFile?.id === 'L' && stack().join(' > ') === 'welcome', [App.currentFile?.id, stack()]);
 
     // A tap that opens nothing, made with another note on its way, must not eat that note's entry
-    drive.put('Q', 'quebrada.md', 'vai [[zebra]] e [[nao existe]]', [VAULT]);
+    drive.put('Q', 'quebrada.md', 'vai [[zebra]] e [[nao existe]]', [ROOT_ID]);
     await App.openFile('Q', 'quebrada.md');
     const links = App.els.previewContainer.querySelectorAll('a.wikilink');
     links[0].click();
@@ -2777,7 +2700,7 @@ async function scenario(title, block) {
     w.Date.parse = Real.parse;
     w.Date.UTC = Real.UTC;
 
-    drive.put('media', '_media', '', [POS]); drive.files.get('media').mimeType = FOLDER;
+    drive.put('media', '_media', '', [ROOT_ID]); drive.files.get('media').mimeType = FOLDER;
     drive.put('A', 'a.md', 'linha um');
     // The photo from the same minute of ANOTHER day, which without this check would be the one the new ![[...]] finds
     drive.put('velha', 'a-foto-153012.jpg', 'bin', ['media']); drive.files.get('velha').mimeType = 'image/jpeg';
@@ -2807,7 +2730,7 @@ async function scenario(title, block) {
     w.Date.parse = Real.parse;
     w.Date.UTC = Real.UTC;
 
-    drive.put('media', '_media', '', [POS]); drive.files.get('media').mimeType = FOLDER;
+    drive.put('media', '_media', '', [ROOT_ID]); drive.files.get('media').mimeType = FOLDER;
     drive.put('A', 'a.md', 'linha um');
     drive.put('velha', 'a-foto-153012.jpg', 'bin', ['media']); drive.files.get('velha').mimeType = 'image/jpeg';
     await App.openFile('A', 'a.md');
@@ -2845,7 +2768,7 @@ async function scenario(title, block) {
   {
     const { App, drive, w } = await boot({ editor: true });
     w.URL.createObjectURL = () => 'blob:fake/local';
-    drive.put('media', '_media', '', [POS]); drive.files.get('media').mimeType = FOLDER;
+    drive.put('media', '_media', '', [ROOT_ID]); drive.files.get('media').mimeType = FOLDER;
     const image = (id, name) => { drive.put(id, name, 'bin', ['media']); drive.files.get(id).mimeType = 'image/jpeg'; };
     image('X', 'x.jpg'); image('Y', 'y.jpg'); image('Z', 'z.jpg');
     drive.put('A', 'a.md', 'a\n![[x.jpg]]\nb');
@@ -2869,7 +2792,7 @@ async function scenario(title, block) {
     await App._saveChain;
     check('confirmando, a linha inteira sai e nao sobra quebra',
       removed === true && App.getContent() === 'a\nb', JSON.stringify(App.getContent()));
-    check('o texto sem a linha chegou no Drive', bodyOf(drive.files.get('A').content) === 'a\nb', drive.files.get('A').content);
+    check('o texto sem a linha chegou no Drive', drive.files.get('A').content === 'a\nb', drive.files.get('A').content);
     check('o arquivo da foto foi pra lixeira', drive.files.get('X').trashed === true);
     const order = drive.log.filter(l => /^(PATCH A|TRASH X)/.test(l));
     check('salvou no Drive ANTES de mandar pra lixeira', order.join('|') === 'PATCH A|TRASH X x.jpg', order);
@@ -2892,7 +2815,7 @@ async function scenario(title, block) {
     const halfway = await App.removeEmbedLine(2);
     await App._saveChain;
     check('lixeira falhou: a nota continua sem a linha, e o aviso aparece',
-      halfway === false && App.getContent() === 'a\nb' && bodyOf(drive.files.get('C').content) === 'a\nb'
+      halfway === false && App.getContent() === 'a\nb' && drive.files.get('C').content === 'a\nb'
       && !drive.files.get('Z').trashed
       && App.els.saveStatus.textContent === 'A foto saiu da nota, mas não foi pra lixeira',
       App.els.saveStatus.textContent);
@@ -2929,17 +2852,17 @@ async function scenario(title, block) {
     drive.put('n-fora', 'fora do vault.md', 'x', ['outra-pasta']);
     drive.put('n-obs', 'workspace.md', 'x', ['d-obs']);
     // A note created by the app itself: the Drive stores it as text/plain, and even so it belongs in the index
-    drive.put('n-plain', 'criada pelo app.md', 'x', [VAULT]); drive.files.get('n-plain').mimeType = 'text/plain';
+    drive.put('n-plain', 'criada pelo app.md', 'x', [ROOT_ID]); drive.files.get('n-plain').mimeType = 'text/plain';
 
     const notes = await App.noteIndex();
     const names = notes.map(n => n.name).sort();
     check('indice tem as notas .md do vault (inclusive as text/plain), sem .obsidian, sem fora do vault, sem png nem txt',
       JSON.stringify(names) === JSON.stringify(['Abacaxi.md', 'antiga.md', 'criada pelo app.md', 'nota do projeto.md', 'zebra.md', 'émile.md'].sort()), names);
-    check('pasta em texto: na raiz o nome dela, na subpasta a raiz e o nome da pasta',
-      notes.find(n => n.id === 'n-z').where === 'vault' && notes.find(n => n.id === 'n-sub').where === 'vault / 20-projetos');
+    check('pasta em texto: na raiz o nome dela, na subpasta so o nome da pasta, sem a raiz',
+      notes.find(n => n.id === 'n-z').where === 'personal-os' && notes.find(n => n.id === 'n-sub').where === '20-projetos');
     check('duas listagens, nenhuma ida pasta a pasta',
       drive.log.filter(l => l.startsWith('LIST-TYPE')).length === 2 && drive.log.filter(l => l.startsWith('GET meta')).length === 0, drive.log);
-    const stored = JSON.parse(w.localStorage.getItem('drivenotes_note_index_v2'));
+    const stored = JSON.parse(w.localStorage.getItem('drivenotes_note_index_v3'));
     check('guardado no aparelho com a hora', Array.isArray(stored.notes) && stored.notes.length === 6 && typeof stored.builtAt === 'number');
 
     // filter: no accents, no uppercase, starts-with before contains, most recent first
@@ -2958,13 +2881,13 @@ async function scenario(title, block) {
     })());
 
     // next session (new window, w2): opens from the stored copy right away and refreshes behind the scenes
-    const storedIndex = w.localStorage.getItem('drivenotes_note_index_v2');
-    const { App: App2, drive: drive2, w: w2 } = await boot({ seedStorage: { drivenotes_note_index_v2: storedIndex } });
+    const storedIndex = w.localStorage.getItem('drivenotes_note_index_v3');
+    const { App: App2, drive: drive2, w: w2 } = await boot({ seedStorage: { drivenotes_note_index_v3: storedIndex } });
     seedVault(drive2);
     // The folder where a new note is born (DEFAULT_FOLDER_ID), inside personal-os. Its trail is known
     // without asking the Drive, but the folder is there all the same, as on the real Drive
     drive2.seedRoots();
-    drive2.put('n-new', 'nova.md', 'x', [VAULT]);
+    drive2.put('n-new', 'nova.md', 'x', [ROOT_ID]);
     drive2.delay = 50;
     const first = await App2.noteIndex();
     check('copia guardada responde na hora, sem esperar o Drive', first.length === 6 && !first.find(n => n.id === 'n-new'));
@@ -2978,10 +2901,10 @@ async function scenario(title, block) {
     check('apagar tira do indice', !App2._noteIndex.find(n => n.id === 'n-new'));
     await App2.noteIndexAdd({ id: 'n-add', name: 'criada.md', parents: ['d-proj'], modifiedTime: '2026-09-22T00:00:00.000Z' });
     const added = App2._noteIndex.find(n => n.id === 'n-add');
-    check('nota criada entra com a pasta em texto', added && added.where === 'vault / 20-projetos', added);
+    check('nota criada entra com a pasta em texto', added && added.where === '20-projetos', added);
     // 5 in the fake Drive (4 from seedVault plus n-new), minus n-new deleted, plus n-add: 5.
     // The count alone would prove nothing (it was 5 before the delete/create pair): the ids prove it.
-    const storedAfter = JSON.parse(w2.localStorage.getItem('drivenotes_note_index_v2')).notes;
+    const storedAfter = JSON.parse(w2.localStorage.getItem('drivenotes_note_index_v3')).notes;
     check('o guardado acompanha', storedAfter.length === 5 && storedAfter.some(n => n.id === 'n-add')
       && !storedAfter.some(n => n.id === 'n-new'), storedAfter.map(n => n.id));
 
@@ -2992,7 +2915,7 @@ async function scenario(title, block) {
     check('createOnDrive poe a nota no indice', App2._noteIndex.find(n => n.id === App2.currentFile.id), App2.currentFile.name);
 
     // Drive down: the stored index still serves
-    const { App: App3, drive: drive3 } = await boot({ seedStorage: { drivenotes_note_index_v2: storedIndex } });
+    const { App: App3, drive: drive3 } = await boot({ seedStorage: { drivenotes_note_index_v3: storedIndex } });
     drive3.failReads = true;
     const third = await App3.noteIndex();
     await sleep(50);
@@ -3000,48 +2923,61 @@ async function scenario(title, block) {
   }
   });
 
-  await scenario('54b. Duas raizes: o indice e a busca trazem as notas das duas, com a raiz no onde', async () => {
-    const { App, drive } = await boot();
+  await scenario('54b. Uma raiz: o indice e a busca trazem as notas da raiz, com o onde sem a raiz', async () => {
+    const { App, drive, w } = await boot();
     const dir = (id, name, parent) => { drive.put(id, name, '', [parent]); drive.files.get(id).mimeType = FOLDER; };
     seedVault(drive);
     drive.seedRoots();
-    dir('p-proj', 'projects', POS); dir('p-obs', '.obsidian', POS); dir('d-onryo', 'onryo', VAULT);
+    dir('p-proj', 'projects', ROOT_ID); dir('p-obs', '.obsidian', ROOT_ID); dir('d-onryo', 'onryo', ROOT_ID);
     drive.put('p-job', 'job-hunting.md', 'vagas', ['p-proj']);
-    drive.put('p-solta', 'solta.md', 'x', [POS]);
+    drive.put('p-solta', 'solta.md', 'x', [ROOT_ID]);
     drive.put('p-ws', 'workspace.md', 'x', ['p-obs']);
     drive.put('n-cap', 'capitulo.md', 'x', ['d-onryo']);
-    drive.put('n-fora', 'fora das duas.md', 'x', ['outra-pasta']);
+    drive.put('n-fora', 'fora da raiz.md', 'x', ['outra-pasta']);
 
     const notes = await App.noteIndex();
     const where = (id) => notes.find((n) => n.id === id)?.where;
-    check('nota da personal-os numa pasta: a raiz e a pasta', where('p-job') === 'personal-os / projects', where('p-job'));
-    check('nota da vault numa pasta: a raiz e a pasta', where('n-cap') === 'vault / onryo', where('n-cap'));
-    check('nota solta na raiz: so o nome da raiz', where('p-solta') === 'personal-os' && where('n-z') === 'vault', [where('p-solta'), where('n-z')]);
-    check('nota fora das duas e nota em pasta com ponto ficam de fora', !where('n-fora') && !where('p-ws'), notes.map((n) => n.id));
+    check('nota numa pasta: so a pasta, sem a raiz', where('p-job') === 'projects' && where('n-cap') === 'onryo', [where('p-job'), where('n-cap')]);
+    check('nota solta na raiz: o nome da raiz, nao uma linha vazia', where('p-solta') === 'personal-os' && where('n-z') === 'personal-os', [where('p-solta'), where('n-z')]);
+    check('nota fora da raiz e nota em pasta com ponto ficam de fora', !where('n-fora') && !where('p-ws'), notes.map((n) => n.id));
 
     await App.noteIndexAdd({ id: 'p-nova', name: 'captura.md', parents: [INBOX], modifiedTime: '2026-10-01T00:00:00.000Z' });
     const added = App._noteIndex.find((n) => n.id === 'p-nova');
-    check('nota criada no _inbox entra com o onde dele, sem ida ao Drive', added?.where === 'personal-os / _inbox'
+    check('nota criada no _inbox entra com o onde dele, sem ida ao Drive', added?.where === '_inbox'
       && drive.count('GET meta') === 0, [added, drive.log.filter((l) => l.startsWith('GET'))]);
 
     const found = await App.findNotes(['vagas']);
-    check('a busca no Drive tambem diz a raiz', found.length === 1 && found[0].where === 'personal-os / projects', found);
+    check('a busca no Drive tambem diz so a pasta', found.length === 1 && found[0].where === 'projects', found);
+    const loose = await App.findNotes(['solta']);
+    check('... e a nota solta na raiz, o nome da raiz', loose.length === 1 && loose[0].where === 'personal-os', loose);
+
+    // The tree walk and the index agree: a folder opened in the tree, then asked by the index, has one trail
+    App._folderTrails.delete('p-proj');
+    await showHome(App);
+    const button = treeButton(w.document, 'projects');
+    button?.click();
+    await App.noteIndexAdd({ id: 'p-outra', name: 'outra.md', parents: ['p-proj'], modifiedTime: '2026-10-01T00:00:00.000Z' });
+    check('pasta aberta pela arvore e depois pedida pelo indice: a mesma trilha', !!button && JSON.stringify(App._folderTrails.get('p-proj')) === JSON.stringify(['projects'])
+      && App._noteIndex.find((n) => n.id === 'p-outra')?.where === where('p-job'), [App._folderTrails.get('p-proj'), App._noteIndex.find((n) => n.id === 'p-outra')]);
   });
 
-  await scenario('54c. Chaves do formato de uma raiz so: apagadas na abertura', async () => {
-    const old = { notes: [{ id: 'velha', name: 'velha.md', folder: 'x', where: '20-projetos' }] };
+  await scenario('54c. Chaves das versoes de uma e de duas raizes: apagadas na abertura, o indice refaz', async () => {
+    const old = { notes: [{ id: 'velha', name: 'velha.md', folder: 'x', where: 'vault / 20-projetos' }] };
     const { App, drive, w } = await boot({ seedStorage: {
       drivenotes_note_index: JSON.stringify(old),
       drivenotes_media_folder: 'media-velha',
+      drivenotes_note_index_v2: JSON.stringify(old),
+      drivenotes_tree_roots: JSON.stringify([ROOT_ID, 'vault-id']),
+      [`drivenotes_media_folder_${ROOT_ID}`]: 'pos-media',
+      'drivenotes_media_folder_vault-id': 'v-media',
     } });
-    check('o indice velho e o _media velho sairam do aparelho',
-      w.localStorage.getItem('drivenotes_note_index') === null && w.localStorage.getItem('drivenotes_media_folder') === null,
-      [w.localStorage.getItem('drivenotes_note_index'), w.localStorage.getItem('drivenotes_media_folder')]);
+    const gone = ['drivenotes_note_index', 'drivenotes_media_folder', 'drivenotes_note_index_v2', 'drivenotes_tree_roots',
+      `drivenotes_media_folder_${ROOT_ID}`, 'drivenotes_media_folder_vault-id'];
+    check('as seis chaves velhas sairam do aparelho', gone.every((k) => w.localStorage.getItem(k) === null), gone.map((k) => w.localStorage.getItem(k)));
     seedVault(drive);
-    drive.put('p-solta', 'solta.md', 'x', [POS]);
+    drive.put('p-solta', 'solta.md', 'x', [ROOT_ID]);
     const notes = await App.noteIndex();
-    check('o indice refeito vem do Drive e traz as duas raizes', !notes.some((n) => n.id === 'velha')
-      && notes.some((n) => n.id === 'p-solta') && notes.some((n) => n.id === 'n-z'), notes.map((n) => n.id));
+    check('o indice refeito vem do Drive, sem a nota velha', !notes.some((n) => n.id === 'velha') && notes.some((n) => n.id === 'p-solta'), notes.map((n) => n.id));
   });
 
   await scenario('55. Lista de notas ao digitar [[ (autocompletar no CodeMirror)', async () => {
@@ -3057,7 +2993,7 @@ async function scenario(title, block) {
     };
     const labels = () => currentCompletions(view.state).map(c => c.label);
 
-    drive.put('N', 'n.md', 'texto ', [VAULT]); // in the vault, so that it is in the index and shows up among the recents
+    drive.put('N', 'n.md', 'texto ', [ROOT_ID]); // in the vault, so that it is in the index and shows up among the recents
     await App.openFile('N', 'n.md');
     App.setMode('edit');
     App.Editor.moveCaretToEnd();
@@ -3069,7 +3005,7 @@ async function scenario(title, block) {
     typeAtCaret('voz');
     await sleep(200);
     check('filtra pelo que foi digitado', labels().join() === 'voz-blue', labels());
-    check('o item mostra a pasta, comecando pela raiz', currentCompletions(view.state)[0].detail === 'vault / 20-projetos');
+    check('o item mostra a pasta, sem a raiz', currentCompletions(view.state)[0].detail === '20-projetos');
 
     acceptCompletion(view);
     check('escolher escreve o nome e fecha o link', App.getContent() === 'texto [[voz-blue]]', App.getContent());
@@ -3106,7 +3042,7 @@ async function scenario(title, block) {
     // Android's back button closes the list, not the note
     const { App: AppW, drive: driveW, w: wW } = await boot({ editor: true, watcher: true });
     seedVault(driveW);
-    driveW.put('N2', 'n2.md', 'texto ', [VAULT]); // in the vault: it goes into the index and the recents, which is what the empty list shows
+    driveW.put('N2', 'n2.md', 'texto ', [ROOT_ID]); // in the vault: it goes into the index and the recents, which is what the empty list shows
     await AppW.navigateTo('N2', 'n2.md');
     AppW.setMode('edit');
     AppW.Editor.moveCaretToEnd();
@@ -3124,11 +3060,11 @@ async function scenario(title, block) {
     const { App, drive } = await boot();
     seedVault(drive);
     drive.put('L1', 'um.md', 'vai [[zebra]] e volta', ['d-proj']);
-    drive.put('L2', 'dois.md', 'foto ![[zebra]] alias [[Zebra|a bicha]] secao [[zebra#Cabeca]] com md [[zebra.md]]', [VAULT]);
-    drive.put('L3', 'tres.md', 'a palavra zebra sem link, e [[zebra-maior]] que e outra nota', [VAULT]);
+    drive.put('L2', 'dois.md', 'foto ![[zebra]] alias [[Zebra|a bicha]] secao [[zebra#Cabeca]] com md [[zebra.md]]', [ROOT_ID]);
+    drive.put('L3', 'tres.md', 'a palavra zebra sem link, e [[zebra-maior]] que e outra nota', [ROOT_ID]);
     drive.put('L4', 'fora.md', '[[zebra]] fora do vault', ['outra-pasta']);
     drive.put('L5', 'oculta.md', '[[zebra]] dentro do .obsidian', ['d-obs']);
-    drive.put('L6', 'lixo.json', '[[zebra]]', [VAULT]); drive.files.get('L6').mimeType = 'application/json';
+    drive.put('L6', 'lixo.json', '[[zebra]]', [ROOT_ID]); drive.files.get('L6').mimeType = 'application/json';
 
     const re = App.linkPattern('zebra');
     const forms = ['[[zebra]]', '![[zebra]]', '[[Zebra|a]]', '[[zebra#Cabeca]]', '[[zebra#Cabeca|a]]', '[[zebra.md]]'];
@@ -3155,7 +3091,7 @@ async function scenario(title, block) {
     const { App, drive, w, type } = await boot({ watcher: true });
     seedVault(drive);
     drive.put('L1', 'um.md', 'vai [[zebra]]', ['d-proj']);
-    drive.put('L2', 'dois.md', '[[zebra]] de novo', [VAULT]);
+    drive.put('L2', 'dois.md', '[[zebra]] de novo', [ROOT_ID]);
     const d = w.document;
     await App.noteIndex();
 
@@ -3219,10 +3155,10 @@ async function scenario(title, block) {
     const { App, drive, w } = await boot();
     seedVault(drive);
     drive.put('L1', 'um.md', '---\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\nvai [[zebra]] e ![[zebra]] e [[Zebra|bicho]] e [[zebra#Cabeca]] e [[zebra.md]]', ['d-proj']);
-    drive.put('L2', 'dois.md', 'a palavra zebra e [[zebra-maior]]', [VAULT]);
-    drive.put('L3', 'tres.md', '[[zebra]] mas alguem mexeu', [VAULT]);
-    drive.put('L4', 'quatro.md', '[[zebra]] com rascunho local', [VAULT]);
-    w.localStorage.setItem('drivenotes_draft_L4', JSON.stringify({ fileId: 'L4', name: 'quatro.md', content: '[[zebra]] com rascunho local, editado', baseModifiedTime: drive.files.get('L4').modifiedTime, parents: [VAULT] }));
+    drive.put('L2', 'dois.md', 'a palavra zebra e [[zebra-maior]]', [ROOT_ID]);
+    drive.put('L3', 'tres.md', '[[zebra]] mas alguem mexeu', [ROOT_ID]);
+    drive.put('L4', 'quatro.md', '[[zebra]] com rascunho local', [ROOT_ID]);
+    w.localStorage.setItem('drivenotes_draft_L4', JSON.stringify({ fileId: 'L4', name: 'quatro.md', content: '[[zebra]] com rascunho local, editado', baseModifiedTime: drive.files.get('L4').modifiedTime, parents: [ROOT_ID] }));
 
     check('relinkText troca todas as formas e deixa o resto',
       App.relinkText('x [[zebra]] ![[zebra]] [[Zebra|b]] [[zebra#C]] [[zebra.md]] [[zebra-maior]] zebra', 'zebra', 'girafa')
@@ -3258,7 +3194,7 @@ async function scenario(title, block) {
     // search down: renames, says it did not look
     w.fetch = drive.fetch = realFetch;
     await App.openFile('n-a', 'Abacaxi.md');
-    drive.put('L5', 'cinco.md', '[[Abacaxi]]', [VAULT]);
+    drive.put('L5', 'cinco.md', '[[Abacaxi]]', [ROOT_ID]);
     const okFetch = drive.fetch;
     w.fetch = drive.fetch = async (url, opts) => {
       if (String(url).includes('fullText')) return { ok: false, status: 500, json: async () => ({}), text: async () => '' };
@@ -3372,7 +3308,7 @@ async function scenario(title, block) {
     check('titulo, maiuscula e acento', await App.suggestNoteName('\n\n## Ideia de Casa Açaí\ncorpo') === 'ideia-de-casa-acai');
     check('tarefa: o marcador cai', await App.suggestNoteName('- [ ] comprar pão\n- [ ] leite') === 'comprar-pao');
     check('nome que ja existe no vault ganha -2', await App.suggestNoteName('# Ideia de home bonita') === 'ideia-de-home-bonita-2');
-    drive.put('n-ideia2', 'ideia-de-home-bonita-2.md', 'x', [VAULT]);
+    drive.put('n-ideia2', 'ideia-de-home-bonita-2.md', 'x', [ROOT_ID]);
     await App.refreshNoteIndex();
     check('... e -3 quando o -2 tambem existe', await App.suggestNoteName('# Ideia de home bonita') === 'ideia-de-home-bonita-3');
     check('a comparacao ignora maiuscula, como o link do Obsidian', await App.suggestNoteName('Zebra') === 'zebra-2');
@@ -3386,7 +3322,9 @@ async function scenario(title, block) {
     seedVault(drive);
     const d = w.document;
     const view = App.Editor._impl.view;
-    const original = '---\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\nantes\n## Ideia de home\nlinha dois\ndepois';
+    // Properties with dates: the extraction leaves them as they are, and the new note is born without any
+    const props = '---\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\n';
+    const original = `${props}antes\n## Ideia de home\nlinha dois\ndepois`;
     drive.put('O', 'origem.md', original, ['d-proj']);
     await App.openFile('O', 'origem.md');
     App.setMode('edit');
@@ -3406,14 +3344,14 @@ async function scenario(title, block) {
 
     const newNote = [...drive.files.values()].find(f => f.name === 'ideia-de-home.md');
     check('a nota nova foi criada na pasta da original', newNote && newNote.parents[0] === 'd-proj', newNote);
-    check('com as datas de nota nova em cima e o trecho inteiro embaixo',
-      newNote && /^---\ncreated: \d{4}-\d{2}-\d{2}\nupdated: \d{4}-\d{2}-\d{2}\n---\n\n## Ideia de home\nlinha dois$/.test(newNote.content), newNote && newNote.content);
+    check('o trecho inteiro, sem propriedades em cima',
+      newNote && /^## Ideia de home\nlinha dois$/.test(newNote.content), newNote && newNote.content);
     check('no editor o trecho virou link numa linha propria, e a linha seguinte ficou inteira',
-      bodyOf(App.getContent()) === 'antes\n[[ideia-de-home]]\ndepois', App.getContent());
+      App.getContent() === `${props}antes\n[[ideia-de-home]]\ndepois`, App.getContent());
     check('o cursor ficou logo depois do link',
       view.state.selection.main.head === App.getContent().indexOf('[[ideia-de-home]]') + '[[ideia-de-home]]'.length);
     check('a original foi salva sem esperar os 30 segundos',
-      bodyOf(drive.files.get('O').content) === 'antes\n[[ideia-de-home]]\ndepois' && !App.isDirty, drive.files.get('O').content);
+      drive.files.get('O').content === `${props}antes\n[[ideia-de-home]]\ndepois` && !App.isDirty, drive.files.get('O').content);
     const created = drive.log.findIndex(l => l.startsWith('POST') && l.includes('ideia-de-home.md'));
     check('a criacao veio antes do salvar da original', created >= 0 && created < drive.log.lastIndexOf('PATCH O'), drive.log);
     check('a nota nova esta nas recentes e no indice',
@@ -3421,7 +3359,7 @@ async function scenario(title, block) {
     check('o cabecalho diz Nota criada', App.els.saveStatus.textContent === 'Nota criada', App.els.saveStatus.textContent);
     App.Editor.undo();
     check('desfazer devolve o trecho pra original',
-      bodyOf(App.getContent()) === 'antes\n## Ideia de home\nlinha dois\ndepois', App.getContent());
+      App.getContent() === original, App.getContent());
   }
   });
 
@@ -3431,7 +3369,7 @@ async function scenario(title, block) {
     seedVault(drive);
     const view = App.Editor._impl.view;
     const text = 'um\nTrecho que sai\ndois';
-    drive.put('O', 'origem.md', text, [VAULT]);
+    drive.put('O', 'origem.md', text, [ROOT_ID]);
     await App.openFile('O', 'origem.md');
     App.setMode('edit');
     App.Editor.focus();
@@ -3837,7 +3775,7 @@ async function scenario(title, block) {
       drive.failWrites = false;
       await counter.tap();
       check('tocar de novo, com o Drive de volta: salva e so entao recarrega',
-        counter.reloads === 1 && !App.isDirty && bodyOf(drive.files.get('A').content) === 'versao 1 com o que ela escreveu',
+        counter.reloads === 1 && !App.isDirty && drive.files.get('A').content === 'versao 1 com o que ela escreveu',
         [counter.reloads, App._reloading, App.els.saveStatus.textContent, drive.files.get('A').content, App._log.slice(-4)]);
       marker = w.sessionStorage.getItem('drivenotes_reopen');
       const kept = JSON.parse(marker || 'null');
@@ -4226,7 +4164,7 @@ async function scenario(title, block) {
     const rows = (w) => [...w.document.querySelectorAll('#arrival-ul li')];
     const inbox = () => {
       const drive = makeDrive();
-      drive.put('media', '_media', '', [POS]); drive.files.get('media').mimeType = FOLDER;
+      drive.put('media', '_media', '', [ROOT_ID]); drive.files.get('media').mimeType = FOLDER;
       drive.put('I1', 'ideias-vault.md', '---\ncreated: 2026-09-20\nupdated: 2026-09-20\n---\n\n## Ideias\n\n- uma\n- duas\n', [INBOX]);
       drive.put('I2', 'CLAUDE.md', 'regras', [INBOX]);
       drive.put('I3', 'config-notebook.md', 'texto solto', [INBOX]);
@@ -4249,9 +4187,9 @@ async function scenario(title, block) {
         rows(w).map((li) => li.textContent.trim()));
       rows(w)[2].click();
       await until(() => drive.log.includes('PATCH I1'));
-      check('o item entrou no fim da nota, no formato da lista, e subiu na hora',
-        bodyOf(drive.files.get('I1').content) === '## Ideias\n\n- uma\n- duas\n- [Um vídeo](https://youtu.be/abc)\n',
-        JSON.stringify(bodyOf(drive.files.get('I1').content)));
+      check('o item entrou no fim da nota, no formato da lista, e subiu na hora, com as propriedades intactas',
+        drive.files.get('I1').content === '---\ncreated: 2026-09-20\nupdated: 2026-09-20\n---\n\n## Ideias\n\n- uma\n- duas\n- [Um vídeo](https://youtu.be/abc)\n',
+        JSON.stringify(drive.files.get('I1').content));
       const view = App.Editor._impl.view;
       check('a nota ficou no editor, com o cursor na linha vazia embaixo do item',
         w.document.body.dataset.view === 'edit' && view.state.selection.main.head === view.state.doc.length
@@ -4288,7 +4226,7 @@ async function scenario(title, block) {
       await until(() => drive.log.some((l) => l.startsWith('POST')));
       const born = [...drive.files.values()].find((f) => f.parents?.includes(INBOX) && /^\d{4}-\d{2}-\d{2}-\d{4}\.md$/.test(f.name));
       check('nota nova: nasce no _inbox, com nome de data e hora e o item dentro',
-        !!born && bodyOf(born.content) === '- uma ideia\n  em duas linhas\n', born && JSON.stringify(bodyOf(born.content)));
+        !!born && born.content === '- uma ideia\n  em duas linhas\n', born && JSON.stringify(born.content));
       await until(async () => (await App.ArrivalBox.get('a3')) === null);
       check('... e saiu da caixa', (await App.ArrivalBox.get('a3')) === null);
       check('... com uma escrita so, a da criacao, e nada por salvar', drive.count('POST') === 1 && drive.count('PATCH') === 0 && !App.isDirty,
@@ -4307,7 +4245,7 @@ async function scenario(title, block) {
       await until(async () => (await App.ArrivalBox.get('a7')) === null);
       const draft = App.listDrafts()[0];
       check('nota nova com o Drive falhando: o item fica num rascunho do aparelho, e so entao sai da caixa',
-        (await App.ArrivalBox.get('a7')) === null && !!draft && bodyOf(draft.content) === '- nao pode sumir\n' && App.isDirty,
+        (await App.ArrivalBox.get('a7')) === null && !!draft && draft.content === '- nao pode sumir\n' && App.isDirty,
         [draft, App.isDirty]);
     }
 
@@ -4421,7 +4359,7 @@ async function scenario(title, block) {
 
   await scenario('75. Compartilhar sem rede: a tela oferece nota nova, as fotos esperam, e abrir sem rede nao cai na tela', async () => {
   {
-    const TOKEN = { drivenotes_token: 'fake', drivenotes_token_expires: String(Date.now() + 3600e3), [`drivenotes_media_folder_${POS}`]: 'media' };
+    const TOKEN = { drivenotes_token: 'fake', drivenotes_token_expires: String(Date.now() + 3600e3), ['drivenotes_attachments']: 'media' };
     const { IDBFactory } = require('fake-indexeddb');
     const until = async (cond, limit = 4000) => {
       const end = Date.now() + limit;
@@ -4438,7 +4376,7 @@ async function scenario(title, block) {
     };
     const inbox = () => {
       const drive = makeDrive();
-      drive.put('media', '_media', '', [POS]); drive.files.get('media').mimeType = FOLDER;
+      drive.put('media', '_media', '', [ROOT_ID]); drive.files.get('media').mimeType = FOLDER;
       drive.put('I1', 'ideias-vault.md', 'texto', [INBOX]);
       return drive;
     };
@@ -4489,12 +4427,12 @@ async function scenario(title, block) {
       const kept = await App.ArrivalBox.get('o2');
       const draft = App.listDrafts()[0];
       check('nota nova sem rede: o texto entra na nota nova e fica num rascunho do aparelho',
-        w.document.body.dataset.view === 'edit' && bodyOf(App.getContent()) === '- sem rede\n' && !!draft && bodyOf(draft.content) === '- sem rede\n',
+        w.document.body.dataset.view === 'edit' && App.getContent() === '- sem rede\n' && !!draft && draft.content === '- sem rede\n',
         [w.document.body.dataset.view, App.getContent(), draft]);
       check('... a foto fica na caixa, sem o texto', !!kept && kept.photos.length === 1 && kept.title === '' && kept.url === ''
         && new TextDecoder().decode(kept.photos[0].bytes) === 'bytes-da-foto', kept);
-      check('... nenhum envio tentado, e a pasta _media lembrada continua', drive.log.length === 0 && w.localStorage.getItem(`drivenotes_media_folder_${POS}`) === 'media',
-        [drive.log, w.localStorage.getItem(`drivenotes_media_folder_${POS}`)]);
+      check('... nenhum envio tentado, e a pasta _media lembrada continua', drive.log.length === 0 && w.localStorage.getItem('drivenotes_attachments') === 'media',
+        [drive.log, w.localStorage.getItem('drivenotes_attachments')]);
       check('... o aviso diz que a foto espera a rede', App.els.saveStatus.textContent === 'Sem rede: a foto fica guardada e volta quando você abrir o app com rede',
         App.els.saveStatus.textContent);
       check('... e o log diz pra onde foi e o que ficou', logged(App, 'arrival -> new photos=1') && logged(App, 'arrival done sent=0/1 offline, photos kept'), App._log);
@@ -5215,7 +5153,7 @@ async function scenario(title, block) {
   }
   });
 
-  // ── Home: the vault tree (home-design) ──
+  // ── Home: the tree of the root (home-design) ──
   // (treeRows, treeButton and showHome are declared further up, next to seedVault: the navigation
   // scenarios reach their notes through the tree too)
   const makeDir = (drive, id, name, parent) => { drive.put(id, name, '', [parent]); drive.files.get(id).mimeType = FOLDER; };
@@ -5269,17 +5207,17 @@ async function scenario(title, block) {
     [li.querySelector('.search-name').textContent, li.querySelector('.search-where').textContent]);
   const searchSays = (d) => d.querySelector('#home-results .search-message')?.textContent || '';
   const searchCount = (d) => d.querySelector('#home-results .search-count')?.textContent || '';
-  // The vault of the search scenarios (what scenario 28 used to seed, before the folder screen left)
+  // The notes of the search scenarios (what scenario 28 used to seed, before the folder screen left)
   const seedSearch = (drive) => {
     makeDir(drive, 'd-cli', 'clientes', 'd-proj');
-    // A folder at the top of the Drive, outside the vault: no parent at all
+    // A folder at the top of the Drive, outside the root: no parent at all
     drive.put('d-fora', 'documentos', '', []);
     drive.files.get('d-fora').mimeType = FOLDER;
     drive.put('n-deep', 'Relatório do funil.md', 'texto sobre vendas', ['d-cli']);
     drive.put('n-text', 'reuniao.md', 'falamos do funil de conversão', ['d-10']);
     drive.put('x-out', 'Funil pessoal.md', 'x', ['d-fora']);
     drive.put('x-obs', 'funil-config.md', 'x', ['d-obs']);
-    drive.put('x-xlsx', 'Funil.xlsx', 'x', [VAULT]);
+    drive.put('x-xlsx', 'Funil.xlsx', 'x', [ROOT_ID]);
     drive.files.get('x-xlsx').mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
     drive.put('n-quote', "d'água.md", 'x', ['d-10']);
   };
@@ -5287,20 +5225,20 @@ async function scenario(title, block) {
   await scenario('H1. Home: a raiz na ordem do Obsidian, sem as pastas de sistema', async () => {
     const { App, drive, w } = await boot();
     seedVault(drive);
-    makeDir(drive, 'd-media', '_media', VAULT);
-    makeDir(drive, 'd-task', '_tasknotes', VAULT);
-    makeDir(drive, 'd-tpl', '_templates', VAULT);
-    makeDir(drive, 'd-html', '<b>negrito</b>', VAULT);
+    makeDir(drive, 'd-media', '_media', ROOT_ID);
+    makeDir(drive, 'd-task', '_tasknotes', ROOT_ID);
+    makeDir(drive, 'd-tpl', '_templates', ROOT_ID);
+    makeDir(drive, 'd-html', '<b>negrito</b>', ROOT_ID);
     const d = w.document;
     await showHome(App);
     check('pastas primeiro, ordem natural, sem .obsidian, sem imagem, .md sem extensao, sem as tres de sistema',
-      JSON.stringify(treeRows(d)) === JSON.stringify(['personal-os/*', 'vault/*', '_inbox/', '<b>negrito</b>/', '2-rascunho/', '10-areas/', '20-projetos/', 'Abacaxi', 'émile', 'lista.txt', 'zebra']), treeRows(d));
+      JSON.stringify(treeRows(d)) === JSON.stringify(['_inbox/', '<b>negrito</b>/', '2-rascunho/', '10-areas/', '20-projetos/', 'Abacaxi', 'émile', 'lista.txt', 'zebra']), treeRows(d));
     check('nome com < e > e texto, nao HTML', d.querySelectorAll('#tree-list b').length === 0);
     check('a arvore aparece e o Entrar some', !d.getElementById('tree').hidden && d.getElementById('tree-login').hidden);
     w.localStorage.setItem('drivenotes_show_system', '1');
     App.drawTree();
     check('com a chave ligada, as tres entram no lugar certo da ordem',
-      JSON.stringify(treeRows(d).slice(2, 7)) === JSON.stringify(['_inbox/', '_media/', '_tasknotes/', '_templates/', '<b>negrito</b>/']), treeRows(d));
+      JSON.stringify(treeRows(d).slice(0, 5)) === JSON.stringify(['_inbox/', '_media/', '_tasknotes/', '_templates/', '<b>negrito</b>/']), treeRows(d));
   });
 
   await scenario('H2. Home: a pasta abre no lugar, e a nota abre com um toque', async () => {
@@ -5339,7 +5277,6 @@ async function scenario(title, block) {
     seedVault(drive);
     const d = w.document;
     const messages = () => [...d.querySelectorAll('#tree-list .tree-message')].map((li) => li.textContent);
-    drive.seedRoots(); // personal-os with something in it: no "Pasta vazia" of its own among the messages
     // The two folders fail from the start, so the listings asked ahead fail too and nothing is kept of them
     const gate = gateFolders(w);
     gate.fail.add('d-10').add('d-proj');
@@ -5534,7 +5471,7 @@ async function scenario(title, block) {
     seedVault(drive);
     const d = w.document;
     await showHome(App);
-    check('o cabecalho diz dn, sem rotulo: as raizes se nomeiam na arvore', App.els.fileName.textContent === 'dn' && d.getElementById('home-label').textContent === '');
+    check('o cabecalho diz dn, sem rotulo', App.els.fileName.textContent === 'dn' && d.getElementById('home-label').textContent === '');
     check('as sobras da home antiga sairam', !d.querySelector('#welcome > p') && !d.querySelector('#welcome h2') && !d.querySelector('#welcome > .btn'));
     check('a barra de baixo: o campo de busca e o +', !!d.querySelector('.home-bar #home-search') && !!d.querySelector('.home-bar #welcome-new'));
     check('o + tem nome pra leitor de tela', d.getElementById('welcome-new').getAttribute('aria-label') === 'Nova nota');
@@ -5550,7 +5487,7 @@ async function scenario(title, block) {
   await scenario('H10. Home: o menu dos tres pontinhos', async () => {
     const { App, drive, w } = await boot({ watcher: true, seedStorage: { drivenotes_login_hint: 'conta@exemplo.com' } });
     seedVault(drive);
-    makeDir(drive, 'd-media', '_media', VAULT);
+    makeDir(drive, 'd-media', '_media', ROOT_ID);
     App._version = 'drivenotes-v64';
     const d = w.document;
     const menu = d.getElementById('menu-overlay');
@@ -5602,7 +5539,7 @@ async function scenario(title, block) {
   await scenario('H11. Home: o botao de pasta da nota aberta leva pra home', async () => {
     const { App, drive, w } = await boot({ watcher: true });
     seedVault(drive);
-    drive.put('L', 'com link.md', 'vai [[zebra]]', [VAULT]);
+    drive.put('L', 'com link.md', 'vai [[zebra]]', [ROOT_ID]);
     const d = w.document;
     await showHome(App);
     treeButton(d, 'com link').click(); await sleep(80);
@@ -5618,7 +5555,7 @@ async function scenario(title, block) {
     App.els.editorElement.value = 'editado';
     App.els.editorElement.dispatchEvent(new w.Event('input'));
     App.els.btnOpen.click(); await sleep(80); await App._saveChain;
-    check('com edicao pendente, salva antes de ir', bodyOf(drive.files.get('L').content) === 'editado' && d.body.dataset.view === 'welcome');
+    check('com edicao pendente, salva antes de ir', drive.files.get('L').content === 'editado' && d.body.dataset.view === 'welcome');
   });
 
   // ── Home: one level ahead of the taps, and the waiting in the diagnostics panel (v65) ──
@@ -5634,8 +5571,8 @@ async function scenario(title, block) {
     check('depois da raiz: as quatro pastas dela pedidas uma vez cada',
       ['d-proj', 'd-inbox', 'd-10', 'd-2'].every((id) => listsOf(drive, id) === 1), drive.log);
     check('... e as de dentro delas, nao', listsOf(drive, 'd-deep') === 0);
-    check('... nada disso foi pro aparelho: so as raizes guardadas',
-      JSON.stringify(Object.keys(JSON.parse(w.localStorage.getItem('drivenotes_tree_listings'))).sort()) === JSON.stringify([POS, VAULT].sort()));
+    check('... nada disso foi pro aparelho: so a raiz guardada',
+      JSON.stringify(Object.keys(JSON.parse(w.localStorage.getItem('drivenotes_tree_listings')))) === JSON.stringify([ROOT_ID]));
 
     treeButton(d, '20-projetos').click();
     check('toque em pasta ja listada: as de dentro saem na hora, sem esperar a atualizacao',
@@ -5649,7 +5586,7 @@ async function scenario(title, block) {
   await scenario('H13. Home: no maximo 4 idas por tras ao mesmo tempo, sem pedir duas vezes a mesma pasta', async () => {
     const { App, drive, w } = await boot();
     seedVault(drive);
-    for (let i = 1; i <= 6; i++) makeDir(drive, `d-x${i}`, `x${i}`, VAULT);
+    for (let i = 1; i <= 6; i++) makeDir(drive, `d-x${i}`, `x${i}`, ROOT_ID);
     const d = w.document;
     const gate = gateFolders(w);
     const inside = ['d-proj', 'd-inbox', 'd-10', 'd-2', ...[1, 2, 3, 4, 5, 6].map((i) => `d-x${i}`)];
@@ -5659,7 +5596,7 @@ async function scenario(title, block) {
     await sleep(40);
     check('dez pastas na raiz: quatro a caminho, seis na fila', App._tree.fetching.size === 4 && App._tree.ahead.length === 6 && gate.active === 4,
       { fetching: [...App._tree.fetching], ahead: App._tree.ahead, active: gate.active });
-    App.askAhead(VAULT);
+    App.askAhead(ROOT_ID);
     check('pedir de novo nao duplica nada', App._tree.fetching.size === 4 && App._tree.ahead.length === 6 && new Set(App._tree.ahead).size === 6);
 
     const waiting = App._tree.ahead[App._tree.ahead.length - 1];
@@ -5682,7 +5619,6 @@ async function scenario(title, block) {
     const d = w.document;
     const gate = gateFolders(w);
     gate.fail.add('d-10').add('d-proj');
-    drive.seedRoots(); // personal-os with something in it: its own "Pasta vazia" would be a message on screen
     await showHome(App);
     await until(() => aheadDone(App));
     check('as duas foram pedidas', gate.asked.includes('d-10') && gate.asked.includes('d-proj'), gate.asked);
@@ -5721,9 +5657,9 @@ async function scenario(title, block) {
   await scenario('H16. Home: so as pastas que aparecem sao pedidas (sistema escondida, corte do Ver mais)', async () => {
     const { App, drive, w } = await boot();
     seedVault(drive);
-    makeDir(drive, 'd-media', '_media', VAULT);
-    makeDir(drive, 'd-tpl', '_templates', VAULT);
-    makeDir(drive, 'd-big', 'grande', VAULT);
+    makeDir(drive, 'd-media', '_media', ROOT_ID);
+    makeDir(drive, 'd-tpl', '_templates', ROOT_ID);
+    makeDir(drive, 'd-big', 'grande', ROOT_ID);
     for (let i = 1; i <= 32; i++) makeDir(drive, `d-sub${i}`, `sub-${String(i).padStart(2, '0')}`, 'd-big');
     const d = w.document;
     await showHome(App);
@@ -5741,14 +5677,14 @@ async function scenario(title, block) {
   });
 
   await scenario('H17. Home: nenhuma ida por tras sem login, nenhuma abre a janela do Google', async () => {
-    const listings = JSON.stringify({ [VAULT]: [{ id: 'd-proj', name: '20-projetos', isFolder: true }, { id: 'd-10', name: '10-areas', isFolder: true }] });
+    const listings = JSON.stringify({ [ROOT_ID]: [{ id: 'd-proj', name: '20-projetos', isFolder: true }, { id: 'd-10', name: '10-areas', isFolder: true }] });
     {
       const { App, drive, w } = await boot({ auth: false, seedStorage: { drivenotes_tree_listings: listings } });
       seedVault(drive);
       const worker = fakeWorker(w, drive);
       const popup = fakePopup(App);
       await showHome(App);
-      App.askAhead(VAULT);
+      App.askAhead(ROOT_ID);
       await sleep(40);
       check('sem login: nada na fila, nada pedido ao Drive, nenhuma janela',
         aheadDone(App) && drive.count('LIST') === 0 && popup.count === 0 && worker.calls.length === 0, drive.log);
@@ -5761,7 +5697,7 @@ async function scenario(title, block) {
       const worker = fakeWorker(w, drive, { refresh_token: { status: 400, body: { error: 'invalid_grant' } } });
       const popup = fakePopup(App);
       App.initTree();
-      App.askAhead(VAULT);
+      App.askAhead(ROOT_ID);
       await until(() => aheadDone(App));
       check('refresh token morto: uma chamada so ao Worker, nenhuma listagem, nenhuma janela',
         worker.calls.length === 1 && drive.count('LIST') === 0 && popup.count === 0, { calls: worker.calls.length, log: drive.log });
@@ -5773,7 +5709,7 @@ async function scenario(title, block) {
       drivenotes_refresh_token: 'r1',
       drivenotes_tree_open: JSON.stringify(['d-proj', 'd-10']),
       drivenotes_tree_listings: JSON.stringify({
-        [VAULT]: [{ id: 'd-proj', name: '20-projetos', isFolder: true }, { id: 'd-10', name: '10-areas', isFolder: true }, { id: 'd-2', name: '2-rascunho', isFolder: true }],
+        [ROOT_ID]: [{ id: 'd-proj', name: '20-projetos', isFolder: true }, { id: 'd-10', name: '10-areas', isFolder: true }, { id: 'd-2', name: '2-rascunho', isFolder: true }],
         'd-proj': [], 'd-10': [],
       }),
     };
@@ -5832,7 +5768,7 @@ async function scenario(title, block) {
   await scenario('H20. Home: as duas setas so aparecem com pasta aberta na arvore', async () => {
     const { App, drive, w } = await boot();
     seedVault(drive);
-    makeDir(drive, 'd-media', '_media', VAULT);
+    makeDir(drive, 'd-media', '_media', ROOT_ID);
     const d = w.document;
     addStyles(w);
     const button = d.getElementById('btn-collapse');
@@ -5843,27 +5779,20 @@ async function scenario(title, block) {
       && button.querySelector('svg').getAttribute('stroke-width') === '2' && button.querySelectorAll('svg path').length === 2);
     await showHome(App);
     await until(() => aheadDone(App));
-    check('as raizes nascem abertas, e raiz aberta e pasta aberta: o botao aparece', collapseShown(w));
-    button.click();
     check('tudo fechado: o botao nao aparece', !collapseShown(w) && button.hidden);
-    treeButton(d, 'personal-os').click();
-    check('abrir uma raiz faz aparecer', collapseShown(w));
-    treeButton(d, 'personal-os').click();
-    check('fechar essa raiz pelo toque nela faz sumir', !collapseShown(w));
-    treeButton(d, 'vault').click();
     treeButton(d, '20-projetos').click();
-    treeButton(d, 'vault').click();
-    check('pasta aberta dentro de uma raiz fechada nao conta', !collapseShown(w) && App._tree.open.has('d-proj'));
+    check('abrir uma pasta faz aparecer', collapseShown(w));
+    treeButton(d, '20-projetos').click();
+    check('fechar essa pasta pelo toque nela faz sumir', !collapseShown(w));
 
     w.localStorage.setItem('drivenotes_show_system', '1');
-    treeButton(d, 'vault').click();
+    App.drawTree();
     treeButton(d, '_media').click(); await sleep(40);
     check('pasta de sistema aberta: aparece', collapseShown(w) && openRows(d).includes('_media/*'), treeRows(d));
     App.toggleSystemFolders();
-    check('desligar as pastas de sistema tira a pasta da vista e da conta do botao',
-      !openRows(d).includes('_media/*') && !App.openFoldersInView().includes('d-media'), treeRows(d));
+    check('desligar as pastas de sistema tira a pasta da vista, e o botao junto', !collapseShown(w) && !openRows(d).length, treeRows(d));
     App.toggleSystemFolders();
-    check('ligar de novo: a pasta volta aberta', collapseShown(w) && openRows(d).includes('_media/*'));
+    check('ligar de novo: a pasta volta aberta, e o botao tambem', collapseShown(w) && openRows(d).includes('_media/*'));
   });
 
   await scenario('H21. Home: o toque fecha tudo, em varios niveis, e a pasta reabre na hora', async () => {
@@ -5882,7 +5811,7 @@ async function scenario(title, block) {
     treeButton(d, 'mais-fundo').click();
     treeButton(d, '10-areas').click();
     await until(() => aheadDone(App) && App._tree.loading.size === 0);
-    check('as duas raizes e quatro pastas abertas, em tres niveis', JSON.stringify(openRows(d)) === JSON.stringify(['personal-os/*', 'vault/*', '10-areas/*', '20-projetos/*', 'fundo/*', 'mais-fundo/*']), openRows(d));
+    check('quatro pastas abertas, em tres niveis', JSON.stringify(openRows(d)) === JSON.stringify(['10-areas/*', '20-projetos/*', 'fundo/*', 'mais-fundo/*']), openRows(d));
     const scroller = App.homeScroller();
     scroller.scrollTop = 400;
     App.rememberHomeScroll();
@@ -5891,17 +5820,16 @@ async function scenario(title, block) {
     const seq = JSON.stringify([...App._tree.seq]);
 
     d.getElementById('btn-collapse').click();
-    check('nenhuma pasta aberta na tela, as raizes tambem fechadas', openRows(d).length === 0 && JSON.stringify(treeRows(d)) === JSON.stringify(['personal-os/', 'vault/']), treeRows(d));
+    check('nenhuma pasta aberta na tela', openRows(d).length === 0 && treeRows(d).includes('20-projetos/') && !treeRows(d).includes('fundo/'), treeRows(d));
     check('... nem no estado', App._tree.open.size === 0 && App._tree.shown.size === 0 && App._tree.ahead.length === 0 && App._treeTimes.waiting.size === 0);
     check('o botao some', !collapseShown(w));
     check('o aparelho guardou tudo fechado', w.localStorage.getItem('drivenotes_tree_open') === '[]'
-      && w.localStorage.getItem('drivenotes_tree_listings') === '{}');
+      && JSON.stringify(Object.keys(JSON.parse(w.localStorage.getItem('drivenotes_tree_listings')))) === JSON.stringify([ROOT_ID]));
     check('a rolagem volta pro comeco, e fica guardada', scroller.scrollTop === 0 && App._tree.scroll === 0 && w.localStorage.getItem('drivenotes_tree_scroll') === '0',
       { top: scroller.scrollTop, scroll: App._tree.scroll, kept: w.localStorage.getItem('drivenotes_tree_scroll') });
     check('o que foi listado continua em memoria, e o seq nao mudou', App._folderCache.size === cached && JSON.stringify([...App._tree.seq]) === seq);
     check('nada novo pedido: as pastas da raiz ja estao listadas', App._tree.fetching.size === 0 && App._tree.loading.size === 0);
 
-    treeButton(d, 'vault').click();
     treeButton(d, '20-projetos').click();
     check('reabrir desenha na hora, sem carregando e sem barrinhas', treeRows(d).includes('nota do projeto') && treeRows(d).includes('fundo/')
       && !d.querySelector('#tree-list .tree-loading') && !d.querySelector('#tree-list .tree-skeleton'), treeRows(d));
@@ -5925,20 +5853,19 @@ async function scenario(title, block) {
     App.homeScroller().scrollTop = 250;
     App.rememberHomeScroll();
     d.getElementById('btn-collapse').click();
-    treeButton(d, 'vault').click();
     treeButton(d, '10-areas').click();
     check('reaberta, a pasta grande volta aos 30 primeiros', inside().length === 30 && d.querySelectorAll('#tree-list .tree-more').length === 1, inside().length);
     d.getElementById('btn-collapse').click();
     await until(() => aheadDone(App) && App._tree.loading.size === 0);
 
     const kept = {};
-    for (const key of ['drivenotes_tree_open', 'drivenotes_tree_listings', 'drivenotes_tree_roots', 'drivenotes_tree_scroll']) kept[key] = w.localStorage.getItem(key);
+    for (const key of ['drivenotes_tree_open', 'drivenotes_tree_listings', 'drivenotes_tree_scroll']) kept[key] = w.localStorage.getItem(key);
     const again = await boot({ seedStorage: kept });
     seedVault(again.drive);
     addStyles(again.w);
     await showHome(again.App);
-    check('segunda abertura: tudo fechado, as raizes tambem', openRows(again.w.document).length === 0 && again.App._tree.open.size === 0
-      && JSON.stringify(treeRows(again.w.document)) === JSON.stringify(['personal-os/', 'vault/']), treeRows(again.w.document));
+    check('segunda abertura: tudo fechado', openRows(again.w.document).length === 0 && again.App._tree.open.size === 0 && treeRows(again.w.document).includes('10-areas/'),
+      treeRows(again.w.document));
     check('... a rolagem em zero', again.App._tree.scroll === 0 && again.App.homeScroller().scrollTop === 0);
     check('... e sem o botao', !collapseShown(again.w));
     await until(() => aheadDone(again.App));
@@ -5962,7 +5889,7 @@ async function scenario(title, block) {
       check('de volta na home, com a pasta aberta: aparece de novo', d.body.dataset.view === 'welcome' && collapseShown(w));
     }
     const listings = JSON.stringify({
-      [VAULT]: [{ id: 'd-proj', name: '20-projetos', isFolder: true }, { id: 'd-10', name: '10-areas', isFolder: true }],
+      [ROOT_ID]: [{ id: 'd-proj', name: '20-projetos', isFolder: true }, { id: 'd-10', name: '10-areas', isFolder: true }],
       'd-proj': [{ id: 'd-deep', name: 'fundo', isFolder: true }],
     });
     {
@@ -5971,12 +5898,10 @@ async function scenario(title, block) {
       addStyles(w);
       await showHome(App);
       check('sem login, com pasta aberta guardada: o Entrar no lugar, e nada de botao',
-        !w.document.getElementById('tree-login').hidden && App.openFoldersInView().includes('d-proj') && !collapseShown(w));
+        !w.document.getElementById('tree-login').hidden && App.openFoldersInView().length === 1 && !collapseShown(w));
     }
     {
-      // Both roots seen before and left closed: only the ghost and the folder inside a closed one are open
-      const { App, drive, w } = await boot({ seedStorage: { drivenotes_tree_open: JSON.stringify(['ghost', 'd-deep']), drivenotes_tree_listings: listings,
-        drivenotes_tree_roots: JSON.stringify([POS, VAULT]) } });
+      const { App, drive, w } = await boot({ seedStorage: { drivenotes_tree_open: JSON.stringify(['ghost', 'd-deep']), drivenotes_tree_listings: listings } });
       seedVault(drive);
       makeDir(drive, 'd-deep', 'fundo', 'd-proj');
       addStyles(w);
@@ -6013,153 +5938,53 @@ async function scenario(title, block) {
     await until(() => aheadDone(App) && App._tree.loading.size === 0);
     check('as respostas chegam e nada reabre', openRows(d).length === 0 && App._tree.open.size === 0 && !collapseShown(w), treeRows(d));
     check('... mas ficam guardadas em memoria', App._folderCache.get('d-proj')?.some((item) => item.name === 'chegou-depois.md') && App._folderCache.has('d-deep'));
-    treeButton(d, 'vault').click();
     treeButton(d, '20-projetos').click();
     check('a pasta reaberta ja mostra o que chegou', treeRows(d).includes('chegou-depois') && !d.querySelector('#tree-list .tree-loading'), treeRows(d));
     await until(() => aheadDone(App) && App._tree.loading.size === 0);
   });
 
-  // ── Home: two roots, personal-os above the vault (duas-raizes-design) ──
+  // ── Home: one root, its folders at the top of the tree (uma-raiz-design) ──
   const settled = (App) => until(() => aheadDone(App) && App._tree.loading.size === 0);
-  // The rows right under a root's row: the items of its branch, or its message, or its grey bars
-  const branchOf = (d, name) => treeButton(d, name)?.closest('li').nextElementSibling;
-  const treeKeys = (w) => Object.fromEntries(['drivenotes_tree_open', 'drivenotes_tree_listings', 'drivenotes_tree_roots', 'drivenotes_tree_scroll']
-    .map((key) => [key, w.localStorage.getItem(key)]).filter(([, value]) => value !== null));
 
-  await scenario('R1. Duas raizes: personal-os em cima, vault embaixo, cada uma com as pastas dela', async () => {
+  await scenario('U1. Uma raiz: a arvore abre direto nas pastas, sem linha de raiz', async () => {
     const { App, drive, w } = await boot();
-    seedVault(drive);
-    drive.seedRoots();
-    makeDir(drive, 'p-proj', 'projects', POS);
-    drive.put('p-solta', 'solta.md', 'x', [POS]);
+    seedVault(drive); // folders and notes right under ROOT_ID; its `_inbox` is the first folder in Obsidian order
     const d = w.document;
     await showHome(App);
     await settled(App);
-    check('as duas raizes abertas na primeira vez, cada uma com o que tem dentro, sem as pastas de sistema',
-      JSON.stringify(treeRows(d)) === JSON.stringify(['personal-os/*', '_inbox/', 'projects/', 'solta', 'vault/*',
-        '_inbox/', '2-rascunho/', '10-areas/', '20-projetos/', 'Abacaxi', 'émile', 'lista.txt', 'zebra']), treeRows(d));
-    check('cada raiz pediu a listagem dela, uma vez', listsOf(drive, POS) === 1 && listsOf(drive, VAULT) === 1, drive.log);
-    const row = treeButton(d, 'personal-os').closest('li');
-    check('a linha da raiz tem a cara das outras pastas', row.className === 'tree-row is-folder is-open' && !!row.querySelector('svg')
-      && row.parentElement.id === 'tree-list', row.className);
-    check('o aparelho lembra as raizes que ja viu', JSON.stringify(JSON.parse(w.localStorage.getItem('drivenotes_tree_roots')).sort()) === JSON.stringify([POS, VAULT].sort()));
-
-    treeButton(d, 'projects').click();
-    check('pasta da personal-os aberta: a trilha dela comeca pela raiz', JSON.stringify(App._folderTrails.get('p-proj')) === JSON.stringify(['personal-os', 'projects']),
-      App._folderTrails.get('p-proj'));
+    check('a primeira linha e uma pasta de dentro, nao a raiz', !treeRows(d).includes('personal-os/') && !treeRows(d).includes('personal-os/*') && treeRows(d)[0] === '_inbox/', treeRows(d));
     treeButton(d, '20-projetos').click();
-    check('... e a da vault, pela vault', JSON.stringify(App._folderTrails.get('d-proj')) === JSON.stringify(['vault', '20-projetos']));
+    check('a trilha de uma pasta de primeiro nivel nao tem a raiz', JSON.stringify(App._folderTrails.get('d-proj')) === JSON.stringify(['20-projetos']), App._folderTrails.get('d-proj'));
     await settled(App);
-
-    treeButton(d, 'vault').click();
-    check('fechar a vault: some o que tem dentro, a personal-os continua aberta',
-      treeRows(d).at(-1) === 'vault/' && treeRows(d)[0] === 'personal-os/*' && !treeRows(d).includes('zebra'), treeRows(d));
-    const again = await boot({ seedStorage: treeKeys(w) });
-    seedVault(again.drive);
-    again.drive.seedRoots();
-    makeDir(again.drive, 'p-proj', 'projects', POS);
-    await showHome(again.App);
-    const rows = treeRows(again.w.document);
-    check('reabrir o app: a vault continua fechada, a personal-os aberta, com a pasta aberta dentro',
-      rows[0] === 'personal-os/*' && rows.includes('projects/*') && rows.at(-1) === 'vault/' && !rows.includes('zebra'), rows);
-    await settled(again.App);
+    check('abrir uma pasta: as duas setas aparecem', !d.getElementById('btn-collapse').hidden);
+    App.collapseTree();
+    check('fechar tudo deixa as pastas de primeiro nivel na tela, e esconde as setas', treeRows(d)[0] === '_inbox/' && d.getElementById('btn-collapse').hidden, treeRows(d));
   });
 
-  await scenario('R2. Duas raizes: primeira abertura com o que a versao de uma raiz so guardou', async () => {
+  await scenario('U2. Primeira abertura depois da v68: a arvore desenha do guardado, sem linha de raiz', async () => {
     const kept = {
-      drivenotes_tree_open: JSON.stringify(['d-proj']),
+      drivenotes_tree_open: JSON.stringify([ROOT_ID, 'vault-id', 'd-proj']),
       drivenotes_tree_listings: JSON.stringify({
-        [VAULT]: [{ id: 'd-proj', name: '20-projetos', isFolder: true }, { id: 'n-z', name: 'zebra.md', isFolder: false }],
+        [ROOT_ID]: [{ id: 'd-proj', name: '20-projetos', isFolder: true }, { id: 'n-z', name: 'zebra.md', isFolder: false }],
+        'vault-id': [{ id: 'v-x', name: 'onryo', isFolder: true }],
         'd-proj': [{ id: 'n-sub', name: 'nota do projeto.md', isFolder: false }],
       }),
     };
     const { App, drive, w } = await boot({ seedStorage: kept });
     seedVault(drive);
-    drive.seedRoots();
     const d = w.document;
     // Nothing comes back from the Drive until the end: what is on screen is what the device kept
     const gate = gateFolders(w);
-    [POS, VAULT, 'd-proj'].forEach((id) => gate.holdFirst(id));
+    [ROOT_ID, 'd-proj'].forEach((id) => gate.holdFirst(id));
     await showHome(App);
-    check('as duas raizes nascem abertas, e a pasta que estava aberta continua', App._tree.open.has(POS) && App._tree.open.has(VAULT) && App._tree.open.has('d-proj'),
-      [...App._tree.open]);
-    check('a vault desenha do que estava guardado, antes de o Drive responder',
-      JSON.stringify(treeRows(d)) === JSON.stringify(['personal-os/*', 'vault/*', '20-projetos/*', 'nota do projeto', 'zebra']), treeRows(d));
-    check('a personal-os, nunca vista, mostra as barrinhas: nem pasta vazia, nem Entrar',
-      branchOf(d, 'personal-os').querySelectorAll('.tree-skeleton').length === 3 && !d.querySelector('#tree-list .tree-message')
-      && d.getElementById('tree-login').hidden && !d.getElementById('tree').hidden);
-    [POS, VAULT, 'd-proj'].forEach((id) => gate.release(id));
+    check('desenha do guardado antes de o Drive responder, sem a raiz e sem a vault',
+      JSON.stringify(treeRows(d)) === JSON.stringify(['20-projetos/*', 'nota do projeto', 'zebra']), treeRows(d));
+    check('... sem barrinhas e sem o Entrar', !d.querySelector('#tree-list .tree-skeleton') && d.getElementById('tree-login').hidden && !d.getElementById('tree').hidden);
+    check('a rolagem guardada tem o que restaurar', App.treeHasContent() && App._tree.restore === false);
+    [ROOT_ID, 'd-proj'].forEach((id) => gate.release(id));
     await settled(App);
-    check('o Drive responde e a personal-os se desenha', treeRows(d).slice(0, 2).join() === 'personal-os/*,_inbox/' && !d.querySelector('#tree-list .tree-skeleton'), treeRows(d));
+    check('o Drive responde e a arvore e a da raiz', treeRows(d).includes('20-projetos/*') && treeRows(d)[0] === '_inbox/' && !d.querySelector('#tree-list .tree-skeleton'), treeRows(d));
   });
-
-  await scenario('R3. Duas raizes: uma falha sozinha e a outra desenha', async () => {
-    const { App, drive, w } = await boot();
-    seedVault(drive);
-    drive.seedRoots();
-    const d = w.document;
-    const gate = gateFolders(w);
-    gate.fail.add(POS);
-    await showHome(App);
-    await settled(App);
-    const says = [...branchOf(d, 'personal-os').querySelectorAll('.tree-message')].map((li) => li.textContent);
-    check('a personal-os mostra o erro na linha dela', JSON.stringify(says) === JSON.stringify(['Erro ao carregar a pasta']), says);
-    check('a vault desenha normal', treeRows(d).includes('zebra') && treeRows(d).includes('vault/*'), treeRows(d));
-    check('... e o Entrar nao aparece', d.getElementById('tree-login').hidden && !d.getElementById('tree').hidden);
-    gate.fail.clear();
-    treeButton(d, 'personal-os').click();
-    await settled(App);
-    check('o toque na raiz que falhou tenta de novo, sem fechar', treeRows(d).slice(0, 2).join() === 'personal-os/*,_inbox/', treeRows(d));
-  });
-
-  await scenario('R4. Duas raizes: fechar todas fecha as raizes, e reabrir o app mantem fechadas', async () => {
-    const { App, drive, w } = await boot();
-    seedVault(drive);
-    drive.seedRoots();
-    const d = w.document;
-    addStyles(w);
-    await showHome(App);
-    await settled(App);
-    check('raiz aberta conta como pasta aberta: as duas setas aparecem', collapseShown(w));
-    d.getElementById('btn-collapse').click();
-    check('as duas linhas de raiz ficam, fechadas', JSON.stringify(treeRows(d)) === JSON.stringify(['personal-os/', 'vault/']), treeRows(d));
-    check('... e o botao some', !collapseShown(w) && d.getElementById('btn-collapse').hidden);
-    const again = await boot({ seedStorage: treeKeys(w) });
-    seedVault(again.drive);
-    again.drive.seedRoots();
-    addStyles(again.w);
-    await showHome(again.App);
-    check('reabrir o app: as duas continuam fechadas', JSON.stringify(treeRows(again.w.document)) === JSON.stringify(['personal-os/', 'vault/']),
-      treeRows(again.w.document));
-    await settled(again.App);
-    check('raiz fechada e nunca listada: pedida por tras, pra abrir na hora', again.App._folderCache.has(POS) && again.App._folderCache.has(VAULT));
-    check('... mas raiz fechada nao pede as pastas de dentro', listsOf(again.drive, 'd-proj') === 0 && listsOf(again.drive, INBOX) === 0, again.drive.log);
-    treeButton(again.w.document, 'vault').click();
-    check('o toque na raiz abre na hora, sem barrinhas', treeRows(again.w.document).includes('zebra') && !again.w.document.querySelector('#tree-list .tree-skeleton'),
-      treeRows(again.w.document));
-    await settled(again.App);
-  });
-
-  await scenario('R5. Duas raizes: a rolagem guardada espera a arvore ter o que mostrar', async () => {
-    const { App, drive, w } = await boot({ seedStorage: { drivenotes_tree_scroll: '240' } });
-    seedVault(drive);
-    drive.seedRoots();
-    const gate = gateFolders(w);
-    [POS, VAULT].forEach((id) => gate.holdFirst(id));
-    await showHome(App);
-    check('so as linhas das raizes na tela: a rolagem ainda nao foi dada por restaurada', App._tree.restore === true, App._tree.restore);
-    App.rememberHomeScroll();
-    check('... e sair da home agora nao grava zero por cima da guardada', w.localStorage.getItem('drivenotes_tree_scroll') === '240' && App._tree.scroll === 240,
-      [w.localStorage.getItem('drivenotes_tree_scroll'), App._tree.scroll]);
-    [POS, VAULT].forEach((id) => gate.release(id));
-    await settled(App);
-    check('com a listagem na tela, a rolagem foi restaurada', App._tree.restore === false);
-  });
-
-  const todayIs = () => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  };
 
   await scenario('R6. Nota nova: nasce em branco, no _inbox da personal-os, e sobe como foi escrita', async () => {
     const { App, drive, w } = await boot({ editor: true });
@@ -6176,30 +6001,6 @@ async function scenario(title, block) {
     check('o texto que sobe e exatamente o digitado', drive.files.get(born.id).content === 'ideia solta' && drive.count('POST') === 1,
       [drive.files.get(born.id).content, drive.log]);
     check('nada perguntado ao Drive pra saber onde o inbox mora', drive.count('GET meta') === 1, drive.log); // the conflict check of the save
-  });
-
-  await scenario('R7. Datas: a personal-os nunca carimba, a vault carimba como antes', async () => {
-    const { App, drive, type } = await boot();
-    seedVault(drive);
-    drive.seedRoots();
-    makeDir(drive, 'p-proj', 'projects', POS);
-    const save = async (id, name, text) => {
-      await App.openFile(id, name);
-      App.setMode('edit');
-      type(text);
-      await App.save({ manual: true });
-      return drive.files.get(id).content;
-    };
-    drive.put('P1', 'captura.md', 'sem data', [INBOX]);
-    const bare = await save('P1', 'captura.md', 'sem data, editada');
-    check('nota da personal-os sem updated: sobe igual', bare === 'sem data, editada', bare);
-    const dated = '---\ntype: projeto\nupdated: 2026-01-01\n---\n\ntexto';
-    drive.put('P2', 'job-hunting.md', dated, ['p-proj']);
-    const kept = await save('P2', 'job-hunting.md', dated + ', editado');
-    check('nota da personal-os com updated: a data nao muda', kept === dated + ', editado', kept);
-    drive.put('V1', 'velha.md', '---\nupdated: 2026-01-01\n---\n\ntexto', ['d-proj']);
-    const stamped = await save('V1', 'velha.md', '---\nupdated: 2026-01-01\n---\n\ntexto, editado');
-    check('nota da vault: o updated vira hoje', stamped === `---\nupdated: ${todayIs()}\n---\n\ntexto, editado`, stamped);
   });
 
   await scenario('R8. Rascunho de nota nova de antes da atualizacao: sobe pro inbox novo como esta', async () => {
@@ -6228,117 +6029,105 @@ async function scenario(title, block) {
     check('so as notas do inbox novo, sem README.md nem CLAUDE.md', JSON.stringify(names) === JSON.stringify(['ideias.md']), names);
   });
 
-  // Two notes, one in each root, and the _media of each: the photo and drawing scenarios of the two roots
-  const seedTwoMedia = (drive) => {
+  // The root's _media ('pos-media') and a stray folder of the same name elsewhere ('v-media'), as the real
+  // Drive still has, plus a note in the inbox and one in a folder of the root. The name search answers the
+  // newest first: `strayFirst` puts the stray one last, so a search by name answers it first.
+  const seedTwoMedia = (drive, { strayFirst = false } = {}) => {
     seedVault(drive);
+    const stray = () => makeDir(drive, 'v-media', '_media', 'outra-raiz');
+    if (!strayFirst) stray();
     drive.seedRoots();
-    makeDir(drive, 'v-media', '_media', VAULT);
+    if (strayFirst) stray();
     drive.put('P', 'captura.md', 'linha da personal-os', [INBOX]);
-    drive.put('V', 'velha.md', 'linha da vault', ['d-proj']);
+    drive.put('V', 'velha.md', 'linha da pasta', ['d-proj']);
   };
 
-  await scenario('R10. Foto em cada raiz: o _media de la, e o embed do jeito de la', async () => {
+  await scenario('U3. Foto e desenho: sempre no _media da raiz, sempre ![[_media/nome]]', async () => {
     const { App, drive, w } = await boot({ editor: true });
     w.URL.createObjectURL = () => 'blob:fake/local';
     seedTwoMedia(drive);
     const photo = () => new w.File(['bytes'], 'IMG_1.JPG', { type: 'image/jpeg' });
     const photos = () => [...drive.files.values()].filter((f) => /-foto-\d/.test(f.name));
-
     await App.openFile('P', 'captura.md');
     App.setMode('edit');
     await App.insertPhoto(photo());
-    const inPos = photos()[0];
-    check('nota da personal-os: a foto sobe pro _media de la', photos().length === 1 && inPos.parents[0] === 'pos-media', inPos);
-    check('... e a linha escrita tem o prefixo da personal-os', App.getContent() === `linha da personal-os\n![[_media/${inPos.name}]]\n`, App.getContent());
-    check('... e o aparelho lembra o _media dela pelo id da raiz', w.localStorage.getItem(`drivenotes_media_folder_${POS}`) === 'pos-media');
+    const taken = photos()[0];
+    check('a foto sobe pro _media da raiz', photos().length === 1 && taken.parents[0] === 'pos-media', taken);
+    check('a linha escrita tem o _media/', App.getContent() === `linha da personal-os\n![[_media/${taken.name}]]\n`, App.getContent());
+    check('o aparelho lembra o _media numa chave so', w.localStorage.getItem('drivenotes_attachments') === 'pos-media'
+      && !Object.keys(w.localStorage).some((k) => k.startsWith('drivenotes_media_folder')), Object.keys(w.localStorage));
     const asked = drive.log.length;
     App.setMode('preview');
     await sleep(40);
-    check('a leitura mostra a foto recem-tirada sem ir ao Drive (o prefixo cai antes de procurar)',
+    check('a leitura mostra a foto recem-tirada sem ir ao Drive (o _media/ cai antes de procurar)',
       App.els.previewContainer.querySelector('img')?.getAttribute('src') === 'blob:fake/local' && drive.log.length === asked, drive.log.slice(asked));
     await App.save({ manual: true });
 
+    // A drawing, from a note in another folder of the root: the same _media, the same shape of embed
+    const drawings = () => [...drive.files.values()].filter((f) => /-desenho-\d/.test(f.name));
     await App.openFile('V', 'velha.md');
     App.setMode('edit');
-    await App.insertPhoto(photo());
-    const inVault = photos().find((f) => f !== inPos);
-    check('nota da vault, na mesma sessao: a foto sobe pro _media da vault, nao pro lembrado da outra', inVault?.parents[0] === 'v-media', inVault);
-    check('... e a linha sai sem prefixo', App.getContent() === `linha da vault\n![[${inVault.name}]]\n`, App.getContent());
-    check('... cada raiz com o seu _media lembrado', w.localStorage.getItem(`drivenotes_media_folder_${VAULT}`) === 'v-media'
-      && w.localStorage.getItem(`drivenotes_media_folder_${POS}`) === 'pos-media');
+    w.document.querySelector('.toolbar-btn[data-sketch]').click();
+    const c = App.sketch.canvas;
+    for (const [type, x] of [['pointerdown', 20], ['pointermove', 60], ['pointerup', 60]]) {
+      c.dispatchEvent(new w.PointerEvent(type, { clientX: x, clientY: x, pointerId: 1, bubbles: true, cancelable: true }));
+    }
+    await App.sketchFinish();
+    const drawn = drawings()[0];
+    check('o desenho sobe pro _media da raiz, com o _media/ na linha', drawn?.parents[0] === 'pos-media'
+      && App.getContent() === `linha da pasta\n![[_media/${drawn.name}]]\n`, [drawn, App.getContent()]);
   });
 
-  await scenario('R11. Desenho em cada raiz: o _media de la, e o embed do jeito de la', async () => {
+  await scenario('U4. Dois _media no Drive: a foto vai pro que esta debaixo da raiz, mesmo que o outro venha primeiro', async () => {
     const { App, drive, w } = await boot({ editor: true });
-    w.URL.createObjectURL = () => 'blob:fake/sketch';
-    seedTwoMedia(drive);
-    const drawings = () => [...drive.files.values()].filter((f) => /-desenho-\d/.test(f.name));
-    const draw = async () => {
-      w.document.querySelector('.toolbar-btn[data-sketch]').click();
-      const c = App.sketch.canvas;
-      for (const [type, x] of [['pointerdown', 20], ['pointermove', 60], ['pointerup', 60]]) {
-        c.dispatchEvent(new w.PointerEvent(type, { clientX: x, clientY: x, pointerId: 1, bubbles: true, cancelable: true }));
-      }
-      await App.sketchFinish();
-    };
-
+    w.URL.createObjectURL = () => 'blob:fake/local';
+    seedTwoMedia(drive, { strayFirst: true });
+    const answered = await App.driveFindByName(['_media']);
+    check('a busca por nome devolve o _media de fora primeiro', answered[0]?.id === 'v-media', answered.map((f) => f.id));
     await App.openFile('P', 'captura.md');
     App.setMode('edit');
-    await draw();
-    const inPos = drawings()[0];
-    check('nota da personal-os: o desenho sobe pro _media de la', inPos?.parents[0] === 'pos-media', inPos);
-    check('... com o prefixo dela na linha', App.getContent() === `linha da personal-os\n![[_media/${inPos.name}]]\n`, App.getContent());
-    await App.save({ manual: true });
-
-    await App.openFile('V', 'velha.md');
-    App.setMode('edit');
-    await draw();
-    const inVault = drawings().find((f) => f !== inPos);
-    check('nota da vault: o desenho sobe pro _media da vault, sem prefixo', inVault?.parents[0] === 'v-media'
-      && App.getContent() === `linha da vault\n![[${inVault.name}]]\n`, [inVault, App.getContent()]);
+    await App.insertPhoto(new w.File(['bytes'], 'IMG_1.JPG', { type: 'image/jpeg' }));
+    const taken = [...drive.files.values()].find((f) => /-foto-\d/.test(f.name));
+    check('o pai e o _media da raiz', taken?.parents[0] === 'pos-media', taken);
   });
 
-  await scenario('R12. Nota fora das duas raizes: a foto vai pra primeira raiz, e salvar nao carimba', async () => {
+  await scenario('U5. Nota fora da raiz: abre, salva como esta, e a foto ainda vai pro _media da raiz', async () => {
     const { App, drive, w } = await boot({ editor: true });
     w.URL.createObjectURL = () => 'blob:fake/local';
     seedTwoMedia(drive);
-    drive.put('fora', 'documentos', '', []); drive.files.get('fora').mimeType = FOLDER;
-    drive.put('F', 'avulsa.md', 'fora de tudo', ['fora']);
-    await App.openFile('F', 'avulsa.md');
+    drive.put('F', 'fora.md', '---\nupdated: 2026-01-01\n---\n\nfora', ['outra-pasta']);
+    await App.openFile('F', 'fora.md');
+    check('a nota abre', App.currentFile?.id === 'F' && App.getContent() === '---\nupdated: 2026-01-01\n---\n\nfora', App.getContent());
     App.setMode('edit');
-    await App.insertPhoto(new w.File(['bytes'], 'IMG_2.JPG', { type: 'image/jpeg' }));
-    const up = [...drive.files.values()].find((f) => /-foto-\d/.test(f.name));
-    check('a foto sobe pro _media da personal-os, com o prefixo dela', up?.parents[0] === 'pos-media'
-      && App.getContent() === `fora de tudo\n![[_media/${up.name}]]\n`, [up, App.getContent()]);
+    await App.insertPhoto(new w.File(['bytes'], 'IMG_1.JPG', { type: 'image/jpeg' }));
+    const taken = [...drive.files.values()].find((f) => /-foto-\d/.test(f.name));
+    check('a foto foi pro _media da raiz', taken?.parents[0] === 'pos-media', taken);
     await App.save({ manual: true });
-    check('salvar nao carimba data, e nada estoura', drive.files.get('F').content === `fora de tudo\n![[_media/${up.name}]]\n`
-      && App.els.saveStatus.textContent === 'Salvo no Drive', [drive.files.get('F').content, App.els.saveStatus.textContent]);
+    check('o texto subiu como esta no editor, com o updated antigo', drive.files.get('F').content === App.getContent()
+      && /updated: 2026-01-01/.test(drive.files.get('F').content) && App.els.saveStatus.textContent === 'Salvo no Drive',
+      [drive.files.get('F').content, App.els.saveStatus.textContent]);
   });
 
-  await scenario('R13. Mesmo nome nas duas raizes: o link e a imagem ficam com a raiz da nota aberta', async () => {
+  await scenario('U6. Mesmo nome em mais de um lugar: a pasta da nota aberta, depois o .md, e a imagem do _media da raiz', async () => {
     const { App, drive } = await boot();
     seedTwoMedia(drive);
-    makeDir(drive, 'p-proj', 'projects', POS);
-    drive.put('fora', 'documentos', '', []); drive.files.get('fora').mimeType = FOLDER;
-    drive.put('F', 'avulsa.md', 'x', ['fora']);
-    drive.put('PL', 'nome.md', 'da personal-os', ['p-proj']);
-    drive.put('VL', 'nome.md', 'da vault', ['d-10']);
-    const linked = async (id, name) => {
+    makeDir(drive, 'p-proj', 'projects', ROOT_ID);
+    const linked = async (id, name, target) => {
       await App.openFile(id, name);
-      return (await App.findLinkedNote('nome')).note.id;
+      return (await App.findLinkedNote(target)).note.id;
     };
-    check('a partir de uma nota da vault: o da vault', await linked('V', 'velha.md') === 'VL');
-    check('a partir de uma nota da personal-os: o da personal-os', await linked('P', 'captura.md') === 'PL');
-    check('a partir de uma nota fora das duas: a ordem das raizes, personal-os primeiro', await linked('F', 'avulsa.md') === 'PL');
     drive.put('HERE', 'nome.md', 'do lado', ['d-proj']);
-    check('mesmo nome na pasta da nota aberta continua ganhando de tudo', await linked('V', 'velha.md') === 'HERE');
+    drive.put('AWAY', 'nome.md', 'longe', ['p-proj']); // newer: the Drive answers it first
+    check('duas notas de mesmo nome: a da pasta da nota aberta', await linked('V', 'velha.md', 'nome') === 'HERE');
+
+    drive.put('MD', 'outro.md', 'com extensao', ['p-proj']);
+    drive.put('BARE', 'outro', 'sem extensao', ['d-10']); // newer: the Drive answers it first
+    drive.files.get('BARE').mimeType = 'text/plain';
+    check('duas fora da pasta, uma .md e uma sem extensao: a .md', await linked('V', 'velha.md', 'outro') === 'MD');
 
     const image = (id, parent) => { drive.put(id, 'repetida.png', 'bin', [parent]); drive.files.get(id).mimeType = 'image/png'; };
-    image('IP', 'pos-media'); image('IV', 'v-media'); image('IX', 'outra-pasta');
-    await App.openFile('V', 'velha.md');
-    check('imagem de mesmo nome, nota da vault: a do _media da vault', (await App.findEmbedFile('repetida.png'))?.id === 'IV');
-    await App.openFile('P', 'captura.md');
-    check('... nota da personal-os: a do _media dela', (await App.findEmbedFile('repetida.png'))?.id === 'IP');
+    image('IP', 'pos-media'); image('IV', 'v-media'); // the stray one is newer: the Drive answers it first
+    check('imagem de mesmo nome em dois _media: a do _media da raiz', (await App.findEmbedFile('repetida.png'))?.id === 'IP');
   });
 
   // ── Home: the search, from the field at the bottom (v67) ──
@@ -6367,7 +6156,7 @@ async function scenario(title, block) {
 
     typeSearch(w, 'ab');
     check('duas letras: o nome responde na hora, sem ir ao Drive',
-      JSON.stringify(searchRows(d)) === JSON.stringify([['Abacaxi', 'vault']]) && searches() === 0, [searchRows(d), drive.log]);
+      JSON.stringify(searchRows(d)) === JSON.stringify([['Abacaxi', 'personal-os']]) && searches() === 0, [searchRows(d), drive.log]);
     typeSearch(w, 'EMILE');
     check('sem ligar pra acento nem maiuscula', searchRows(d)[0]?.[0] === 'émile', searchRows(d));
     typeSearch(w, 'unil');
@@ -6381,7 +6170,7 @@ async function scenario(title, block) {
     await sleep(200);
     check('uma busca so no Drive, depois que a digitacao para', searches() === 1, drive.log);
     check('nome primeiro, depois o que bate so no texto, cada um com a pasta',
-      JSON.stringify(searchRows(d)) === JSON.stringify([['Relatório do funil', 'vault / 20-projetos / clientes'], ['reuniao', 'vault / 10-areas · no texto']]), searchRows(d));
+      JSON.stringify(searchRows(d)) === JSON.stringify([['Relatório do funil', '20-projetos / clientes'], ['reuniao', '10-areas · no texto']]), searchRows(d));
     check('a contagem em cima', searchCount(d) === '2 notas', searchCount(d));
     check('ficam de fora: fora do vault, pasta com ponto, o que nao e nota', !d.getElementById('home-results').textContent.match(/pessoal|config|xlsx/i));
     check('nota que veio pelo nome nao repete quando o Drive responde', searchRows(d).filter(([name]) => name === 'Relatório do funil').length === 1);
@@ -6396,8 +6185,8 @@ async function scenario(title, block) {
     seedSearch(drive);
     // "Convocação" in decomposed form (NFD): the c and the a carry their marks as separate characters
     const nfd = 'Convocação';
-    drive.put('n-nfd', `${nfd} geral.md`, 'x', [VAULT]);
-    drive.put('n-html', '<b>negrito</b> forte.md', 'x', [VAULT]);
+    drive.put('n-nfd', `${nfd} geral.md`, 'x', [ROOT_ID]);
+    drive.put('n-html', '<b>negrito</b> forte.md', 'x', [ROOT_ID]);
     const d = w.document;
     w.__CONFIG.SEARCH_DELAY = 40;
     await showHome(App);

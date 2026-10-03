@@ -5,8 +5,8 @@ Object.assign(App, {
   // What another app shares into this one (manifest share_target, received by sw.js) and the shortcuts
   // on the app icon (manifest shortcuts). Both open the app with a parameter; see entradas-design in the vault.
 
-  /** The list item a share becomes, in the shape of the capture notes in the vault inbox: one "- " line,
-      no date (the note's `updated` has it). '' when nothing but photos arrived. */
+  /** The list item a share becomes, in the shape of the capture notes in the inbox: one "- " line,
+      no date. '' when nothing but photos arrived. */
   arrivalEntry({ title = '', text = '', url = '' } = {}) {
     title = String(title || '').trim();
     text = String(text || '').trim();

@@ -60,20 +60,18 @@ Abra o arquivo `app/core.js` e substitua os valores no topo:
 ```javascript
 const CONFIG = {
   CLIENT_ID: 'SEU_CLIENT_ID_AQUI.apps.googleusercontent.com',
-  ROOTS: [
-    { id: 'ID_DA_PASTA_RAIZ', name: 'vault', dates: true, embedPrefix: '' },
-  ],
+  ROOT: { id: 'ID_DA_PASTA_RAIZ', name: 'vault' },
   DEFAULT_FOLDER_ID: 'ID_DA_PASTA_DE_NOTAS_NOVAS',
-  DEFAULT_FOLDER_TRAIL: ['vault', '_inbox'],
+  DEFAULT_FOLDER_TRAIL: ['_inbox'],
   AUTH_URL: 'https://drive-notes-auth.SUA-CONTA.workers.dev/',
 };
 ```
 
 ## 6. IDs das pastas
 
-`ROOTS` são as pastas-raiz que a árvore da tela inicial mostra, na ordem da lista; a busca e a lista do `[[` enxergam todas juntas. Cada uma tem o ID da pasta e o nome que aparece na árvore. `dates` diz se as notas dali ganham `created` e `updated` nas propriedades; `embedPrefix` é o que vai antes do nome do arquivo no `![[...]]` de uma foto ou desenho (`'_media/'` escreve `![[_media/foto.jpg]]`, `''` escreve `![[foto.jpg]]`). Foto e desenho sobem pra pasta `_media` que fica direto dentro da raiz da nota.
+`ROOT` é a pasta-raiz das notas: a árvore da tela inicial abre direto nas pastas de dentro dela, e a busca e a lista do `[[` enxergam só o que está nela. `id` é o ID da pasta; `name` é o que a busca mostra como lugar de uma nota solta na raiz. Foto e desenho sobem pra pasta `_media` que fica direto dentro da raiz e entram na nota como `![[_media/foto.jpg]]`.
 
-`DEFAULT_FOLDER_ID` é onde as notas novas são criadas (a inbox), e `DEFAULT_FOLDER_TRAIL` é o caminho até ela a partir da raiz, começando pelo nome da raiz. Nota nova nasce com as duas datas se essa raiz tiver `dates: true`, e em branco se não tiver.
+`DEFAULT_FOLDER_ID` é onde as notas novas são criadas (a inbox), e `DEFAULT_FOLDER_TRAIL` é o caminho até ela a partir da raiz, sem o nome da raiz. Nota nova nasce em branco; salvar nunca mexe nas propriedades da nota.
 
 1. Abra o Google Drive no navegador
 2. Navegue até a pasta
@@ -124,7 +122,7 @@ Depois de ativar o GitHub Pages, volte ao Google Cloud Console:
 ## Troubleshooting
 
 - **"This app isn't verified"**: Normal pra app publicado sem verificação do Google. Clique "Advanced" → "Go to Drive Notes (unsafe)". É seguro: é o seu próprio app.
-- **Pasta não carrega**: Verifique se a Google Drive API está ativada e se o `id` de cada item de `ROOTS` é o ID da pasta certa.
+- **Pasta não carrega**: Verifique se a Google Drive API está ativada e se o `id` de `ROOT` é o ID da pasta certa.
 - **Botão voltar do celular não funciona**: na tela inicial, toque 5 vezes no título "Drive Notes". Abre um painel de diagnóstico com o modo de navegação em uso e o log dos últimos eventos.
 - **"Login expirou: toque em salvar" toda hora**: o app está sem refresh token. Confira no painel de diagnóstico (cinco toques no título) a linha "login": "renovável" é o esperado. "só token" ou "nenhum" com o Worker no ar: saia da conta e entre de novo.
 - **"Erro: salvo local" com rede**: o Worker pode estar fora ou a URL em AUTH_URL errada. Abra a URL do Worker no navegador: tem que responder "forbidden" (é o esperado pra um acesso sem o app).

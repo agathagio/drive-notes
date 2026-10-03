@@ -186,7 +186,6 @@ Object.assign(App, {
     const scroll = this.els.previewContainer.scrollTop;
     this.setContent(content);
     file.lastSavedContent = this.getContent();
-    file.driveContent = null;
     if (this.mode === 'preview') {
       this.renderPreview();
       this.els.previewContainer.scrollTop = scroll;
@@ -233,14 +232,11 @@ Object.assign(App, {
     const file = { id: null, name: name, draftKey: `${KEYS.DRAFT_PREFIX}new_${Date.now()}` };
     this.currentFile = file;
     this.syncHistory();
-    const today = this.today();
-    // A root that keeps no dates gets its new notes bare, like the captures already in its inbox
-    const dated = CONFIG.ROOTS.find((r) => r.name === CONFIG.DEFAULT_FOLDER_TRAIL[0])?.dates;
-    this.setContent(dated ? `---\ncreated: ${today}\nupdated: ${today}\n---\n\n${body}` : body);
+    this.setContent(body);
     this.showEditor();
     this.updateFileNameDisplay();
     this.focusEditor();
-    this.caretToEnd(); // typing starts below the properties, if any, and after what came in the body
+    this.caretToEnd(); // typing starts after what came in the body
     const born = this.getContent();
 
     // Create on Drive in background, not awaited, so the user can type immediately.
@@ -361,9 +357,6 @@ Object.assign(App, {
     }
 
     try {
-      // What goes to the Drive carries today's `updated`; the editor's text is left alone (see Dates)
-      const dated = await this.withDates(file, content);
-
       if (file.id) {
         // Someone else (the PC, another device) may have written the file since we opened it
         const remote = await this.driveGetFileMeta(file.id, 'modifiedTime');
@@ -380,16 +373,15 @@ Object.assign(App, {
           return false;
         }
 
-        const result = await this.driveUpdateFile(file.id, dated);
+        const result = await this.driveUpdateFile(file.id, content);
         file.modifiedTime = result.modifiedTime;
         // The device keeps what is now on the Drive: opening this note again needs no download
-        this.NoteStore.put({ id: file.id, name: file.name, parents: file.parents, modifiedTime: file.modifiedTime, content: dated });
+        this.NoteStore.put({ id: file.id, name: file.name, parents: file.parents, modifiedTime: file.modifiedTime, content });
       } else {
-        await this.createOnDrive(file, dated);
+        await this.createOnDrive(file, content);
       }
       // Saved text is compared with the editor's, so it is recorded the way the editor has it
       file.lastSavedContent = content;
-      file.driveContent = dated === content ? null : dated;
     } catch (e) {
       console.error('Drive save failed:', e);
       this.saveDraft(file, content);
@@ -427,7 +419,6 @@ Object.assign(App, {
       this.scheduleAutoSave();
     } else {
       this.clearDraft(file);
-      this.showSavedDates();
     }
   },
 
@@ -456,116 +447,22 @@ Object.assign(App, {
     if (this.currentFile === file) this.syncHistory(); // the entry can now name the note by ID
   },
 
-  // ── Dates (created / updated) ──
-  // A root with `dates` (the vault) keeps `created` and `updated` (YYYY-MM-DD) in the properties of its notes.
-  // A note born there gets both. After that, `updated` is set in the text on its way to the Drive, not in the
-  // editor: replacing the editor's text while the keyboard is up loses the caret and breaks dictation. The
-  // editor catches up when it is out of sight (showSavedDates). A root without `dates` (personal-os, where
-  // new notes are born) is never stamped: its notes are born bare and go up the way they were written.
+  // ── Where a folder sits ──
 
-  today() {
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  },
-
-  /** `content` the way it goes to the Drive. Throws only when the login is gone (err.code 'login_needed'),
-      since then the save cannot go through either; otherwise, when in doubt, the note is saved as it is. */
-  async withDates(file, content) {
-    const name = file.name.toLowerCase();
-    if (!name.endsWith('.md') || name.includes('-antigo') || CONFIG.NO_DATES_FILES.includes(name)) return content;
-
-    try {
-      const dated = await this.folderKeepsDates(file.parents?.[0] || CONFIG.DEFAULT_FOLDER_ID);
-      return dated ? this.stampDates(content, this.today(), !file.id) : content;
-    } catch (e) {
-      // A refresh token found dead here: going on would send the save with no token at all
-      if (e.code === 'login_needed') throw e;
-      console.warn('Could not tell where the note lives, dates left alone:', e);
-      return content;
-    }
-  },
-
-  /** True for a folder inside a root that keeps dates, and outside NO_DATES_FOLDERS. The inbox, where new
-      notes are born, never costs a request: its trail is known from the start (see _folderTrails). */
-  async folderKeepsDates(folderId) {
-    const trail = await this.folderTrail(folderId);
-    const root = trail && CONFIG.ROOTS.find((r) => r.name === trail[0]);
-    return !!root && root.dates && !trail.some((name) => CONFIG.NO_DATES_FOLDERS.includes(name));
-  },
-
-  /** The folder names from a root down to this folder, the root's own name first, or null outside every
-      root. A root answers [root.name]. Walks up the Drive, one request per level, once per folder, until
-      it reaches a folder already known (the roots and the inbox are known from the start). */
+  /** The folder names below the root down to this folder ([] for the root itself), or null outside it.
+      Walks up the Drive, one request per level, once per folder, until it reaches a folder already known
+      (the root and the inbox are known from the start). */
   folderTrail(folderId) {
     if (!this._folderTrails.has(folderId)) {
       const trail = this.driveGetFileMeta(folderId, 'name,parents').then(async (folder) => {
         const parent = folder.parents?.[0];
-        const above = parent ? await this.folderTrail(parent) : null; // top of the Drive: not in a root
+        const above = parent ? await this.folderTrail(parent) : null; // top of the Drive: not in the root
         return above && [...above, folder.name];
       });
       this._folderTrails.set(folderId, trail);
       trail.catch(() => this._folderTrails.delete(folderId));
     }
     return this._folderTrails.get(folderId);
-  },
-
-  /** The CONFIG.ROOTS entry a folder sits under, or null outside every root */
-  async rootOf(folderId) {
-    const trail = await this.folderTrail(folderId);
-    return (trail && CONFIG.ROOTS.find((r) => r.name === trail[0])) || null;
-  },
-
-  /** The root of the open note. A note not on the Drive yet is in the inbox; one outside every root
-      borrows the first root, so a photo still has a folder to go to. */
-  async currentRoot() {
-    const folder = this.currentFile?.parents?.[0] || CONFIG.DEFAULT_FOLDER_ID;
-    return (await this.rootOf(folder).catch(() => null)) || CONFIG.ROOTS[0];
-  },
-
-  /** Set `updated` to `today` in the note's properties, adding the line (or the whole block) when missing.
-      `created` is only ever added to a note that is being created: an old note never gets an invented one. */
-  stampDates(content, today, isNew) {
-    const bom = content.startsWith('﻿') ? '﻿' : '';
-    const text = content.slice(bom.length);
-    const eol = text.includes('\r\n') ? '\r\n' : '\n';
-    const lines = text.split(/\r?\n/);
-    const updated = `updated: ${today}`;
-
-    if (lines[0] !== '---') {
-      const props = isNew ? [`created: ${today}`, updated] : [updated];
-      return bom + ['---', ...props, '---', '', ...lines].join(eol);
-    }
-
-    const end = lines.indexOf('---', 1);
-    if (end === -1) return content;
-    const props = lines.slice(1, end);
-    // A leading `---` with no YAML under it is a horizontal rule, not properties
-    const isYaml = props.every((l) => l.trim() === '' || /^\s*#/.test(l) || /^\s+\S/.test(l) || /^\s*- /.test(l) || /^[^\s:#][^:]*:(\s|$)/.test(l));
-    if (!isYaml) return content;
-
-    const needsCreated = isNew && !props.some((l) => /^created:/.test(l));
-    let at = props.findIndex((l) => /^updated:/.test(l));
-    if (at !== -1 && props[at].trim() === updated && !needsCreated) return content;
-
-    if (at === -1) at = props.push(updated) - 1;
-    else props[at] = updated;
-    if (needsCreated) props.splice(at, 0, `created: ${today}`);
-    return bom + ['---', ...props, ...lines.slice(end)].join(eol);
-  },
-
-  /** Bring the editor up to the dates that went to the Drive. Only in reading view, with nothing unsaved. */
-  showSavedDates() {
-    const file = this.currentFile;
-    if (!file || !file.driveContent || this.isDirty || this.mode !== 'preview') return;
-
-    if (this.getContent() === file.lastSavedContent) {
-      this.setContent(file.driveContent);
-      file.lastSavedContent = this.getContent();
-      const shown = this.els.previewContainer.querySelector('details.frontmatter pre');
-      if (shown) shown.textContent = this.splitFrontmatter(this.getContent()).frontmatter;
-    }
-    file.driveContent = null;
   },
 
   // ── Drafts (localStorage) ──

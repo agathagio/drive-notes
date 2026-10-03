@@ -101,7 +101,7 @@ Object.assign(App, {
     return new RegExp(`(\\[\\[)${escaped}(?:\\.md)?(?=[\\]#|])`, 'gi');
   },
 
-  /** The vault notes whose text links to the note called `name`, each with its text as downloaded and
+  /** The notes whose text links to the note called `name`, each with its text as downloaded and
       the modifiedTime read BEFORE the download (the conflict check of whoever writes it back).
       The Drive's full-text search brings every file with the word, in any form: only a real link counts. */
   async findLinkingNotes(name, { exceptId = null } = {}) {
@@ -237,8 +237,8 @@ Object.assign(App, {
     document.body.classList.toggle('has-selection', hasText);
   },
 
-  /** The name a stretch suggests for its own note: its first line with text in it, in the vault's
-      kebab-case (the same rule as the photos' names), made free against the vault with -2, -3. With
+  /** The name a stretch suggests for its own note: its first line with text in it, in the notes'
+      kebab-case (the same rule as the photos' names), made free against the other notes with -2, -3. With
       nothing left of that line (only symbols), the dated name of a new note. Without .md. */
   async suggestNoteName(text) {
     const first = text.split('\n').find(line => line.trim()) || '';
@@ -249,7 +249,7 @@ Object.assign(App, {
     return name;
   },
 
-  /** The vault's note names, lowercased and without .md: what a new note must not repeat, because the
+  /** The note names of the index, lowercased and without .md: what a new note must not repeat, because the
       app finds a note by its name and a repeated one would make the link ambiguous. Case does not
       count, as in the Obsidian's links. With no index to be had (no network, no login), an empty set:
       the name goes unchecked rather than the extraction being refused. */
@@ -308,8 +308,7 @@ Object.assign(App, {
     if (isCurrent()) this.setSaveStatus('saving', 'Criando nota...');
     try {
       // Through the write queue, behind whatever it holds (the original's own creation, if it is new).
-      // The dates come the way of any save: created and updated only in a folder that keeps them.
-      await this.enqueue(async () => this.createOnDrive(note, await this.withDates(note, stretch.text)));
+      await this.enqueue(async () => this.createOnDrive(note, stretch.text));
     } catch (e) {
       console.error('Extract failed:', e);
       if (isCurrent()) this.setSaveStatus('error', 'Erro ao criar a nota, o trecho ficou');

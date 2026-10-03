@@ -1,17 +1,17 @@
-// Drive Notes: the home screen, which is the vault tree. Extends App (see app/core.js).
+// Drive Notes: the home screen, which is the tree of the root folder. Extends App (see app/core.js).
 
 const TREE_CHEVRON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>';
 
 Object.assign(App, {
   // ── Getting here ──
 
-  /** The folder button of an open note. The vault is the home screen, and the home screen is the bottom
+  /** The folder button of an open note. The root's tree is the home screen, and the home screen is the bottom
       of the back stack: nothing is left behind it, so "back" from here leaves the app. */
   openHome() {
     this.navStack = [];
     this.fwdStack = [];
     this._pending = null;
-    // The folder button asks for the vault: a search left open behind the note is forgotten
+    // The folder button asks for the tree: a search left open behind the note is forgotten
     this.resetHomeSearch();
     this.goHome();
     this.armWatcher();
@@ -59,7 +59,7 @@ Object.assign(App, {
     this.drawTree();
   },
 
-  // ── The vault tree ──
+  // ── The tree ──
   // Folders open in place, the way Obsidian's file tree does. Opening one is not a navigation: nothing
   // goes on the back stack, so "back" on the home screen still leaves the app.
   //
@@ -91,18 +91,6 @@ Object.assign(App, {
   initTree() {
     const open = this.readJson(KEYS.TREE_OPEN, []);
     this._tree.open = new Set(Array.isArray(open) ? open.filter((id) => typeof id === 'string') : []);
-    // A root this device has never seen starts open. After that, open or closed is the user's. Both
-    // kept at once: a root marked as seen but not kept as open would be born closed on the next opening,
-    // if this one ended before any listing got to save the tree.
-    const seen = this.readJson(KEYS.TREE_ROOTS, []);
-    const known = new Set(Array.isArray(seen) ? seen : []);
-    for (const root of CONFIG.ROOTS) if (!known.has(root.id)) this._tree.open.add(root.id);
-    try {
-      localStorage.setItem(KEYS.TREE_OPEN, JSON.stringify([...this._tree.open]));
-      localStorage.setItem(KEYS.TREE_ROOTS, JSON.stringify(CONFIG.ROOTS.map((r) => r.id)));
-    } catch (e) {
-      console.warn('The home tree could not be kept:', e);
-    }
     const kept = this.readJson(KEYS.TREE_LISTINGS, {});
     for (const [id, items] of Object.entries(kept && typeof kept === 'object' ? kept : {})) {
       if (!Array.isArray(items) || this._folderCache.has(id)) continue;
@@ -111,12 +99,13 @@ Object.assign(App, {
     this._tree.scroll = Number(localStorage.getItem(KEYS.TREE_SCROLL)) || 0;
   },
 
-  /** Keep the open folders and what is in view. A full or blocked storage only costs the memory. */
+  /** Keep the open folders and what is in view, the root's listing among it. A full or blocked storage
+      only costs the memory. */
   saveTree() {
     try {
       localStorage.setItem(KEYS.TREE_OPEN, JSON.stringify([...this._tree.open]));
       const kept = {};
-      for (const id of this.openFoldersInView()) {
+      for (const id of [CONFIG.ROOT.id, ...this.openFoldersInView()]) {
         const items = this._folderCache.get(id);
         if (items) kept[id] = items;
       }
@@ -138,8 +127,9 @@ Object.assign(App, {
     return items.filter((item) => !(item.isFolder && CONFIG.HIDDEN_FOLDERS.includes(item.name)));
   },
 
-  /** The open folders that are really on screen, the open roots first among them: open ones reached from
-      an open root through open ones. A folder that left the Drive, or whose parent is closed, is not among them. */
+  /** The open folders that are really on screen: open ones reached from the root through open ones. The
+      root itself is not among them: it is the floor, never open or closed. A folder that left the Drive,
+      or whose parent is closed, is not among them either. */
   openFoldersInView() {
     const found = [];
     const walk = (id, above) => {
@@ -149,19 +139,14 @@ Object.assign(App, {
         walk(item.id, [...above, item.id]);
       }
     };
-    for (const root of CONFIG.ROOTS) {
-      if (!this._tree.open.has(root.id)) continue;
-      found.push(root.id);
-      walk(root.id, [root.id]);
-    }
+    walk(CONFIG.ROOT.id, [CONFIG.ROOT.id]);
     return found;
   },
 
-  /** Whether the tree has something to show besides the root rows, which are always there: a listing of
-      an open root, or no root open at all. Until then the screen has no height to scroll back to. */
+  /** Whether the tree has something to show: the root's listing, kept or fresh. Without it the screen
+      has no height to scroll back to. */
   treeHasContent() {
-    const open = CONFIG.ROOTS.filter((r) => this._tree.open.has(r.id));
-    return !open.length || open.some((r) => this._folderCache.has(r.id));
+    return this._folderCache.has(CONFIG.ROOT.id);
   },
 
   /** What scrolls on the home screen */
@@ -171,8 +156,7 @@ Object.assign(App, {
 
   /** Called right before the home screen is left, or the app goes to the background. Only while the
       tree is what the screen shows: with the search in its place the scroller is hidden and reads 0,
-      and with no row drawn yet (the app opened straight into a note), or only the root rows waiting on
-      the Drive, there is nothing to remember. */
+      and with no listing of the root yet (the app opened straight into a note) there is nothing to remember. */
   rememberHomeScroll() {
     if (document.body.dataset.view !== 'welcome' || this._homeSearch.open) return;
     if (!document.querySelector('#tree-list .tree-row') || !this.treeHasContent()) return;
@@ -216,15 +200,8 @@ Object.assign(App, {
     this.showTreeLogin(!signedIn);
     if (!signedIn) return;
     this.drawTree();
+    this.loadTreeFolder(CONFIG.ROOT.id);
     this.openFoldersInView().forEach((id) => this.loadTreeFolder(id));
-    // A closed root never listed waits in the queue ahead, so the tap that opens it draws at once
-    if (!this.canRenewQuietly()) return;
-    const tree = this._tree;
-    for (const root of CONFIG.ROOTS) {
-      if (tree.open.has(root.id) || this._folderCache.has(root.id) || tree.fetching.has(root.id) || tree.ahead.includes(root.id)) continue;
-      tree.ahead.push(root.id);
-    }
-    this.pumpAhead();
   },
 
   /** The "Entrar" button: a tap, the only moment the login popup is allowed to open */
@@ -268,8 +245,8 @@ Object.assign(App, {
       this._folderCache.set(folderId, items);
       this.saveTree();
       this.askAhead(folderId);
-    } else if (loginNeeded && !CONFIG.ROOTS.some((r) => this._folderCache.has(r.id))) {
-      // No root was ever listed on this device: the tree has nothing to show but the "Entrar" button
+    } else if (loginNeeded && !this._folderCache.has(CONFIG.ROOT.id)) {
+      // The root was never listed on this device: the tree has nothing to show but the "Entrar" button
       this.showTreeLogin(true);
       return;
     } else if (!this._folderCache.has(folderId)) {
@@ -295,15 +272,15 @@ Object.assign(App, {
   // Each folder opened for the first time used to be a trip to the Drive begun by the tap, half a second
   // to more than one on the phone, with grey bars meanwhile. Now, once a folder is listed (or opened from
   // what is kept), the folders the tree shows inside it are asked for behind the user's back. One level
-  // only: what arrives this way asks for nothing more, or the app would walk the whole vault.
+  // only: what arrives this way asks for nothing more, or the app would walk the whole root.
 
   /** Queue the folders shown inside `folderId` that the app has never listed. Only a folder on screen
       counts, and only what it shows: hidden system folders and whatever sits past "Ver mais" stay out. */
   askAhead(folderId) {
     const tree = this._tree;
     if (!this.canRenewQuietly()) return;
-    // A closed root is not in view either: it asks for nothing inside it
-    if (!this.openFoldersInView().includes(folderId)) return;
+    // The root is always in view; a folder is only while it is open under open ones
+    if (folderId !== CONFIG.ROOT.id && !this.openFoldersInView().includes(folderId)) return;
     const items = this.treeItems(folderId) || [];
     for (const item of items.slice(0, tree.shown.get(folderId) || CONFIG.TREE_PAGE)) {
       if (!item.isFolder || this._folderCache.has(item.id) || tree.loading.has(item.id)
@@ -361,8 +338,9 @@ Object.assign(App, {
       this._treeTimes.waiting.delete(item.id);
     } else {
       tree.open.add(item.id);
-      // The tree only walks down from the roots, so it knows where this folder sits without asking
-      if (!this._folderTrails.has(item.id)) this._folderTrails.set(item.id, [...folder.path, folder.name, item.name]);
+      // The tree only walks down from the root, so it knows where this folder sits without asking.
+      // The trail holds the names below the root: the root's own name never goes in.
+      if (!this._folderTrails.has(item.id)) this._folderTrails.set(item.id, [...folder.path, ...(folder.id === CONFIG.ROOT.id ? [] : [folder.name]), item.name]);
       if (this._folderCache.has(item.id)) this.noteTreeTap(item.name, 0, false);
       else this._treeTimes.waiting.set(item.id, { name: item.name, at: Date.now() });
       this.loadTreeFolder(item.id);
@@ -397,15 +375,12 @@ Object.assign(App, {
     const scroller = this.homeScroller();
     const top = this._tree.restore ? this._tree.scroll : scroller.scrollTop;
     list.innerHTML = '';
-    // The roots are the rows of a top level of their own, drawn like any folder. Each starts its own
-    // `above`: a folder never opens inside itself, and neither does a root.
-    const level = { id: null, name: '', path: [] };
-    for (const root of CONFIG.ROOTS) {
-      list.appendChild(this.treeRow({ id: root.id, name: root.name, isFolder: true }, level));
-      if (this._tree.open.has(root.id)) this.treeBranch(list, { id: root.id, name: root.name, path: [] }, [root.id]);
-    }
+    // The tree starts at the folders inside the root: no row of its own. `above` starts with it, so a
+    // folder never opens inside itself.
+    const root = { id: CONFIG.ROOT.id, name: CONFIG.ROOT.name, path: [] };
+    this.drawTreeLevel(list, root, [root.id]);
     scroller.scrollTop = top;
-    // The root rows are always there: only a listing under them gives the screen its height back
+    // Only the root's listing gives the screen its height back
     if (this.treeHasContent()) this._tree.restore = false;
     this.noteTreeWaits();
     this.drawCollapseButton();
@@ -477,7 +452,7 @@ Object.assign(App, {
     for (const item of items.slice(0, shown)) {
       list.appendChild(this.treeRow(item, folder));
       if (!item.isFolder || !this._tree.open.has(item.id) || above.includes(item.id)) continue;
-      this.treeBranch(list, { id: item.id, name: item.name, path: [...folder.path, folder.name] }, [...above, item.id]);
+      this.treeBranch(list, { id: item.id, name: item.name, path: folder.id === CONFIG.ROOT.id ? [] : [...folder.path, folder.name] }, [...above, item.id]);
     }
     if (items.length > shown) list.appendChild(this.treeMore(folder, items.length - shown, shown));
   },

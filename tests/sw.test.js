@@ -24,8 +24,8 @@ if (COMMIT) console.log(`(controle: servindo o app do commit ${COMMIT})`);
 const DEBUG_PORT = 9336;
 const PORT = 8336;
 const ORIGIN = `http://127.0.0.1:${PORT}`;
-// The vault root (an entry of CONFIG.ROOTS): its notes keep their dates, as they did when it was the only root
-const VAULT = /id: '([^']+)', name: 'vault'/.exec(appSource())[1];
+// The root the app shows (CONFIG.ROOT): the fake notes sit right inside it
+const ROOT_ID = /ROOT: \{ id: '([^']+)'/.exec(appSource())[1];
 
 // The version the server is publishing. A deploy is changing this number.
 let version = 1;
@@ -192,7 +192,7 @@ const EVERY_DOCUMENT = `(() => {
 
     console.log('4. Nota com texto por salvar: nunca recarrega; o aviso salva, recarrega e reabre a mesma nota');
     {
-      await js(`localStorage.setItem('__drive', JSON.stringify({ A: { id: 'A', name: 'a.md', parents: [${JSON.stringify(VAULT)}], modifiedTime: '2026-09-22T10:00:00.000Z', content: 'versao 1' } })); 'ok'`, false);
+      await js(`localStorage.setItem('__drive', JSON.stringify({ A: { id: 'A', name: 'a.md', parents: [${JSON.stringify(ROOT_ID)}], modifiedTime: '2026-09-22T10:00:00.000Z', content: 'versao 1' } })); 'ok'`, false);
       await js(`App.navigateTo('A', 'a.md')`);
       await waitFor(`App.currentFile?.id === 'A' && document.body.dataset.view === 'preview'`, 5000);
       await js(`App.setMode('edit');
@@ -238,7 +238,7 @@ const EVERY_DOCUMENT = `(() => {
       })()`, false);
       const long = Array.from({ length: 60 }, (_, i) => `paragrafo ${i} ` + 'texto '.repeat((i % 7) * 6)).join('\n\n');
       await js(`const d = JSON.parse(localStorage.getItem('__drive'));
-        d.L = { id: 'L', name: 'longa.md', parents: [${JSON.stringify(VAULT)}], modifiedTime: '2026-09-22T11:00:00.000Z', content: ${JSON.stringify(long)} };
+        d.L = { id: 'L', name: 'longa.md', parents: [${JSON.stringify(ROOT_ID)}], modifiedTime: '2026-09-22T11:00:00.000Z', content: ${JSON.stringify(long)} };
         localStorage.setItem('__drive', JSON.stringify(d)); 'ok'`, false);
       await js(`App.navigateTo('L', 'longa.md')`);
       await waitFor(`App.currentFile?.id === 'L' && document.body.dataset.view === 'preview'`, 5000);
@@ -363,7 +363,7 @@ const EVERY_DOCUMENT = `(() => {
       // In this wide window a short paragraph is a single line: 200 of them (399 lines) give the editor room to scroll
       const long = Array.from({ length: 200 }, (_, i) => `linha ${i}`).join('\n\n');
       await js(`const d = JSON.parse(localStorage.getItem('__drive'));
-        d.E = { id: 'E', name: 'editada.md', parents: [${JSON.stringify(VAULT)}], modifiedTime: '2026-09-22T12:00:00.000Z', content: ${JSON.stringify(long)} };
+        d.E = { id: 'E', name: 'editada.md', parents: [${JSON.stringify(ROOT_ID)}], modifiedTime: '2026-09-22T12:00:00.000Z', content: ${JSON.stringify(long)} };
         localStorage.setItem('__drive', JSON.stringify(d)); 'ok'`, false);
       await js(`App.navigateTo('E', 'editada.md')`);
       await waitFor(`App.currentFile?.id === 'E' && document.body.dataset.view === 'preview'`, 5000);

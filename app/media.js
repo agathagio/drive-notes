@@ -93,33 +93,30 @@ Object.assign(App, {
     return picked.length;
   },
 
-  /** Shrink, upload to the attachment folder of the note's root, and only then write ![[name]] into the
-      note, with the root's prefix: a failed upload leaves no broken embed behind. Answers whether the
-      queue can carry on. */
+  /** Shrink, upload to the attachment folder, and only then write ![[_media/name]] into the note: a
+      failed upload leaves no broken embed behind. Answers whether the queue can carry on. */
   async insertPhoto(picked, taken, status = 'Enviando foto...') {
     const file = this.currentFile;
     this.setSaveStatus('saving', status);
 
     let name;
-    let root = null;
     try {
       await this.ensureAuth();
-      root = await this.currentRoot();
-      const folderId = await this.getMediaFolderId(root);
+      const folderId = await this.getMediaFolderId();
       if (!folderId) {
-        this.setSaveStatus('error', `Pasta ${CONFIG.MEDIA_FOLDER} não encontrada em ${root.name}`);
+        this.setSaveStatus('error', `Pasta ${CONFIG.MEDIA_FOLDER} não encontrada`);
         return false;
       }
       const photo = await this.shrinkPhoto(picked);
       name = await this.freeMediaName(this.mediaName(photo, picked.name, 'foto', taken), folderId, taken);
       await this.driveUploadBlob(name, photo, folderId);
       // The reading view shows it straight from here, without asking Drive for it back. By the bare
-      // name: reading cuts the root's prefix off the ![[...]] before looking
+      // name: reading cuts the `_media/` off the ![[...]] before looking
       this._embedUrls.set(name, Promise.resolve(URL.createObjectURL(photo)));
     } catch (e) {
       console.error('Photo upload failed:', e);
       this.log(`photo failed: ${e?.name || 'Error'} ${String(e?.message ?? e).slice(0, 80)}`);
-      if (root) this.forgetMediaFolder(root);
+      this.forgetMediaFolder();
       this.setSaveStatus('error', 'Erro ao enviar a foto');
       return false;
     }
@@ -130,7 +127,7 @@ Object.assign(App, {
     }
     // Back from the picker the editor may have no cursor, and every photo of a batch would fall back
     // on the same spot, the last one on top: the next one goes below the one just inserted
-    this._photoAt = this.insertOnOwnLine(`![[${root.embedPrefix}${name}]]`, this._photoAt) || this._photoAt;
+    this._photoAt = this.insertOnOwnLine(`![[${CONFIG.MEDIA_FOLDER}/${name}]]`, this._photoAt) || this._photoAt;
     this.markDirty();
     this.setSaveStatus('saved', 'Foto inserida');
     return true;
@@ -138,7 +135,7 @@ Object.assign(App, {
 
   PHOTO_MAX_SIDE: 2000,
 
-  /** Phone photos are 4 to 8 MB and everything in the vault syncs to the computer: anything larger than
+  /** Phone photos are 4 to 8 MB and everything in the notes syncs to the computer: anything larger than
       PHOTO_MAX_SIDE is scaled down. What the browser cannot decode or redraw goes up as it is. */
   async shrinkPhoto(file) {
     // Not GIF (would lose the animation) nor SVG (no pixels to scale)
@@ -163,7 +160,7 @@ Object.assign(App, {
     }
   },
 
-  /** The vault's kebab-case for a note name: lowercase, no accents, anything that is not a letter or a
+  /** The notes' kebab-case for a note name: lowercase, no accents, anything that is not a letter or a
       digit becomes a single hyphen, no hyphen at either end, 40 characters at most. Answers '' when
       nothing is left of the name, and whoever asked falls back to the dated shape. */
   slugForMedia(name) {
@@ -307,7 +304,7 @@ Object.assign(App, {
       already right, and the status line says the rest out loud.
 
       It does not look for the same picture in other notes: a picture in the bin comes back with a tap
-      for thirty days, and a search of the whole vault on every deletion is not worth that. */
+      for thirty days, and a search of the whole Drive on every deletion is not worth that. */
   async removeEmbedLine(lineNumber) {
     const text = this.Editor.lineText(lineNumber);
     const name = text && this.EMBED_LINE.exec(text)?.[1].split('/').pop().trim();

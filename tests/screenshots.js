@@ -69,22 +69,15 @@ const SETUP = `
     // A path five folders deep under 10-areas, for the deep tree's screenshot
     const parent = /^'([^']+)' in parents/.exec(u.searchParams.get('q') || '');
     if (parent && deep[parent[1]]) return ok({ files: deep[parent[1]] });
-    // personal-os, the root above the vault: a short list of its own, or the home would show the same twice
-    if (parent && parent[1] === 'POS') return ok({ files: ['_inbox', 'journal', 'projects', 'wiki'].map((name, i) => ({ id: 'p' + i, name, mimeType: FOLDER })) });
     return ok({ files: [
       ...folders.map((name, i) => ({ id: 'd' + i, name, mimeType: FOLDER })),
       ...notes.map((name, i) => ({ id: 'n' + i, name, mimeType: 'text/markdown', modifiedTime: new Date(now - i * i * 40e6 - 5e6).toISOString() })),
     ] });
   };
-  // The two roots of the fake Drive, in the real order. The app was born with the trails of the real roots:
-  // rebuilt here for these
-  CONFIG.ROOTS = [
-    { id: 'POS', name: 'personal-os', dates: false, embedPrefix: '_media/' },
-    { id: 'ROOT', name: 'vault', dates: true, embedPrefix: '' },
-  ];
-  __App._folderTrails = new Map([...CONFIG.ROOTS.map((r) => [r.id, [r.name]]), [CONFIG.DEFAULT_FOLDER_ID, CONFIG.DEFAULT_FOLDER_TRAIL]]);
-  // The app read the home tree's memory as it opened, from the profile of the previous run: read again, now
-  // empty, so both roots are new to this device and start open
+  // The one root of the fake Drive. The app was born with the trails of the real root: rebuilt here for this one
+  CONFIG.ROOT = { id: 'ROOT', name: 'personal-os' };
+  __App._folderTrails = new Map([['ROOT', []], [CONFIG.DEFAULT_FOLDER_ID, CONFIG.DEFAULT_FOLDER_TRAIL]]);
+  // The app read the home tree's memory as it opened, from the profile of the previous run: read again, now empty
   __App.initTree();
   __App.goHome();
   'ok'`;
