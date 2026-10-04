@@ -159,18 +159,20 @@ async function ensureLib(post) {
   lib.env.allowLocalModels = false;
   lib.env.useBrowserCache = true;
   let adapter = 'sem navigator.gpu';
+  let hasAdapter = false;
   if ('gpu' in navigator) {
     try {
       const a = await navigator.gpu.requestAdapter();
       if (!a) adapter = 'navigator.gpu existe, mas nenhum adaptador';
       else {
+        hasAdapter = true;
         const info = a.info || {};
         adapter = [info.vendor, info.architecture, info.description].filter(Boolean).join(' / ') || 'adaptador sem nome';
         adapter += a.features.has('shader-f16') ? ' (shader-f16: sim)' : ' (shader-f16: não)';
       }
     } catch (e) { adapter = 'requestAdapter falhou: ' + describe(e); }
   }
-  post({ type: 'lib', ms: performance.now() - t0, version: lib.env.version, adapter });
+  post({ type: 'lib', ms: performance.now() - t0, version: lib.env.version, adapter, hasAdapter });
 }
 
 export async function handle(msg, post) {
@@ -242,6 +244,9 @@ const BACKEND_NAMES = { webgpu: 'WebGPU', wasm: 'WASM' };
 
 const $ = (id) => document.getElementById(id);
 const hasGpu = 'gpu' in navigator;
+// navigator.gpu can exist without any usable adapter (seen on Chrome for Android): the engine asks for
+// one and answers in the 'lib' message. Until then, assume the optimistic case.
+let gpuUsable = hasGpu;
 
 // ---------- formatting ----------
 const num = (x, digits = 1) => x.toLocaleString('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
@@ -300,7 +305,8 @@ function renderDiag() {
     ' | Transformers.js ' + LIB_VERSION + ': ' + diag.lib;
 }
 renderDiag();
-$('auto-label').textContent = 'Automático (' + (hasGpu ? 'WebGPU' : 'WASM') + ')';
+const renderAutoLabel = () => { $('auto-label').textContent = 'Automático (' + (gpuUsable ? 'WebGPU' : 'WASM') + ')'; };
+renderAutoLabel();
 
 // ---------- engine: Web Worker first, main thread as fallback ----------
 const engineUrl = URL.createObjectURL(new Blob([$('engine-src').textContent], { type: 'text/javascript' }));
@@ -414,6 +420,8 @@ function onEngine(m) {
   if (m.type === 'lib') {
     diag.lib = 'carregada em ' + secs(m.ms) + (m.version ? ' (versão ' + m.version + ')' : '');
     diag.adapter = m.adapter;
+    gpuUsable = !!m.hasAdapter;
+    renderAutoLabel();
     renderDiag();
   } else if (m.type === 'progress') {
     onProgress(m.data);
@@ -475,9 +483,12 @@ function onProgress(p) {
 async function loadModel() {
   if (busy) return;
   const model = document.querySelector('input[name=model]:checked').value;
-  let backend = document.querySelector('input[name=backend]:checked').value;
-  if (backend === 'auto') backend = hasGpu ? 'webgpu' : 'wasm';
   busy = true;
+  refreshButtons();
+  // The engine has to be up before "auto" is resolved: it is the one that knows whether an adapter exists
+  try { await getEngine(); } catch (err) { busy = false; refreshButtons(); return; }
+  let backend = document.querySelector('input[name=backend]:checked').value;
+  if (backend === 'auto') backend = gpuUsable ? 'webgpu' : 'wasm';
   loaded = null;
   pending = { model, backend, dtype: DTYPES[backend] };
   files.clear();
