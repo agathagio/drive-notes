@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teste do Whisper</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;700;800&display=swap">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 20px 16px 48px;
+    background: #1c1b1f;
+    color: #e4e0e8;
+    font-family: "Figtree", system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.45;
+    overflow-x: hidden;
+  }
+  main { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 6px; font-weight: 800; }
+  h2 { font-size: 17px; margin: 0 0 12px; font-weight: 800; }
+  p { margin: 0 0 12px; }
+  .muted { color: #928d99; font-size: 14px; }
+  .small { font-size: 12px; color: #928d99; word-break: break-word; }
+  section {
+    background: #242229;
+    border-radius: 14px;
+    padding: 16px;
+    margin: 16px 0;
+  }
+  .label { font-size: 13px; color: #928d99; margin: 12px 0 6px; }
+  .label:first-of-type { margin-top: 0; }
+  /* Segmented choice: real radio inputs, styled as big pills */
+  .seg { display: flex; gap: 8px; flex-wrap: wrap; }
+  .seg label { flex: 1 1 0; min-width: 0; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg span {
+    display: flex; align-items: center; justify-content: center; text-align: center;
+    min-height: 48px; padding: 6px 8px;
+    border: 2px solid #3a3740; border-radius: 10px;
+    font-weight: 700; font-size: 15px; color: #e4e0e8; cursor: pointer;
+  }
+  .seg input:checked + span { border-color: #a68dff; background: #2f2a40; color: #a68dff; }
+  .seg input:disabled + span { opacity: 0.45; }
+  button {
+    display: block; width: 100%;
+    min-height: 52px; margin-top: 12px;
+    background: #8b6cef; color: #1c1b1f;
+    border: 0; border-radius: 10px; padding: 10px 16px;
+    font-family: inherit; font-size: 16px; font-weight: 700; cursor: pointer;
+  }
+  button.secondary { background: #3a3740; color: #e4e0e8; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  #record { min-height: 76px; font-size: 20px; border-radius: 38px; }
+  #record.on { background: #e5626b; }
+  .timer { font-size: 34px; font-weight: 800; text-align: center; margin-top: 12px; font-variant-numeric: tabular-nums; }
+  .bar { height: 10px; background: #1c1b1f; border-radius: 5px; overflow: hidden; margin-top: 10px; }
+  .bar div { height: 100%; width: 0; background: #a68dff; transition: width 0.15s; }
+  .status { margin-top: 10px; font-size: 15px; }
+  .status:empty, .bar[hidden] { display: none; }
+  audio { width: 100%; margin-top: 12px; }
+  #errors:empty { display: none; }
+  #errors {
+    background: #3a1f24; color: #ffb4ba;
+    border-radius: 14px; padding: 12px 16px; margin: 16px 0;
+    font-size: 14px; word-break: break-word;
+  }
+  #errors div + div { margin-top: 10px; padding-top: 10px; border-top: 1px solid #5a2f36; }
+  #errors button { background: #ffb4ba; color: #1c1b1f; }
+  .run { border-top: 1px solid #3a3740; padding-top: 14px; margin-top: 14px; }
+  .run:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+  .run .head { font-weight: 800; }
+  .run .text { white-space: pre-wrap; word-break: break-word; margin-top: 8px; background: #1c1b1f; border-radius: 10px; padding: 10px 12px; }
+  .run button { min-height: 44px; }
+  .now { font-size: 18px; font-weight: 700; color: #a68dff; }
+</style>
+</head>
+<body>
+<main>
+<h1>Teste do Whisper</h1>
+<p class="muted">
+  Página de teste, fora do app. Escolha o modelo e o motor, carregue, grave falando em português e
+  compare qualidade e velocidade. A mesma gravação pode ser transcrita de novo com outro modelo.
+</p>
+<p class="small" id="diag">Diagnóstico: carregando...</p>
+
+<div id="errors" role="alert"></div>
+
+<section>
+  <h2>1. Modelo</h2>
+  <div class="label">Tamanho</div>
+  <div class="seg" id="model-choice">
+    <label><input type="radio" name="model" value="tiny" checked><span>tiny</span></label>
+    <label><input type="radio" name="model" value="base"><span>base</span></label>
+  </div>
+  <div class="label">Motor</div>
+  <div class="seg" id="backend-choice">
+    <label><input type="radio" name="backend" value="auto" checked><span id="auto-label">Automático</span></label>
+    <label><input type="radio" name="backend" value="webgpu"><span>WebGPU</span></label>
+    <label><input type="radio" name="backend" value="wasm"><span>WASM</span></label>
+  </div>
+  <button id="load">Carregar modelo</button>
+  <div class="bar" id="load-bar" hidden><div></div></div>
+  <div class="status" id="load-status"></div>
+  <div class="status small" id="load-file"></div>
+</section>
+
+<section>
+  <h2>2. Gravar</h2>
+  <button id="record">Gravar</button>
+  <div class="timer" id="timer">0:00</div>
+  <div class="status" id="rec-status"></div>
+  <audio id="player" controls hidden></audio>
+  <button id="again" class="secondary" disabled>Transcrever de novo com o modelo carregado</button>
+</section>
+
+<section>
+  <h2>3. Transcrição</h2>
+  <div class="status now" id="work-status">Nada rodando.</div>
+</section>
+
+<section>
+  <h2>Histórico desta sessão</h2>
+  <div id="history"><p class="muted">Ainda não tem resultado.</p></div>
+</section>
+</main>
+
+<!--
+  The engine: everything that touches Transformers.js. It is kept as text and turned into a Blob URL,
+  which runs as a module Web Worker (so the page never freezes) or, if the worker cannot start, is
+  imported on the main thread as a plain module exposing the same `handle(message, post)`.
+-->
+<script type="text/plain" id="engine-src">
+// Pinned: the service worker of the app caches jsdelivr cache-first, so a URL must never change content.
+const LIB_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js';
+const ASR_OPTIONS = { language: 'portuguese', task: 'transcribe' };
+
+let lib = null;
+let asr = null;
+
+function describe(err) {
+  if (err == null) return 'erro desconhecido';
+  if (typeof err === 'object') {
+    const name = err.name && err.name !== 'Error' ? err.name + ': ' : '';
+    return name + (err.message || String(err));
+  }
+  // onnxruntime sometimes throws a bare number (a pointer to its own error): keep it, it is still a clue
+  return String(err);
+}
+
+async function ensureLib(post) {
+  if (lib) return;
+  const t0 = performance.now();
+  lib = await import(LIB_URL);
+  lib.env.allowLocalModels = false;
+  lib.env.useBrowserCache = true;
+  let adapter = 'sem navigator.gpu';
+  if ('gpu' in navigator) {
+    try {
+      const a = await navigator.gpu.requestAdapter();
+      if (!a) adapter = 'navigator.gpu existe, mas nenhum adaptador';
+      else {
+        const info = a.info || {};
+        adapter = [info.vendor, info.architecture, info.description].filter(Boolean).join(' / ') || 'adaptador sem nome';
+        adapter += a.features.has('shader-f16') ? ' (shader-f16: sim)' : ' (shader-f16: não)';
+      }
+    } catch (e) { adapter = 'requestAdapter falhou: ' + describe(e); }
+  }
+  post({ type: 'lib', ms: performance.now() - t0, version: lib.env.version, adapter });
+}
+
+export async function handle(msg, post) {
+  try {
+    if (msg.type === 'init') {
+      await ensureLib(post);
+      return;
+    }
+    if (msg.type === 'load') {
+      await ensureLib(post);
+      // One model in memory at a time: two at once is what would run a phone out of memory
+      if (asr) { const old = asr; asr = null; try { await old.dispose(); } catch (e) { /* already gone */ } }
+      const t0 = performance.now();
+      const pipe = await lib.pipeline('automatic-speech-recognition', msg.modelId, {
+        device: msg.device,
+        dtype: msg.dtype,
+        progress_callback: (p) => post({ type: 'progress', data: p }),
+      });
+      const loadMs = performance.now() - t0;
+      post({ type: 'loaded-only', loadMs });
+      // Warm-up on one second of silence: WebGPU compiles its shaders on the first run, and that cost
+      // would otherwise land on the first real transcription and skew the comparison
+      const t1 = performance.now();
+      await pipe(new Float32Array(16000), ASR_OPTIONS);
+      asr = pipe;
+      post({ type: 'loaded', loadMs, warmupMs: performance.now() - t1 });
+      return;
+    }
+    if (msg.type === 'transcribe') {
+      if (!asr) throw new Error('nenhum modelo carregado');
+      const t0 = performance.now();
+      // chunk_length_s splits audio longer than Whisper's 30 s window; the stride overlaps the chunks
+      const out = await asr(msg.audio, { ...ASR_OPTIONS, chunk_length_s: 30, stride_length_s: 5 });
+      post({ type: 'result', runId: msg.runId, ms: performance.now() - t0, text: (out && out.text || '').trim() });
+      return;
+    }
+  } catch (e) {
+    post({ type: 'error', stage: msg.type, message: describe(e) });
+  }
+}
+
+if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope) {
+  self.onmessage = (e) => handle(e.data, (m) => self.postMessage(m));
+  self.postMessage({ type: 'started' });
+}
+</script>
+
+<script>
+'use strict';
+
+const LIB_VERSION = '3.8.1';
+const MODELS = {
+  tiny: 'onnx-community/whisper-tiny',
+  base: 'onnx-community/whisper-base',
+};
+// dtype per backend.
+// WASM: 8-bit quantized ("q8", the *_quantized.onnx files) for both parts. Smallest download that keeps
+//   Whisper's quality, and int8 matmuls are what the CPU path is fastest at.
+// WebGPU: fp32 encoder + 4-bit merged decoder, the combination of the Transformers.js Whisper WebGPU
+//   demos. The encoder runs once per 30 s window and is sensitive to quantization (int8 weights on
+//   WebGPU are dequantized on the fly, slower and less accurate), so it stays fp32; the decoder runs
+//   once per token, is memory bound, and q4 (MatMulNBits, supported by the WebGPU backend) makes it
+//   small and fast with little quality loss.
+const DTYPES = {
+  wasm: { encoder_model: 'q8', decoder_model_merged: 'q8' },
+  webgpu: { encoder_model: 'fp32', decoder_model_merged: 'q4' },
+};
+const BACKEND_NAMES = { webgpu: 'WebGPU', wasm: 'WASM' };
+
+const $ = (id) => document.getElementById(id);
+const hasGpu = 'gpu' in navigator;
+
+// ---------- formatting ----------
+const num = (x, digits = 1) => x.toLocaleString('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+const secs = (ms) => num(ms / 1000) + ' s';
+const clock = (ms) => {
+  const s = Math.floor(ms / 1000);
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+};
+const mb = (bytes) => num(bytes / 1048576) + ' MB';
+const dtypeText = (d) => 'encoder ' + d.encoder_model + ', decoder ' + d.decoder_model_merged;
+function speedText(audioMs, workMs) {
+  const r = audioMs / workMs;
+  return r >= 1 ? num(r) + ' vezes mais rápido que a duração do áudio' : num(1 / r) + ' vezes mais lento que a duração do áudio';
+}
+
+// ---------- errors on screen (no devtools on the phone) ----------
+function showError(text, retryWasm) {
+  const box = document.createElement('div');
+  const time = new Date().toLocaleTimeString('pt-BR');
+  box.textContent = time + ': ' + text;
+  if (retryWasm) {
+    const b = document.createElement('button');
+    b.textContent = 'Tentar de novo com WASM';
+    b.onclick = () => {
+      document.querySelector('input[name=backend][value=wasm]').checked = true;
+      loadModel();
+    };
+    box.appendChild(b);
+  }
+  $('errors').prepend(box);
+  console.error('[whisper-lab]', text);
+}
+window.addEventListener('error', (e) => showError('Erro na página: ' + (e.message || e.error)));
+window.addEventListener('unhandledrejection', (e) => showError('Erro na página: ' + ((e.reason && e.reason.message) || e.reason)));
+
+// ---------- diagnostics ----------
+const diag = {
+  ua: navigator.userAgent,
+  gpu: hasGpu ? 'sim' : 'não',
+  mem: navigator.deviceMemory ? navigator.deviceMemory + ' GB' : 'não informado',
+  cores: navigator.hardwareConcurrency || 'não informado',
+  // Without cross-origin isolation (GitHub Pages cannot send COOP/COEP) WASM runs on a single thread
+  threads: self.crossOriginIsolated ? 'sim' : 'não (página sem isolamento)',
+  runner: 'iniciando',
+  lib: 'não carregada',
+  adapter: 'ainda não consultado',
+};
+function renderDiag() {
+  $('diag').textContent = 'Diagnóstico: ' + diag.ua +
+    ' | navigator.gpu: ' + diag.gpu +
+    ' | adaptador WebGPU: ' + diag.adapter +
+    ' | memória: ' + diag.mem +
+    ' | núcleos: ' + diag.cores +
+    ' | WASM com várias threads: ' + diag.threads +
+    ' | roda em: ' + diag.runner +
+    ' | Transformers.js ' + LIB_VERSION + ': ' + diag.lib;
+}
+renderDiag();
+$('auto-label').textContent = 'Automático (' + (hasGpu ? 'WebGPU' : 'WASM') + ')';
+
+// ---------- engine: Web Worker first, main thread as fallback ----------
+const engineUrl = URL.createObjectURL(new Blob([$('engine-src').textContent], { type: 'text/javascript' }));
+let engine = null; // { post(msg) }
+let engineReady = null; // promise resolved once the engine runs and the library is imported
+
+function startWorker() {
+  return new Promise((resolve, reject) => {
+    let started = false;
+    const w = new Worker(engineUrl, { type: 'module' });
+    const timer = setTimeout(() => { if (!started) { w.terminate(); reject(new Error('o worker não respondeu em 15 s')); } }, 15000);
+    w.onmessage = (e) => {
+      if (e.data.type === 'started') { started = true; clearTimeout(timer); resolve(w); return; }
+      onEngine(e.data);
+    };
+    w.onerror = (e) => {
+      e.preventDefault();
+      const why = e.message || 'sem detalhe (o navegador não informa o motivo)';
+      if (!started) { clearTimeout(timer); reject(new Error(why)); return; }
+      // A crash after start is most likely the worker running out of memory
+      showError('O worker parou: ' + why + '. Pode ser falta de memória. Carregue o modelo de novo.');
+      engine = null; engineReady = null; busy = false; loaded = null; refreshButtons();
+      $('work-status').textContent = 'Parou com erro.';
+    };
+  });
+}
+
+async function startMainThread() {
+  const mod = await import(engineUrl);
+  return { post: (msg) => mod.handle(msg, onEngine) };
+}
+
+// Imports the library inside the engine and waits for the answer: success is a 'lib' message
+let initWaiter = null;
+async function initEngine(e) {
+  const answer = await new Promise((resolve) => { initWaiter = resolve; e.post({ type: 'init' }); });
+  if (answer.type === 'error') throw new Error(answer.message);
+}
+
+function getEngine() {
+  if (engineReady) return engineReady;
+  engineReady = (async () => {
+    let workerWhy;
+    try {
+      const w = await startWorker();
+      const e = { post: (msg) => w.postMessage(msg) };
+      try {
+        await initEngine(e);
+        engine = e;
+        diag.runner = 'Web Worker';
+        renderDiag();
+        return engine;
+      } catch (err) {
+        w.terminate();
+        workerWhy = 'o worker não conseguiu importar a biblioteca: ' + err.message;
+      }
+    } catch (err) {
+      workerWhy = err.message;
+    }
+    showError('Não deu para rodar em Web Worker (' + workerWhy + '). Vai rodar na própria página: a tela pode travar durante a transcrição.');
+    const e = await startMainThread();
+    await initEngine(e);
+    engine = e;
+    diag.runner = 'página (sem worker)';
+    renderDiag();
+    return engine;
+  })();
+  engineReady.catch((e) => { engineReady = null; showError('Falha ao iniciar o motor: ' + e.message); });
+  return engineReady;
+}
+
+// ---------- state ----------
+let busy = false;
+let loaded = null; // { model, backend, dtype }
+let pending = null; // { model, backend, dtype } while loading
+let lastAudio = null; // { audio: Float32Array, ms, recId }
+let recCount = 0;
+let runCount = 0;
+const runs = [];
+let workTimer = null;
+let currentRun = null;
+const files = new Map(); // file name -> { loaded, total }
+
+function refreshButtons() {
+  $('load').disabled = busy;
+  $('again').disabled = busy || !loaded || !lastAudio;
+  for (const el of document.querySelectorAll('.seg input')) el.disabled = busy;
+}
+
+function startWorkClock(label) {
+  const t0 = performance.now();
+  clearInterval(workTimer);
+  const tick = () => { $('work-status').textContent = label + ' ' + secs(performance.now() - t0); };
+  tick();
+  workTimer = setInterval(tick, 100);
+}
+function stopWorkClock(text) {
+  clearInterval(workTimer);
+  workTimer = null;
+  $('work-status').textContent = text;
+}
+
+// ---------- engine messages ----------
+function onEngine(m) {
+  if (initWaiter && (m.type === 'lib' || (m.type === 'error' && m.stage === 'init'))) {
+    const resolve = initWaiter;
+    initWaiter = null;
+    resolve(m);
+    if (m.type === 'error') return;
+  }
+  if (m.type === 'lib') {
+    diag.lib = 'carregada em ' + secs(m.ms) + (m.version ? ' (versão ' + m.version + ')' : '');
+    diag.adapter = m.adapter;
+    renderDiag();
+  } else if (m.type === 'progress') {
+    onProgress(m.data);
+  } else if (m.type === 'loaded-only') {
+    $('load-bar').hidden = true;
+    $('load-file').textContent = '';
+    $('load-status').textContent = 'Carregou em ' + secs(m.loadMs) + '. Aquecendo...';
+    startWorkClock('Aquecendo o modelo...');
+  } else if (m.type === 'loaded') {
+    loaded = pending;
+    pending = null;
+    busy = false;
+    const total = [...files.values()].reduce((s, f) => s + (f.total || 0), 0);
+    $('load-status').textContent = 'Pronto: ' + loaded.model + ' em ' + BACKEND_NAMES[loaded.backend] +
+      ' (' + dtypeText(loaded.dtype) + '). Carregou em ' + secs(m.loadMs) +
+      (total ? ', ' + mb(total) + ' de arquivos' : '') + '. Aquecimento: ' + secs(m.warmupMs) + '.';
+    stopWorkClock('Modelo pronto. Grave ou use "Transcrever de novo".');
+    refreshButtons();
+  } else if (m.type === 'result') {
+    finishRun(m);
+  } else if (m.type === 'error') {
+    busy = false;
+    $('load-bar').hidden = true;
+    if (m.stage === 'load') {
+      const backend = pending && pending.backend;
+      pending = null;
+      loaded = null;
+      $('load-status').textContent = 'Não carregou.';
+      stopWorkClock('Nada rodando.');
+      const where = backend ? ' (' + BACKEND_NAMES[backend] + ')' : '';
+      showError('Falha ao carregar o modelo' + where + ': ' + m.message, backend === 'webgpu');
+    } else {
+      currentRun = null;
+      stopWorkClock('Falhou.');
+      showError('Falha na transcrição: ' + m.message, loaded && loaded.backend === 'webgpu');
+    }
+    refreshButtons();
+  }
+}
+
+function onProgress(p) {
+  if (p.status === 'initiate') files.set(p.file, { loaded: 0, total: 0 });
+  if (p.status === 'progress') files.set(p.file, { loaded: p.loaded || 0, total: p.total || 0 });
+  if (p.status === 'done') {
+    const f = files.get(p.file);
+    if (f) f.loaded = f.total;
+  }
+  let got = 0;
+  let total = 0;
+  for (const f of files.values()) { got += f.loaded; total += f.total; }
+  if (total > 0) {
+    $('load-bar').firstElementChild.style.width = Math.min(100, (got / total) * 100) + '%';
+    $('load-status').textContent = 'Baixando: ' + mb(got) + ' de ' + mb(total) + ' (' + Math.floor((got / total) * 100) + '%)';
+  }
+  if (p.file) $('load-file').textContent = p.file;
+}
+
+// ---------- load ----------
+async function loadModel() {
+  if (busy) return;
+  const model = document.querySelector('input[name=model]:checked').value;
+  let backend = document.querySelector('input[name=backend]:checked').value;
+  if (backend === 'auto') backend = hasGpu ? 'webgpu' : 'wasm';
+  busy = true;
+  loaded = null;
+  pending = { model, backend, dtype: DTYPES[backend] };
+  files.clear();
+  refreshButtons();
+  $('load-bar').hidden = false;
+  $('load-bar').firstElementChild.style.width = '0%';
+  $('load-status').textContent = 'Preparando ' + model + ' em ' + BACKEND_NAMES[backend] + '...';
+  $('load-file').textContent = '';
+  startWorkClock('Carregando o modelo...');
+  try {
+    const e = await getEngine();
+    e.post({ type: 'load', modelId: MODELS[model], device: backend, dtype: DTYPES[backend] });
+  } catch (err) {
+    busy = false;
+    pending = null;
+    $('load-bar').hidden = true;
+    stopWorkClock('Nada rodando.');
+    refreshButtons();
+  }
+}
+$('load').onclick = loadModel;
+
+// ---------- recording ----------
+let recorder = null;
+let recStart = 0;
+let recTimer = null;
+
+function pickMime() {
+  if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return '';
+  return ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'].find((t) => MediaRecorder.isTypeSupported(t)) || '';
+}
+
+async function startRecording() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showError('Este navegador não dá acesso ao microfone aqui. A página precisa abrir em https.');
+    return;
+  }
+  if (!window.MediaRecorder) { showError('Este navegador não tem MediaRecorder.'); return; }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+  } catch (e) {
+    const why = e.name === 'NotAllowedError' ? 'permissão negada. Libere o microfone nas configurações do site.'
+      : e.name === 'NotFoundError' ? 'nenhum microfone encontrado.'
+      : (e.name ? e.name + ': ' : '') + e.message;
+    showError('Microfone: ' + why);
+    return;
+  }
+  const mime = pickMime();
+  const chunks = [];
+  try {
+    recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+  } catch (e) {
+    stream.getTracks().forEach((t) => t.stop());
+    showError('Não deu para iniciar a gravação: ' + e.message);
+    return;
+  }
+  recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  recorder.onerror = (e) => showError('Erro na gravação: ' + ((e.error && e.error.message) || 'sem detalhe'));
+  recorder.onstop = async () => {
+    // Stop the tracks so the microphone indicator goes away
+    stream.getTracks().forEach((t) => t.stop());
+    clearInterval(recTimer);
+    $('record').textContent = 'Gravar';
+    $('record').classList.remove('on');
+    const type = recorder.mimeType || mime || 'audio/webm';
+    recorder = null;
+    const blob = new Blob(chunks, { type });
+    await useRecording(blob);
+  };
+  recorder.start();
+  recStart = performance.now();
+  $('record').textContent = 'Parar';
+  $('record').classList.add('on');
+  $('rec-status').textContent = 'Gravando (' + (mime || 'formato padrão do navegador') + ')...';
+  $('timer').textContent = '0:00';
+  recTimer = setInterval(() => { $('timer').textContent = clock(performance.now() - recStart); }, 200);
+}
+
+$('record').onclick = () => {
+  if (recorder && recorder.state === 'recording') recorder.stop();
+  else startRecording();
+};
+
+// Whisper wants mono Float32 at 16 kHz
+async function decodeTo16k(blob) {
+  const bytes = await blob.arrayBuffer();
+  const ctx = new AudioContext({ sampleRate: 16000 });
+  let buf;
+  try { buf = await ctx.decodeAudioData(bytes); } finally { ctx.close(); }
+  let resampled = false;
+  if (buf.sampleRate !== 16000) {
+    // The context did not resample on decode: do it offline
+    const off = new OfflineAudioContext(buf.numberOfChannels, Math.ceil(buf.duration * 16000), 16000);
+    const src = off.createBufferSource();
+    src.buffer = buf;
+    src.connect(off.destination);
+    src.start();
+    buf = await off.startRendering();
+    resampled = true;
+  }
+  let audio;
+  if (buf.numberOfChannels === 1) audio = buf.getChannelData(0).slice();
+  else {
+    audio = new Float32Array(buf.length);
+    for (let c = 0; c < buf.numberOfChannels; c++) {
+      const ch = buf.getChannelData(c);
+      for (let i = 0; i < ch.length; i++) audio[i] += ch[i] / buf.numberOfChannels;
+    }
+  }
+  return { audio, rate: buf.sampleRate, channels: buf.numberOfChannels, resampled };
+}
+
+async function useRecording(blob) {
+  $('rec-status').textContent = 'Convertendo o áudio...';
+  try {
+    const d = await decodeTo16k(blob);
+    if (d.rate !== 16000) throw new Error('o áudio ficou em ' + d.rate + ' Hz, não em 16000 Hz');
+    recCount++;
+    const ms = (d.audio.length / 16000) * 1000;
+    lastAudio = { audio: d.audio, ms, recId: recCount };
+    $('player').src = URL.createObjectURL(blob);
+    $('player').hidden = false;
+    $('timer').textContent = clock(ms);
+    $('rec-status').textContent = 'Gravação ' + recCount + ': ' + secs(ms) + ' de áudio, ' + (blob.type || 'formato desconhecido') +
+      ', ' + mb(blob.size) + '. Convertido para 16000 Hz, ' + d.channels + (d.channels === 1 ? ' canal' : ' canais misturados em 1') +
+      (d.resampled ? ' (reamostrado à parte).' : ' (o navegador já entregou em 16 kHz).');
+    refreshButtons();
+    if (d.audio.length === 0) { showError('A gravação veio vazia.'); return; }
+    if (loaded && !busy) transcribe();
+    else if (!loaded) $('work-status').textContent = 'Gravação guardada. Carregue um modelo para transcrever.';
+  } catch (e) {
+    $('rec-status').textContent = 'Não deu para usar a gravação.';
+    showError('Falha ao converter o áudio: ' + (e.message || e));
+  }
+}
+
+// ---------- transcription ----------
+async function transcribe() {
+  if (busy || !loaded || !lastAudio) return;
+  busy = true;
+  refreshButtons();
+  runCount++;
+  currentRun = { id: runCount, recId: lastAudio.recId, audioMs: lastAudio.ms, model: loaded.model, backend: loaded.backend, dtype: loaded.dtype };
+  startWorkClock('Transcrevendo com ' + loaded.model + ' em ' + BACKEND_NAMES[loaded.backend] + '...');
+  // In main-thread mode the call blocks: let the "working" text paint first
+  await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 30)));
+  const e = await getEngine();
+  e.post({ type: 'transcribe', runId: runCount, audio: lastAudio.audio.slice() });
+}
+$('again').onclick = transcribe;
+
+function finishRun(m) {
+  const run = currentRun;
+  currentRun = null;
+  busy = false;
+  if (!run || run.id !== m.runId) { refreshButtons(); return; }
+  run.ms = m.ms;
+  run.text = m.text;
+  runs.unshift(run);
+  stopWorkClock('Pronto: ' + secs(run.audioMs) + ' de áudio, ' + secs(run.ms) + ' para transcrever.');
+  renderHistory();
+  refreshButtons();
+}
+
+async function copyText(text, button) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    const area = document.createElement('textarea');
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    if (!ok) { showError('Não deu para copiar: ' + e.message); return; }
+  }
+  button.textContent = 'Copiado';
+  setTimeout(() => { button.textContent = 'Copiar texto'; }, 1500);
+}
+
+function renderHistory() {
+  const box = $('history');
+  box.textContent = '';
+  for (const r of runs) {
+    const div = document.createElement('div');
+    div.className = 'run';
+    const head = document.createElement('div');
+    head.className = 'head';
+    head.textContent = '#' + r.id + ': ' + r.model + ' em ' + BACKEND_NAMES[r.backend] + ', gravação ' + r.recId;
+    const meta = document.createElement('div');
+    meta.className = 'muted';
+    meta.textContent = secs(r.audioMs) + ' de áudio, ' + secs(r.ms) + ' para transcrever (' + speedText(r.audioMs, r.ms) + '). ' + dtypeText(r.dtype) + '.';
+    const text = document.createElement('div');
+    text.className = 'text';
+    text.textContent = r.text || '(nenhum texto)';
+    const copy = document.createElement('button');
+    copy.className = 'secondary';
+    copy.textContent = 'Copiar texto';
+    copy.onclick = () => copyText(r.text || '', copy);
+    div.append(head, meta, text, copy);
+    box.appendChild(div);
+  }
+}
+
+refreshButtons();
+// Start the engine and import the library right away, so the diagnostics line fills in
+getEngine().catch(() => {});
+</script>
+</body>
+</html>
