@@ -1407,10 +1407,6 @@ button.home-section-title {
   cursor: pointer;
 }
 
-.checkin-write:disabled {
-  opacity: 0.5;
-}
-
 /* The bar at the thumb: the search, and the new note */
 .home-bar {
   flex-shrink: 0;

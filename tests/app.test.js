@@ -6808,37 +6808,96 @@ async function scenario(title, block) {
     check('... e fechar a folha deixa a versao nova entrar', reloads === 1 && !sheetShown(d));
   });
 
-  await scenario('C19. Check-in: Escrever sem nota no dia cria uma nota so e abre nela', async () => {
+  await scenario('C19. Check-in: Escrever cria uma nota nova na inbox, com o nome da hora e so o type: journal, e abre nela', async () => {
+    // The check-in's clock at 09:05 of the day: the minutes go into the name, padded
+    const setClock = (App) => { App.checkinNow = () => new Date(2026, 9, 3, 9, 5); };
+    const NAME = '2026-10-03-0905-journal.md';
+    const inboxNotes = (drive) => [...drive.files.values()].filter(f => f.parents[0] === INBOX && /-journal\.md$/.test(f.name));
+    const dayNotes = (drive) => journalFiles(drive).filter(f => f.parents[0] === JOURNAL);
     {
-      const { App, drive, w } = await boot();
+      const { App, drive, w } = await boot({ watcher: true });
       seedJournal(drive);
-      setDay(App, 2026, 10, 3);
+      setClock(App);
       await showHome(App);
       const d = w.document;
+      let reloads = 0;
+      App.reloadPage = () => { reloads++; };
       openSheet(d);
+      // A new version waiting for the sheet to close: the tap that closes it opens the note, and the page must not reload over it
+      App._updateReady = true;
+      App.offerUpdate();
       const write = d.getElementById('checkin-write');
       write.click();
       write.click();
-      await until(() => App.currentFile?.name === '2026-10-03-journal.md' && d.body.dataset.view !== 'welcome');
-      const notes = journalFiles(drive);
-      check('dois toques, uma nota, so com type: journal, na pasta journal',
-        notes.length === 1 && drive.count('POST') === 1 && notes[0].content === '---\ntype: journal\n---\n' && notes[0].parents[0] === JOURNAL,
-        [notes.map(n => [n.name, n.content]), drive.log]);
-      check('a folha fechou e a nota do dia esta aberta', !sheetShown(d) && App.currentFile?.id === notes[0]?.id && d.body.dataset.view !== 'welcome', d.body.dataset.view);
+      check('na hora do toque: a folha fechou e a nota nova esta aberta, com o nome da hora',
+        !sheetShown(d) && d.body.dataset.view === 'edit' && App.currentFile?.name === NAME && App.currentFile?.id === null,
+        [d.body.dataset.view, App.currentFile?.name]);
+      check('... conteudo exato, e o cursor no fim, embaixo do frontmatter',
+        App.getContent() === '---\ntype: journal\n---\n' && App.els.editorElement.selectionStart === App.getContent().length,
+        JSON.stringify(App.getContent()));
+      await App._saveChain;
+      await until(() => App.currentFile?.id);
+      const notes = inboxNotes(drive);
+      check('dois toques, uma nota so, na inbox e nao na pasta journal',
+        notes.length === 1 && drive.count('POST') === 1 && notes[0].name === NAME && notes[0].content === '---\ntype: journal\n---\n'
+          && notes[0].parents.length === 1 && dayNotes(drive).length === 0 && App.currentFile?.id === notes[0].id,
+        [[...drive.files.values()].map(f => [f.name, f.parents, f.content]), drive.log]);
+      await sleep(30);
+      check('a versao nova esperando nao recarregou por cima da nota, ficou na barra',
+        reloads === 0 && !App.els.updateBar.classList.contains('hidden'), reloads);
+      check('o voltar da nota leva pra home, com a folha fechada',
+        w.__back() === 'handled' && (await until(() => d.body.dataset.view === 'welcome'), d.body.dataset.view === 'welcome') && !sheetShown(d) && !App.currentFile,
+        [d.body.dataset.view, sheetShown(d)]);
+      check('... e o voltar seguinte sai do app', App.navStack.length === 0 && w.__back() === 'EXIT', App.navStack);
+      // A second tap, later: another note, never the earlier one
+      App.checkinNow = () => new Date(2026, 9, 3, 21, 40);
+      openSheet(d);
+      d.getElementById('checkin-write').click();
+      await App._saveChain;
+      await until(() => App.currentFile?.id);
+      check('outro toque no mesmo dia: outra nota nova, a anterior intacta',
+        inboxNotes(drive).length === 2 && App.currentFile?.name === '2026-10-03-2140-journal.md'
+          && inboxNotes(drive).find(f => f.name === NAME)?.content === '---\ntype: journal\n---\n',
+        inboxNotes(drive).map(f => f.name));
     }
     {
-      // With the day's note already there (a habit tapped earlier): it opens that one, nothing is created
+      // The day's note already in journal/, and a habit tapped before the button: the habit goes into the day's
+      // note, the button's note is a new one in the inbox, and the day's note keeps its text
       const { App, drive, w } = await boot({ watcher: true });
       seedJournal(drive);
       drive.put('today', '2026-10-03-journal.md', '---\ntype: journal\nwater: true\n---\nJa escrevi.', [JOURNAL]);
-      setDay(App, 2026, 10, 3);
+      setClock(App);
+      await showHome(App);
+      const d = w.document;
+      d.querySelector('#checkin-rounds [data-habit="workout"]').click();
+      openSheet(d);
+      d.getElementById('checkin-write').click();
+      await App._saveChain;
+      await until(() => App.currentFile?.id);
+      const today = drive.files.get('today');
+      check('o habito foi pra nota do dia, que guardou o texto, e nenhuma outra nota nasceu em journal/',
+        today.content === '---\ntype: journal\nwater: true\nworkout: true\n---\nJa escrevi.' && dayNotes(drive).length === 1,
+        [JSON.stringify(today.content), dayNotes(drive).map(f => f.name)]);
+      const notes = inboxNotes(drive);
+      check('... e o botao abriu uma nota nova na inbox, sem o habito dentro',
+        notes.length === 1 && notes[0].name === NAME && notes[0].content === '---\ntype: journal\n---\n' && App.currentFile?.id === notes[0].id && App.currentFile?.id !== 'today',
+        notes.map(f => [f.name, f.content]));
+    }
+    {
+      // No network: the note opens anyway, and nothing is lost on the way back
+      const offline = (w) => {
+        Object.defineProperty(w.navigator, 'onLine', { configurable: true, get: () => false });
+        w.fetch = () => Promise.reject(new TypeError('Failed to fetch'));
+      };
+      const { App, w } = await boot({ watcher: true, beforeApp: offline });
+      setClock(App);
       await showHome(App);
       const d = w.document;
       openSheet(d);
       d.getElementById('checkin-write').click();
-      await until(() => App.currentFile?.id === 'today');
-      check('abre a nota que existe, sem criar outra', App.currentFile?.id === 'today' && drive.count('POST') === 0 && App.getContent().includes('Ja escrevi.'), drive.log);
-      check('... e o voltar leva de volta pra home', w.__back() === 'handled' && (await until(() => d.body.dataset.view === 'welcome'), d.body.dataset.view === 'welcome'));
+      check('sem rede: a nota nova abre do mesmo jeito, com o nome da hora e o type: journal',
+        !sheetShown(d) && d.body.dataset.view === 'edit' && App.currentFile?.name === NAME && App.getContent() === '---\ntype: journal\n---\n',
+        [d.body.dataset.view, App.currentFile?.name]);
     }
   });
 

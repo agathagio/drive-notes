@@ -2,7 +2,9 @@
 // Extends App (see app/core.js).
 //
 // Three parts: reading and writing the tracker keys of a note without touching anything else in it; finding
-// or creating the day's note in the journal folder; drawing the section of the home and its sheet.
+// or creating the day's note in the journal folder; drawing the section of the home and its sheet. The
+// sheet's "Escrever no journal de hoje" is apart from the tracker: it starts a new note in the inbox (see
+// writeJournalToday), and never touches the day's note.
 
 /** The tracker keys, in the order a note gets them when they are added */
 const CHECKIN_KEYS = [...CONFIG.CHECKIN.habits.map((habit) => habit.key), 'sleep', 'mood', 'energy'];
@@ -142,9 +144,8 @@ Object.assign(App, {
   // Memory only. missing: the journal folder was not found. readDate, readAt and readSeq: the last read
   // of the day's note (which day, when, and its sequence, so a late answer is dropped). landed: how many
   // writes of today reached the Drive (a read begun before one of them is older than the screen).
-  // queued: the push waiting in the write queue, so taps in a row share it. writing: "Escrever no journal
-  // de hoje" is on its way (a second tap waits for it instead of creating the note twice).
-  _checkinView: { missing: false, readDate: null, readAt: 0, readSeq: 0, landed: 0, queued: null, writing: false },
+  // queued: the push waiting in the write queue, so taps in a row share it.
+  _checkinView: { missing: false, readDate: null, readAt: 0, readSeq: 0, landed: 0, queued: null },
 
   /** The clock of the check-in. A method so the tests can set the day. */
   checkinNow() {
@@ -159,6 +160,11 @@ Object.assign(App, {
 
   journalFileName(date) {
     return `${date}-journal.md`;
+  },
+
+  /** The name of a note started by "Escrever no journal de hoje": <YYYY-MM-DD-HHMM>-journal.md, local time */
+  journalEntryName(now = this.checkinNow()) {
+    return this.generateFileName(now).replace(/\.md$/, '-journal.md');
   },
 
   isCheckinDay(date) {
@@ -515,7 +521,6 @@ Object.assign(App, {
 
   openCheckinSheet() {
     this.checkinToday();
-    document.getElementById('checkin-sheet-message').hidden = true;
     this.drawCheckin();
     document.getElementById('checkin-overlay').classList.add('visible');
     this.armWatcher();
@@ -549,56 +554,21 @@ Object.assign(App, {
     return this.setCheckin(key, this._checkin.tracker[key] === value ? null : value);
   },
 
-  /** "Escrever no journal de hoje": the day's note, created with just `type: journal` when it does not
-      exist yet (after whatever taps are still to go up), then opened in place of the home. */
-  async writeJournalToday() {
-    const view = this._checkinView;
-    if (view.writing) return;
-    view.writing = true;
-    const button = document.getElementById('checkin-write');
-    const message = document.getElementById('checkin-sheet-message');
-    button.disabled = true;
-    message.hidden = true;
-    let found = null;
-    try {
-      const date = this.checkinToday();
-      found = await this.enqueue(() => this.ensureJournalDay(date));
-    } catch (e) {
-      console.warn("Check-in: the day's note could not be opened:", e);
-      found = { problem: 'drive' };
-    } finally {
-      view.writing = false;
-      button.disabled = false;
-    }
+  /** "Escrever no journal de hoje": a new note in the inbox, as "nova nota" makes it, named by the check-in's
+      clock (journalEntryName) and holding only the `type: journal` frontmatter, the caret below it. Its text
+      is filed into the day's journal note later, outside the app; the tracker keeps writing to the day's
+      note itself. Every tap starts a new note, and nothing waits for the Drive: the note is created in the
+      background, or by its first save without network. */
+  writeJournalToday() {
     const overlay = document.getElementById('checkin-overlay');
-    // Closed (the back button) or left while the Drive answered: the tap is no longer what is on screen
-    if (!overlay.classList.contains('visible') || document.body.dataset.view !== 'welcome') return;
-    if (found.problem) {
-      message.textContent = {
-        login: 'O login do Google venceu.',
-        folder: 'Pasta journal não encontrada',
-      }[found.problem] || 'Não deu pra abrir o journal agora. Tente de novo.';
-      message.hidden = false;
-      return;
-    }
+    // Only a tap on the sheet on screen: the second tap of a double tap comes after it closed
+    if (!overlay.classList.contains('visible')) return;
+    // The note first, then the sheet. With the note already open when the sheet closes, a new version
+    // that waited for the sheet (offerUpdate, in closeCheckinSheet) finds a note on screen and offers its
+    // bar instead of reloading the page; and the CloseWatcher the sheet armed stays on for the note, with
+    // the home behind it on the back stack: one "back" from the note lands on the home, sheet closed.
+    this.newFile({ name: this.journalEntryName(), body: this.journalTemplate() });
     this.closeCheckinSheet();
-    this.navigateTo(found.id, found.name);
-  },
-
-  /** The day's note, { id, name }, created when it does not exist; or { problem } saying why there is
-      none. Runs inside the write queue, after pushCheckin, so a tap still to go up goes into the note. */
-  async ensureJournalDay(date) {
-    await this.pushCheckin();
-    if (!this.canRenewQuietly()) return { problem: 'login' };
-    const folderId = await this.getJournalFolderId();
-    this.setCheckinMissing(!folderId);
-    if (!folderId) return { problem: 'folder' };
-    const name = this.journalFileName(date);
-    const found = await this.findJournalDay(date, folderId);
-    if (found) return { id: found.id, name };
-    const created = await this.driveCreateFile(name, this.journalTemplate(), folderId);
-    if (date === this._checkin.date) this._checkin.fileId = created.id;
-    return { id: created.id, name };
   },
 
   /** A tap on a habit: marks it, or takes the mark away. "Not recorded is not done": never `false`. */

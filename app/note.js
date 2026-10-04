@@ -213,20 +213,20 @@ Object.assign(App, {
 
   // ── File operations ──
 
-  /** Generate a timestamp-based filename like 2026-04-11-2143.md */
-  generateFileName() {
-    const now = new Date();
+  /** Generate a timestamp-based filename like 2026-04-11-2143.md, from `now` in local time */
+  generateFileName(now = new Date()) {
     const pad = (n) => String(n).padStart(2, '0');
     return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}.md`;
   },
 
-  newFile({ body = '' } = {}) {
+  /** A new note in the inbox, open in the editor at once. `body` is its starting text, `name` its file
+      name (a timestamp, see generateFileName, when not given). */
+  newFile({ body = '', name = this.generateFileName() } = {}) {
     // Whatever is open gets saved before it is replaced
     this.flushCurrent();
     this._loadSeq++; // a file still loading must not land on top of the new note
     this.beginNav();
 
-    const name = this.generateFileName();
     // The draft key is fixed for the life of the note, so the draft is still found
     // (and cleared) after the note gets its Drive ID
     const file = { id: null, name: name, draftKey: `${KEYS.DRAFT_PREFIX}new_${Date.now()}` };
