@@ -280,6 +280,19 @@ Object.assign(App, {
     }
   },
 
+  /** Asks the browser not to clear this site's storage, where the drafts live, when the phone runs short of
+      space, and keeps the answer for the panel. Best effort and never rejects: without the API it stays '?'. */
+  async askPersistentStorage() {
+    try {
+      const granted = await navigator.storage?.persist?.();
+      if (granted !== undefined) this.log('storage persist: ' + granted);
+      const persisted = await navigator.storage?.persisted?.();
+      if (typeof persisted === 'boolean') this._persisted = persisted;
+    } catch (e) {
+      // '?' stays
+    }
+  },
+
   showDiagnostics() {
     const standalone = window.matchMedia?.('(display-mode: standalone)').matches ?? '?';
     document.getElementById('debug-text').textContent = [
@@ -287,6 +300,7 @@ Object.assign(App, {
       `editor: ${this.Editor.kind()}`,
       `modo de voltar: ${this.useWatcher ? 'CloseWatcher' : 'History API'}`,
       `instalado (standalone): ${standalone}`,
+      `armazenamento persistente: ${this._persisted === true ? 'sim' : this._persisted === false ? 'não' : '?'}`,
       `view: ${document.body.dataset.view}`,
       `login: ${localStorage.getItem(KEYS.REFRESH_TOKEN) ? 'renovável' : this.accessToken ? 'só token' : 'nenhum'} (${CONFIG.AUTH_URL})`,
       navigator.userAgent,

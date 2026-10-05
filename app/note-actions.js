@@ -10,7 +10,17 @@ Object.assign(App, {
       value: file.name,
       confirmLabel: 'Renomear',
       onDelete: file.id ? () => this.promptDelete(file) : null,
+      validate: (value) => this.renameRefusal(file, value),
     });
+  },
+
+  /** Why `file` cannot take the name `value`, or '' when it can. Its own name, in any case, is no refusal */
+  async renameRefusal(file, value) {
+    const key = (n) => n.replace(/\.md$/i, '').toLowerCase();
+    const name = this.cleanFileName(value, file.name);
+    if (!name || key(name) === key(file.name)) return '';
+    const taken = await this.takenNoteNames();
+    return taken.has(key(name)) ? 'Já existe uma nota com esse nome' : '';
   },
 
   /** A name Drive, Windows and Obsidian all accept. The extension never changes: a rename is not a conversion. */
@@ -82,6 +92,7 @@ Object.assign(App, {
       summary += `, ${links.updated} ${links.updated === 1 ? 'link atualizado' : 'links atualizados'}`;
       if (links.skipped) summary += `, ${links.skipped} ${links.skipped === 1 ? 'nota pulada' : 'notas puladas'}`;
     }
+    if (links?.truncated) summary += ', pode ter sobrado link';
     if (this.currentFile === file) {
       this.setSaveStatus('saved', summary);
       setTimeout(() => {
@@ -103,18 +114,22 @@ Object.assign(App, {
 
   /** The notes whose text links to the note called `name`, each with its text as downloaded and
       the modifiedTime read BEFORE the download (the conflict check of whoever writes it back).
-      The Drive's full-text search brings every file with the word, in any form: only a real link counts. */
+      The Drive's full-text search brings every file with the word, in any form: only a real link counts.
+      Each candidate is downloaded in turn, so at most LINK_CANDIDATES are looked at: when more came, the
+      array answered carries `truncated: true`. */
+  LINK_CANDIDATES: 300,
+
   async findLinkingNotes(name, { exceptId = null } = {}) {
     const base = name.replace(/\.md$/i, '');
     const pattern = this.linkPattern(base);
-    const params = new URLSearchParams({
-      q: `fullText contains ${this.driveQuote(base)} and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
-      fields: 'files(id,name,parents,mimeType,modifiedTime)',
-      pageSize: '100',
-    });
-    const response = await this.driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
-    const candidates = ((await response.json()).files || []).filter(f => this.isNote(f) && f.id !== exceptId);
+    const found = await this.driveListAll(
+      `fullText contains ${this.driveQuote(base)} and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
+      'id,name,parents,mimeType,modifiedTime'
+    );
+    const notes = found.filter(f => this.isNote(f) && f.id !== exceptId);
+    const candidates = notes.slice(0, this.LINK_CANDIDATES);
     const linking = [];
+    linking.truncated = notes.length > candidates.length;
     for (const f of candidates) {
       const folder = f.parents?.[0];
       const trail = folder ? await Promise.resolve(this.folderTrail(folder)).catch(() => null) : null;
@@ -136,7 +151,7 @@ Object.assign(App, {
       through the write queue, each with the save's own conflict check. The change is mechanical, so
       `updated` is left alone. A local draft of one of them gets the same rewrite, and its base moves
       to the new version, or saving it later would undo the fix or raise a false conflict.
-      Never throws. Answers { updated, skipped }, or null when the search itself failed. */
+      Never throws. Answers { updated, skipped, truncated }, or null when the search itself failed. */
   async relinkNotes(oldName, newName, exceptId) {
     let linking;
     try {
@@ -171,7 +186,7 @@ Object.assign(App, {
         skipped++;
       }
     }
-    return { updated, skipped };
+    return { updated, skipped, truncated: !!linking.truncated };
   },
 
   // ── Delete ──

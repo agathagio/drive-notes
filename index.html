@@ -245,15 +245,16 @@
     </div>
   </div>
 
-  <!-- ── Modal: file changed on Drive since it was opened ── -->
+  <!-- ── Modal: file changed on Drive since it was opened, or gone from it (data-mode="gone", the data-gone labels) ── -->
   <div id="conflict-overlay" class="modal-overlay">
     <div class="modal">
-      <h3>Conflito com o Drive</h3>
+      <h3 data-gone="Nota apagada no Drive">Conflito com o Drive</h3>
       <p id="conflict-text" class="modal-text"></p>
       <div class="modal-actions modal-actions-stacked">
-        <button class="btn active" data-conflict="copy">Salvar a minha como cópia</button>
+        <button class="btn active" data-conflict="copy" data-gone="Salvar como nota nova">Salvar a minha como cópia</button>
         <button class="btn" data-conflict="overwrite">Sobrescrever o Drive</button>
         <button class="btn" data-conflict="reload">Descartar a minha e recarregar</button>
+        <button class="btn" data-conflict="discard" hidden>Descartar a minha</button>
         <button class="btn" data-conflict="later" data-dismiss>Decidir depois</button>
       </div>
     </div>

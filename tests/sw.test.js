@@ -113,6 +113,8 @@ const EVERY_DOCUMENT = `(() => {
     const u = new URL(String(url), location.href);
     if (u.hostname !== 'www.googleapis.com') return realFetch(url, opts);
     const files = read();
+    // The ID a create is sent with (files.generateIds); the create itself answers as before
+    if (u.pathname.endsWith('/generateIds')) return reply({ ids: ['NEW'] });
     const m = u.pathname.match(/files\\/([^/]+)$/);
     const f = m && files[m[1]];
     if (m && !f) return reply({}, 404);

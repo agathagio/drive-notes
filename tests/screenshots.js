@@ -47,6 +47,8 @@ const SETUP = `
   };
   window.fetch = async (url) => {
     const u = new URL(url); const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
+    // The ID a create is sent with (files.generateIds)
+    if (u.pathname.endsWith('/generateIds')) return ok({ ids: ['NEW'] });
     // The home's check-in: the journal folder under the root, and today's note in it with sample keys
     if ((u.searchParams.get('q') || '').includes("name = 'journal'")) return ok({ files: [{ id: 'J', name: 'journal', mimeType: FOLDER, parents: ['ROOT'] }] });
     if ((u.searchParams.get('q') || '').includes("-journal.md'")) return ok({ files: [{ id: 'JDAY', name: 'dia-journal.md', mimeType: 'text/markdown', parents: ['J'] }] });

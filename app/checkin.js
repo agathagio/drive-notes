@@ -138,8 +138,9 @@ Object.assign(App, {
   // date: the day the section shows (YYYY-MM-DD, local time). tracker: its keys as the screen shows them.
   // fileId: its note on the Drive, once known. pending: { [date]: { key: value | null } }, the taps not on
   // the Drive yet, by day: a tap without network goes up later, to the note of the day it was made.
+  // pendingIds: { [date]: id }, the ID a day's note is being created with (see writeJournalDay).
   // Kept on the device (KEYS.CHECKIN) on every change, so the home draws at once and nothing is lost.
-  _checkin: { date: null, tracker: {}, fileId: null, pending: {} },
+  _checkin: { date: null, tracker: {}, fileId: null, pending: {}, pendingIds: {} },
 
   // Memory only. missing: the journal folder was not found. readDate, readAt and readSeq: the last read
   // of the day's note (which day, when, and its sequence, so a late answer is dropped). landed: how many
@@ -197,7 +198,7 @@ Object.assign(App, {
   /** Read what the device kept of the check-in */
   initCheckin() {
     const kept = this.readJson(KEYS.CHECKIN, null);
-    const state = { date: null, tracker: {}, fileId: null, pending: {} };
+    const state = { date: null, tracker: {}, fileId: null, pending: {}, pendingIds: {} };
     if (kept && typeof kept === 'object' && !Array.isArray(kept)) {
       if (this.isCheckinDay(kept.date)) state.date = kept.date;
       state.tracker = this.checkinEntries(kept.tracker, false);
@@ -206,6 +207,11 @@ Object.assign(App, {
         for (const [date, changes] of Object.entries(kept.pending)) {
           const clean = this.isCheckinDay(date) ? this.checkinEntries(changes, true) : {};
           if (Object.keys(clean).length) state.pending[date] = clean;
+        }
+      }
+      if (kept.pendingIds && typeof kept.pendingIds === 'object' && !Array.isArray(kept.pendingIds)) {
+        for (const [date, id] of Object.entries(kept.pendingIds)) {
+          if (this.isCheckinDay(date) && typeof id === 'string' && id) state.pendingIds[date] = id;
         }
       }
     }
@@ -231,6 +237,10 @@ Object.assign(App, {
       c.date = today;
       c.fileId = null;
       c.tracker = this.applyCheckin({}, c.pending[today]);
+      // The ID of a day still to go up stays: its create may have landed already
+      for (const date of Object.keys(c.pendingIds)) {
+        if (!c.pending[date]) delete c.pendingIds[date];
+      }
       this.saveCheckin();
     }
     return today;
@@ -323,7 +333,7 @@ Object.assign(App, {
       } catch (e) {
         console.warn(`Check-in of ${date} not on the Drive yet:`, e);
         all = false;
-        if (/\b404\b/.test(String(e?.message))) this.forgetJournalFolder();
+        if (e?.status === 404) this.forgetJournalFolder();
         if (e?.code === 'login_needed') break;
         continue;
       }
@@ -353,7 +363,7 @@ Object.assign(App, {
       try {
         return { id, content: await this.driveGetFileContent(id) };
       } catch (e) {
-        if (!/\b404\b/.test(String(e?.message))) throw e;
+        if (e?.status !== 404) throw e;
         if (c.fileId === id) c.fileId = null; // gone from the Drive: look it up by name
       }
     }
@@ -365,18 +375,38 @@ Object.assign(App, {
   },
 
   /** Write these keys into the day's note, read fresh from the Drive right before (text written on the PC a
-      minute ago goes back untouched), or create the note with them. Answers the text now on the Drive. */
+      minute ago goes back untouched), or create the note with them. Answers the text now on the Drive.
+      The create goes with an ID asked for first and kept in pendingIds: if an earlier create landed and
+      its answer was lost (a search by name may not show the note yet), the Drive answers 409 and the
+      note that is there is written like a note found. */
   async writeJournalDay(date, changes, folderId) {
+    const c = this._checkin;
+    const update = async (id, content) => {
+      const next = this.writeTracker(content, changes);
+      if (next !== content) await this.driveUpdateFile(id, next);
+      return next;
+    };
     const file = await this.findJournalDay(date, folderId);
     if (file) {
-      const next = this.writeTracker(file.content, changes);
-      if (next !== file.content) await this.driveUpdateFile(file.id, next);
+      const next = await update(file.id, file.content);
+      delete c.pendingIds[date];
       return next;
     }
-    const born = this.journalTemplate(changes);
-    const created = await this.driveCreateFile(this.journalFileName(date), born, folderId);
-    if (date === this._checkin.date) this._checkin.fileId = created.id;
-    return born;
+    if (!c.pendingIds[date]) {
+      c.pendingIds[date] = await this.driveNewId();
+      this.saveCheckin(); // before the create goes out: the app may close before its answer
+    }
+    const id = c.pendingIds[date];
+    let written = this.journalTemplate(changes);
+    try {
+      await this.driveCreateFile(this.journalFileName(date), written, folderId, id);
+    } catch (e) {
+      if (e?.status !== 409) throw e;
+      written = await update(id, await this.driveGetFileContent(id));
+    }
+    delete c.pendingIds[date];
+    if (date === c.date) c.fileId = id;
+    return written;
   },
 
   /** The day's note read from the Drive in the background: the tracker becomes what came, plus what is

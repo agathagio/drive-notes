@@ -37,12 +37,17 @@ const CONFIG = {
   },
   // Pause in the typing, in ms, before a search goes to the Drive
   SEARCH_DELAY: 500,
+  // Pause in the typing, in ms, before the text is kept as a draft on the device: an app killed mid-sentence
+  // loses at most this much
+  DRAFT_DELAY: 2000,
   // Folders the home tree keeps out of sight until "Mostrar pastas de sistema" is on (by name, at any depth)
   HIDDEN_FOLDERS: ['_media', '_tasknotes', '_templates'],
   // How many items an open folder of the home tree shows at a time ("Ver mais" brings the next ones)
   TREE_PAGE: 30,
   // How many folders the home tree asks the Drive for at the same time, one level ahead of the taps
   TREE_AHEAD: 4,
+  // Waits, in ms, before trying a GET or PATCH to the Drive again after a 429 or 5xx: one more try per item
+  DRIVE_RETRY_DELAYS: [500, 1500],
   // The Worker that holds the Google client secret (worker/index.js): trades the login's code for the
   // tokens and renews the access token. Public, like CLIENT_ID. Set at deploy time (SETUP.md).
   AUTH_URL: 'https://drive-notes-auth.agathagio.workers.dev/',
@@ -101,11 +106,17 @@ const App = {
 
   autoSaveTimer: null,
 
+  // The draft written after a pause in the typing (see markDirty)
+  _draftTimer: null,
+
   accessToken: null,
 
   // All Drive writes run through this chain, one at a time, so a create and a save
   // (or two saves) of the same file can never race and duplicate or reorder content
   _saveChain: Promise.resolve(),
+
+  // A syncDrafts round is under way: one at a time
+  _syncingDrafts: false,
 
   // Bumped on every file open; a slow load that lost the race is discarded
   _loadSeq: 0,
@@ -186,6 +197,10 @@ const App = {
   // waiting behind the old cache, which is the first thing to rule out when a fix does not show up.
   _version: '?',
 
+  // Whether the browser keeps this site's storage (the drafts) when the phone runs short of space:
+  // true, false, or '?' where it cannot tell (see askPersistentStorage)
+  _persisted: '?',
+
   // New version (see watchVersions): the service worker registration, whether a new version has taken
   // over this page, and whether the reload into it is under way (it happens once, never in a loop)
   _swRegistration: null,
@@ -255,6 +270,7 @@ const App = {
     this.useWatcher = typeof CloseWatcher !== 'undefined';
     this.log('init');
     this.readVersion();
+    this.askPersistentStorage();
     // The saved login does not depend on Google's script having loaded
     this.restoreToken();
     // Opened from a shortcut or a share: read before anything rewrites the history entry
@@ -273,7 +289,11 @@ const App = {
       sessionStorage.removeItem(KEYS.REOPEN);
       this.startLaunch(launch);
     } else {
-      this.reopenAfterUpdate().then(() => this.offerPendingArrival());
+      // Drafts go up once the note of an update's reload is back: that one is on screen and stays out
+      this.reopenAfterUpdate().then(() => {
+        this.syncDrafts();
+        return this.offerPendingArrival();
+      });
     }
   },
 
@@ -328,9 +348,11 @@ const App = {
     this.setSaveStatus('', '');
     this.showWelcome();
     this.renderHome();
-    // The note just left may still be syncing; once it settles its draft is gone
+    // The note just left may still be syncing; once it settles its draft is gone, and the drafts it left
+    // behind go up
     this._saveChain.then(() => {
       if (!this.currentFile) this.renderDrafts();
+      this.syncDrafts();
     });
     // A new version offered by the bar and left for later: the home screen is where it can just reload
     this.offerUpdate();
@@ -352,6 +374,13 @@ const App = {
     this.updateFileNameDisplay();
     this.scheduleAutoSave();
     this.scheduleEmbedDecoration();
+    // A draft at every pause in the typing. Only for the note it was armed on, and only while that note still
+    // has text to keep: a save, a discard or another note in between would otherwise leave a ghost draft.
+    const file = this.currentFile;
+    clearTimeout(this._draftTimer);
+    this._draftTimer = setTimeout(() => {
+      if (file && this.currentFile === file && this.isDirty) this.saveDraft();
+    }, CONFIG.DRAFT_DELAY);
   },
 
   updateFileNameDisplay() {
@@ -822,6 +851,12 @@ const App = {
       this.rememberPlace();
       this.rememberHomeScroll();
       if (this.isDirty) this.saveDraft();
+    });
+    // The network is back: what a failed save or check-in left behind goes up now, not at the next tap
+    window.addEventListener('online', () => {
+      if (this.currentFile && this.isDirty) this.save();
+      if (Object.keys(this._checkin.pending).length > 0) this.queueCheckinPush();
+      this.syncDrafts();
     });
   },
 };

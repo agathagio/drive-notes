@@ -941,6 +941,11 @@ body.has-selection .toolbar-btn.toolbar-extract {
   white-space: normal;
 }
 
+/* The conflict dialog hides the buttons that do not apply (a note gone from the Drive): .btn is a flex box */
+.modal-actions-stacked .btn[hidden] {
+  display: none;
+}
+
 /* ── The "Guardar em…" / "Anotar em…" sheet (App.openArrivalSheet) ── */
 
 /* What arrived, at the top: three lines at most, the rest cut. The space above and below is a border in

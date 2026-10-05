@@ -40,6 +40,14 @@ function makeDrive() {
         this.files.get(id).mimeType = FOLDER;
       }
     },
+    // Plain folders right under the root (folderA, folderZ...): a link or a photo is only looked for
+    // inside the root, so a scenario that opens one puts the folders of its notes there
+    seedFolders(...ids) {
+      for (const id of ids) {
+        this.put(id, id, '', [ROOT_ID]);
+        this.files.get(id).mimeType = FOLDER;
+      }
+    },
     count(method) { return this.log.filter(l => l.startsWith(method)).length; },
   };
   const json = (obj, status = 200) => ({ ok: status < 400, status, json: async () => obj, text: async () => JSON.stringify(obj) });
@@ -47,6 +55,20 @@ function makeDrive() {
     const method = opts.method || 'GET';
     const u = new URL(url);
     await sleep(drive.delay);
+    // A passing hiccup: the next `times` calls of `method` answer `status` (logged as "<method> <status>")
+    const hiccup = drive.hiccup;
+    if (hiccup && hiccup.method === method && hiccup.times > 0) {
+      hiccup.times--;
+      drive.log.push(`${method} ${hiccup.status}`);
+      return json({}, hiccup.status);
+    }
+    // An ID handed out ahead of a create (files.generateIds), from the same counter as the creates without one,
+    // so the IDs a scenario expects ("new1") stay the same. Logged as "IDS <id>".
+    if (method === 'GET' && u.pathname.endsWith('/drive/v3/files/generateIds')) {
+      const id = 'new' + drive.nextId++;
+      drive.log.push(`IDS ${id}`);
+      return json({ kind: 'drive#generatedIds', space: 'drive', ids: [id] });
+    }
     const m = u.pathname.match(/files\/([^/?]+)$/);
     if (method === 'GET' && u.pathname.endsWith('/drive/v3/files')) {
       const q = u.searchParams.get('q');
@@ -78,7 +100,12 @@ function makeDrive() {
         const files = [...drive.files.values()].filter(f => !f.trashed && f.mimeType !== FOLDER
           && (String(f.content).toLowerCase().includes(word) || f.name.toLowerCase().includes(word)))
           .map(f => ({ id: f.id, name: f.name, parents: f.parents, mimeType: f.mimeType || 'text/markdown', modifiedTime: f.modifiedTime }));
-        return json({ files });
+        // In pages of 100 at most, whatever pageSize asks (the Drive may answer fewer than asked);
+        // the token is where the next page starts
+        const size = Math.min(Number(u.searchParams.get('pageSize')) || 100, 100);
+        const start = Number(u.searchParams.get('pageToken')) || 0;
+        const page = files.slice(start, start + size);
+        return json(start + size < files.length ? { files: page, nextPageToken: String(start + size) } : { files: page });
       }
       if (q.includes(' contains ')) {
         // Search, the way the Drive does it: a name matches on the start of a word, the text on a whole word
@@ -115,7 +142,8 @@ function makeDrive() {
         };
       }
       drive.log.push(`GET meta ${f.id}`);
-      return json({ id: f.id, name: f.name, modifiedTime: f.modifiedTime, parents: f.parents });
+      // A file in the bin still answers, like the Drive's: it only says so
+      return json({ id: f.id, name: f.name, modifiedTime: f.modifiedTime, parents: f.parents, ...(f.trashed ? { trashed: true } : {}) });
     }
     if (method === 'PATCH' && m && !u.pathname.startsWith('/upload/')) {
       if (drive.failWrites) return json({}, 500);
@@ -152,9 +180,20 @@ function makeDrive() {
       const meta = JSON.parse(parts[1].split('\r\n\r\n')[1]);
       const content = parts[2].split('\r\n\r\n').slice(1).join('\r\n\r\n').replace(/\r\n$/, '');
       const mimeType = /Content-Type: (\S+)/.exec(parts[2])[1];
-      const id = 'new' + drive.nextId++;
+      // The ID in the metadata, as the Drive takes it; a second create with it is a 409, and no file
+      const id = meta.id || 'new' + drive.nextId++;
+      if (drive.files.has(id)) {
+        drive.log.push(`POST 409 ${id}`);
+        return json({ error: { code: 409 } }, 409);
+      }
       drive.files.set(id, { id, name: meta.name, content, mimeType, parents: meta.parents, modifiedTime: drive.tick() });
       drive.log.push(`POST ${id} ${meta.name}`);
+      // "Create and lose the answer": the file is made, the app sees a network error (the next `loseCreate` creates)
+      if (drive.loseCreate > 0) {
+        drive.loseCreate--;
+        drive.log.push(`LOST ${id}`);
+        throw new TypeError('Failed to fetch');
+      }
       const f = drive.files.get(id);
       return json({ id, name: f.name, parents: f.parents, modifiedTime: f.modifiedTime });
     }
@@ -270,6 +309,9 @@ async function boot({ auth = true, seedStorage = {}, seedSession = {}, watcher =
   // One eval for the whole app: a `const` declared inside an indirect eval lives in that eval only,
   // so evaluating the app's files one by one would leave App undefined for the second file
   w.eval(appSource() + ';window.__App = App; window.__CONFIG = CONFIG;');
+  // No waits between tries of a failed Drive call: scenarios count the calls and fail the Drive on purpose.
+  // Set before init runs (on DOMContentLoaded, after this eval); the E scenarios turn the waits back on.
+  w.__CONFIG.DRIVE_RETRY_DELAYS = [];
   await new Promise(r => w.document.readyState === 'complete' ? r() : w.addEventListener('load', r));
   const App = w.__App;
   if (auth) {
@@ -755,6 +797,7 @@ async function scenario(title, block) {
     image('D2', 'repetida.png', 'folderZ', 'image/png'); // newer: without the _media rule, it would win
     drive.put('P', 'doc.pdf', 'bin', ['media']); drive.files.get('P').mimeType = 'application/pdf';
     drive.put('A', 'a.md', '![[foto.jpg]]\n\n![[foto.jpg|300]]\n\n![[_media/repetida.png|legenda]]\n\n![[doc.pdf]]\n\n![[sumiu.webp]]');
+    drive.seedFolders('folderZ'); // D2 inside the root too, so the _media rule is what picks D1
     await App.openFile('A', 'a.md');
     const c = App.els.previewContainer;
     await sleep(120);
@@ -943,6 +986,7 @@ async function scenario(title, block) {
     drive.put('OB', "O'Brien.md", 'apostrofo', ['folderZ']);
     drive.put('X', 'Planilha.xlsx', 'bin', ['folderA']); drive.files.get('X').mimeType = 'application/vnd.ms-excel';
     drive.remoteEdit('B1', 'B de outra pasta'); // B1 more recent: without the folder rule, it would win
+    drive.seedFolders('folderA', 'folderZ');
     let scrolled = null;
     w.HTMLElement.prototype.scrollIntoView = function () { scrolled = this.textContent; };
 
@@ -1000,6 +1044,7 @@ async function scenario(title, block) {
       '[fora](https://example.com) [outra](Outra%20Nota.md#Parte) [ancora](#Parte)',
     ].join('\n'));
     drive.put('O', 'Outra Nota.md', '## Parte\n\nx');
+    drive.seedFolders('folderA');
     await App.openFile('A', 'a.md');
     const c = App.els.previewContainer;
     const callouts = [...c.querySelectorAll('blockquote.callout')];
@@ -4599,6 +4644,7 @@ async function scenario(title, block) {
     drive.put('C', 'Nota C.md', 'C', ['folderA']);
     drive.put('X', 'Planilha.xlsx', 'bin', ['folderA']); drive.files.get('X').mimeType = 'application/vnd.ms-excel';
     drive.remoteEdit('B1', 'B de outra pasta'); // B1 more recent: without the folder rule, it would win
+    drive.seedFolders('folderA', 'folderZ');
     await App.navigateTo('A', 'a.md');
     App.setMode('preview');
     const before = App.els.previewContainer.innerHTML;
@@ -4744,6 +4790,7 @@ async function scenario(title, block) {
     drive.put('K', 'quadro.md', board, ['folderA']);
     drive.put('N', 'comum.md', '## Nao e quadro\n\n- [ ] item\n\n%% comentario %%', ['folderA']);
     drive.put('P', 'intro.md', '---\nkanban-plugin: board\n---\n\ntexto antes das colunas\n\n## A\n\n- [ ] a\n- [ ] b\n\n## B\n\n- [ ] c\n\n%% kanban:settings\n```\n{quebrado\n```\n%%', ['folderA']);
+    drive.seedFolders('folderA');
     await App.navigateTo('K', 'quadro.md');
     App.setMode('preview');
     const c = App.els.previewContainer;
@@ -4879,6 +4926,7 @@ async function scenario(title, block) {
     ].join('\n\n');
     drive.put('Y', 'y.md', note, ['folderA']);
     drive.put('V', 'video.md', 'antes\n\n![Aula](https://youtu.be/a1b2c3d4e5f)', ['folderA']);
+    drive.seedFolders('folderA');
     await App.navigateTo('Y', 'y.md');
     App.setMode('preview');
     const c = App.els.previewContainer;
@@ -6898,6 +6946,952 @@ async function scenario(title, block) {
       check('sem rede: a nota nova abre do mesmo jeito, com o nome da hora e o type: journal',
         !sheetShown(d) && d.body.dataset.view === 'edit' && App.currentFile?.name === NAME && App.getContent() === '---\ntype: journal\n---\n',
         [d.body.dataset.view, App.currentFile?.name]);
+    }
+  });
+
+  // ── Drive errors: the status, the retry of a passing hiccup, the network coming back (T01) ──
+
+  await scenario('E1. Drive responde 503 uma vez no PATCH: o save tenta de novo e termina em Salvo no Drive', async () => {
+    const { App, drive, type, w } = await boot();
+    w.__CONFIG.DRIVE_RETRY_DELAYS = [1, 1];
+    drive.put('A', 'a.md', 'original');
+    await App.openFile('A', 'a.md');
+    drive.hiccup = { method: 'PATCH', status: 503, times: 1 };
+    type('depois do soluco');
+    await App.save();
+    check('dois PATCH (o 503 e o que deu certo), texto no Drive, status Salvo no Drive, nota limpa',
+      drive.count('PATCH') === 2 && drive.files.get('A').content === 'depois do soluco'
+        && App.els.saveStatus.textContent === 'Salvo no Drive' && !App.isDirty && App.listDrafts().length === 0,
+      [drive.log.filter(l => l.startsWith('PATCH')), App.els.saveStatus.textContent]);
+    const missing = await App.driveFetch('https://www.googleapis.com/drive/v3/files/nada?fields=id').catch(e => e);
+    check('o erro do Drive traz o status e a mensagem de sempre',
+      missing instanceof w.Error && missing.status === 404 && missing.message === 'Drive request failed: 404',
+      [missing?.status, missing?.message]);
+  });
+
+  await scenario('E2. Drive responde 503 no POST: uma chamada so, o texto vira rascunho e o save se rearma', async () => {
+    const { App, drive, type, w } = await boot();
+    w.__CONFIG.DRIVE_RETRY_DELAYS = [1, 1];
+    // The background create of newFile is a POST too: one hiccup for it, one for the save
+    drive.hiccup = { method: 'POST', status: 503, times: 1 };
+    App.newFile();
+    await App._saveChain;
+    check('a criacao por tras fez um POST so, sem repetir, e nada nasceu no Drive',
+      drive.count('POST') === 1 && drive.files.size === 0, drive.log);
+    let armed = 0;
+    const schedule = App.scheduleAutoSave;
+    App.scheduleAutoSave = function () { armed++; return schedule.call(this); };
+    drive.hiccup = { method: 'POST', status: 503, times: 1 };
+    type('sem criar duas vezes');
+    armed = 0; // typing arms it too: only the one after the failure counts
+    await App.save();
+    check('o save fez mais um POST so, nada nasceu, texto em rascunho, status de erro',
+      drive.count('POST') === 2 && drive.files.size === 0 && App.isDirty
+        && App.listDrafts().length === 1 && App.els.saveStatus.textContent === 'Erro: salvo local',
+      [drive.log, App.els.saveStatus.textContent]);
+    check('o save falho armou a nova tentativa automatica', armed === 1 && !!App.autoSaveTimer, armed);
+    clearTimeout(App.autoSaveTimer);
+  });
+
+  await scenario('E3. A rede volta (evento online): a nota suja sobe sozinha e o check-in pendente tambem', async () => {
+    const { App, drive, type, w } = await boot();
+    drive.put('A', 'a.md', 'original');
+    await App.openFile('A', 'a.md');
+    let pushes = 0;
+    App.queueCheckinPush = () => { pushes++; return Promise.resolve(true); };
+    App._checkin.pending = {};
+    type('escrito sem rede');
+    clearTimeout(App.autoSaveTimer);
+    w.dispatchEvent(new w.Event('online'));
+    const saved = await until(() => drive.files.get('A').content === 'escrito sem rede' && !App.isDirty);
+    check('o online salvou a nota suja, um PATCH', saved && drive.count('PATCH') === 1, drive.log);
+    check('sem pendencia do check-in, nada de push', pushes === 0, pushes);
+    App._checkin.pending = { '2026-10-05': { water: true } };
+    w.dispatchEvent(new w.Event('online'));
+    check('com pendencia, o online chama o push do check-in, e a nota limpa nao vai de novo',
+      pushes === 1 && drive.count('PATCH') === 1, [pushes, drive.log]);
+  });
+
+  // ── A note gone from the Drive (T02) ──
+  // Sent to the bin on the PC: the modifiedTime stays, so only the trash flag can tell
+  const binned = (drive, id) => { drive.files.get(id).trashed = true; };
+  // The conflict dialog the way the person sees it: its title and the buttons not hidden, with their labels
+  const dialog = (w) => {
+    const overlay = w.document.getElementById('conflict-overlay');
+    return {
+      visible: overlay.classList.contains('visible'),
+      title: overlay.querySelector('h3').textContent,
+      buttons: [...overlay.querySelectorAll('[data-conflict]')].filter(b => !b.hidden).map(b => `${b.dataset.conflict}:${b.textContent}`).join('|'),
+    };
+  };
+  const GONE_BUTTONS = 'copy:Salvar como nota nova|discard:Descartar a minha|later:Decidir depois';
+  const CONFLICT_BUTTONS = 'copy:Salvar a minha como cópia|overwrite:Sobrescrever o Drive|reload:Descartar a minha e recarregar|later:Decidir depois';
+  const keptOnDevice = async (App, id) => {
+    const end = Date.now() + 3000;
+    while (Date.now() < end) {
+      if (await App.NoteStore.get(id)) return true;
+      await sleep(10);
+    }
+    return false;
+  };
+
+  await scenario('G1. Nota apagada no Drive, editada e salva: nenhum PATCH, dialogo de nota apagada, rascunho gravado', async () => {
+    const { App, drive, type, w } = await boot();
+    drive.put('A', 'a.md', 'original');
+    await App.openFile('A', 'a.md');
+    binned(drive, 'A');
+    let armed = 0;
+    const schedule = App.scheduleAutoSave;
+    App.scheduleAutoSave = function () { armed++; return schedule.call(this); };
+    type('escrito depois de apagada');
+    armed = 0; // typing arms it too: only one after the save counts
+    const onDrive = await App.save();
+    check('editar nota apagada nao faz PATCH: o Drive guarda o texto de antes',
+      drive.count('PATCH') === 0 && drive.files.get('A').content === 'original', drive.log);
+    check('o save responde que nao subiu', onDrive === false, onDrive);
+    const shown = dialog(w);
+    check('dialogo de nota apagada na tela, com tres botoes', shown.visible && shown.title === 'Nota apagada no Drive' && shown.buttons === GONE_BUTTONS, shown);
+    check('o texto do dialogo diz que ela foi apagada',
+      w.document.getElementById('conflict-text').textContent === '"a.md" foi apagada no Drive. Sua versão está guardada neste aparelho.',
+      w.document.getElementById('conflict-text').textContent);
+    check('rascunho guardado com o texto, nota segue suja', App.listDrafts()[0]?.content === 'escrito depois de apagada' && App.isDirty, App.listDrafts());
+    check('nao rearmou o salvamento automatico', armed === 0, armed);
+
+    w.document.querySelector('[data-conflict="later"]').click();
+    const closed = await until(() => !dialog(w).visible);
+    check('decidir depois: fecha, com o aviso de tocar em salvar',
+      closed && App.els.saveStatus.textContent === 'Nota apagada no Drive: toque em salvar', App.els.saveStatus.textContent);
+    drive.log.length = 0;
+    await App.save();
+    check('salvamento automatico com ela apagada nao vai ao Drive nem abre o dialogo', drive.log.length === 0 && !dialog(w).visible, drive.log);
+    await App.save({ manual: true });
+    check('salvar com toque reabre o dialogo de nota apagada, sem ir ao Drive',
+      dialog(w).visible && dialog(w).buttons === GONE_BUTTONS && drive.log.length === 0, [dialog(w), drive.log]);
+    w.document.querySelector('[data-conflict="later"]').click();
+    App.flushCurrent();
+    await App._saveChain;
+    check('sair da nota deixa o texto so no rascunho', drive.log.length === 0 && App.listDrafts().length === 1, drive.log);
+    clearTimeout(App.autoSaveTimer);
+  });
+
+  await scenario('G2. Nota apagada de vez (404 na checagem ou no PATCH): o mesmo dialogo; 404 na criacao e erro comum', async () => {
+    const { App, drive, type, w } = await boot();
+    drive.put('A', 'a.md', 'original');
+    await App.openFile('A', 'a.md');
+    drive.files.delete('A');
+    type('sem arquivo');
+    await App.save();
+    check('404 na checagem: dialogo de nota apagada, sem PATCH',
+      App.currentFile.gone === true && dialog(w).visible && dialog(w).buttons === GONE_BUTTONS && drive.count('PATCH') === 0, [dialog(w), drive.log]);
+    w.document.querySelector('[data-conflict="later"]').click();
+
+    drive.put('B', 'b.md', 'original B');
+    await App.openFile('B', 'b.md');
+    // Gone between the check and the write: the PATCH itself answers 404
+    const real = w.fetch;
+    w.fetch = async (url, opts = {}) => (opts.method === 'PATCH' && String(url).includes('/upload/')
+      ? { ok: false, status: 404, json: async () => ({}) } : real(url, opts));
+    let armed = 0;
+    const schedule = App.scheduleAutoSave;
+    App.scheduleAutoSave = function () { armed++; return schedule.call(this); };
+    type('B mexida');
+    armed = 0;
+    await App.save();
+    w.fetch = real;
+    check('404 no PATCH: dialogo de nota apagada, rascunho guardado, sem nova tentativa automatica',
+      App.currentFile.gone === true && dialog(w).visible && armed === 0
+        && App.listDrafts().some(d => d.fileId === 'B' && d.content === 'B mexida'), [dialog(w), armed, App.listDrafts()]);
+    w.document.querySelector('[data-conflict="later"]').click();
+
+    // A 404 on a create is not a note gone: an ordinary error
+    drive.hiccup = { method: 'POST', status: 404, times: 2 };
+    App.newFile();
+    await App._saveChain;
+    type('nota nova');
+    await App.save();
+    check('404 na criacao: erro comum, sem dialogo',
+      !App.currentFile.gone && !dialog(w).visible && App.els.saveStatus.textContent === 'Erro: salvo local',
+      [App.currentFile.gone, dialog(w), App.els.saveStatus.textContent]);
+    clearTimeout(App.autoSaveTimer);
+  });
+
+  await scenario('G3. Nota apagada: Salvar como nota nova cria no _inbox com o mesmo nome; depois o conflito comum tem os quatro botoes', async () => {
+    const { App, drive, type, w } = await boot();
+    drive.put('A', 'a.md', 'original');
+    await App.openFile('A', 'a.md');
+    binned(drive, 'A');
+    type('meu texto');
+    await App.save();
+    w.document.querySelector('[data-conflict="copy"]').click();
+    const landed = await until(() => App.currentFile?.id && App.currentFile.id !== 'A' && !App.isDirty);
+    await App._saveChain;
+    const made = [...drive.files.values()].find(f => f.id !== 'A');
+    check('arquivo novo no _inbox, com o mesmo nome e o texto',
+      landed && made?.name === 'a.md' && made?.parents?.[0] === INBOX && made?.content === 'meu texto', made);
+    check('a apagada ficou na lixeira como estava', drive.files.get('A').trashed === true && drive.files.get('A').content === 'original');
+    check('na tela a nota nova, limpa, e nenhum rascunho sobrando',
+      App.currentFile.id === made?.id && !App.isDirty && App.listDrafts().length === 0, App.listDrafts());
+    check('a nova nos recentes, a apagada fora', App.getRecents().some(r => r.id === made?.id) && !App.getRecents().some(r => r.id === 'A'), App.getRecents());
+    check('dialogo fechado', !dialog(w).visible);
+
+    // The same overlay, for an ordinary conflict right after: its four buttons and its own words
+    drive.put('B', 'b.md', 'B');
+    await App.openFile('B', 'b.md');
+    drive.remoteEdit('B', 'B no PC');
+    type('B no celular');
+    await App.save();
+    const shown = dialog(w);
+    check('conflito comum: quatro botoes com os rotulos de sempre',
+      shown.visible && shown.title === 'Conflito com o Drive' && shown.buttons === CONFLICT_BUTTONS, shown);
+    check('conflito comum: o texto de sempre',
+      w.document.getElementById('conflict-text').textContent === '"b.md" mudou no Drive depois que você abriu. Sua versão está guardada neste aparelho.');
+    w.document.querySelector('[data-conflict="later"]').click();
+    clearTimeout(App.autoSaveTimer);
+  });
+
+  await scenario('G4. Nota apagada: Descartar a minha limpa rascunho, recentes e aparelho, e volta pra tela de antes', async () => {
+    const { App, drive, type, w } = await boot({ idb: true });
+    drive.put('A', 'a.md', 'original');
+    await App.navigateTo('A', 'a.md');
+    check('(guardada no aparelho)', await keptOnDevice(App, 'A'));
+    binned(drive, 'A');
+    type('vou largar');
+    await App.save();
+    check('(dialogo de nota apagada)', dialog(w).buttons === GONE_BUTTONS, dialog(w));
+    w.document.querySelector('[data-conflict="discard"]').click();
+    const home = await until(() => w.document.body.dataset.view === 'welcome' && App.currentFile === null);
+    check('voltou pra tela de antes, sem nota aberta', home, [w.document.body.dataset.view, App.currentFile?.id]);
+    check('sem rascunho, fora dos recentes e do aparelho',
+      App.listDrafts().length === 0 && !App.getRecents().some(r => r.id === 'A') && await App.NoteStore.get('A') === null, App.listDrafts());
+    check('nada escrito no Drive, dialogo fechado', drive.count('PATCH') === 0 && drive.files.get('A').content === 'original' && !dialog(w).visible, drive.log);
+  });
+
+  await scenario('G5. Nota guardada no aparelho e apagada no Drive, aberta pelos recentes: aviso, some dos recentes e do aparelho', async () => {
+    const { App, drive, type, w } = await boot({ idb: true });
+    drive.put('A', 'a.md', 'guardada');
+    drive.put('B', 'b.md', 'outra');
+    await App.openFile('A', 'a.md');
+    check('(guardada no aparelho)', await keptOnDevice(App, 'A'));
+    await App.openFile('B', 'b.md');
+    binned(drive, 'A');
+    App.renderRecents();
+    const recent = [...w.document.querySelectorAll('#recents-ul .recent-name')].find(el => el.textContent === 'a.md');
+    recent.click();
+    const warned = await until(() => App.els.saveStatus.textContent === 'Esta nota foi apagada no Drive');
+    check('abriu a guardada na hora, em leitura, e avisou que foi apagada',
+      warned && App.currentFile?.id === 'A' && App.getContent() === 'guardada' && w.document.body.dataset.view === 'preview',
+      [App.els.saveStatus.textContent, App.currentFile?.id, w.document.body.dataset.view]);
+    check('saiu dos recentes', !App.getRecents().some(r => r.id === 'A'), App.getRecents());
+    check('saiu do aparelho', await App.NoteStore.get('A') === null);
+    drive.log.length = 0;
+    type('escrevi na apagada');
+    await App.save();
+    check('o salvamento automatico so guarda o rascunho, sem ir ao Drive',
+      !dialog(w).visible && drive.log.length === 0 && App.listDrafts()[0]?.content === 'escrevi na apagada', [dialog(w), drive.log]);
+    await App.save({ manual: true });
+    check('o primeiro toque em salvar cai direto no dialogo, sem ir ao Drive',
+      dialog(w).visible && dialog(w).buttons === GONE_BUTTONS && drive.log.length === 0, [dialog(w), drive.log]);
+    w.document.querySelector('[data-conflict="later"]').click();
+    clearTimeout(App.autoSaveTimer);
+  });
+
+  await scenario('G6. Nota na lixeira aberta sem copia no aparelho: nao abre, avisa e sai dos recentes', async () => {
+    const { App, drive, w } = await boot({ seedStorage: {
+      drivenotes_recents: JSON.stringify([{ id: 'A', name: 'a.md', timestamp: Date.now() }]),
+    } });
+    drive.put('A', 'a.md', 'na lixeira');
+    binned(drive, 'A');
+    await App.navigateTo('A', 'a.md');
+    const undone = await until(() => w.history.state?.view === 'welcome');
+    check('nao abriu: segue na tela inicial, sem entrada sobrando',
+      undone && w.document.body.dataset.view === 'welcome' && App.currentFile === null, [w.history.state, App.currentFile?.id]);
+    check('aviso de nota apagada', App.els.saveStatus.textContent === 'Esta nota foi apagada no Drive', App.els.saveStatus.textContent);
+    check('saiu dos recentes, sem baixar o texto', !App.getRecents().some(r => r.id === 'A') && drive.count('GET content') === 0, [App.getRecents(), drive.log]);
+  });
+
+  // ── Drafts that go up on their own (T04) ──
+  // A draft the way saveDraft leaves it, under drivenotes_draft_<key>
+  const seedDraft = (w, key, fields) => w.localStorage.setItem(`drivenotes_draft_${key}`, JSON.stringify(fields));
+  const draftOf = (w, key) => JSON.parse(w.localStorage.getItem(`drivenotes_draft_${key}`));
+  // What went to the Drive about notes, leaving out the listings of the home
+  const noteCalls = (drive) => drive.log.filter(l => !l.startsWith('LIST'));
+  const DRAFTS_SHOWN = (w) => [...w.document.querySelectorAll('#drafts-ul li')].map(li => li.textContent);
+
+  await scenario('S1. Rascunho de nota existente sobe sozinho: o texto vai pro Drive e o rascunho some, do mais antigo pro mais novo', async () => {
+    const { App, drive, w } = await boot();
+    drive.put('A', 'a.md', 'antes A');
+    drive.put('B', 'b.md', 'antes B');
+    seedDraft(w, 'B', { fileId: 'B', name: 'b.md', content: 'rascunho B', timestamp: Date.now() - 1000,
+      baseModifiedTime: drive.files.get('B').modifiedTime, parents: ['folderA'] });
+    seedDraft(w, 'A', { fileId: 'A', name: 'a.md', content: 'rascunho A', timestamp: Date.now() - 5000,
+      baseModifiedTime: drive.files.get('A').modifiedTime, parents: ['folderA'] });
+    App.renderDrafts();
+    check('antes: os dois na lista Nao sincronizados', DRAFTS_SHOWN(w).length === 2, DRAFTS_SHOWN(w));
+    await App.syncDrafts();
+    check('o texto dos dois esta no Drive', drive.files.get('A').content === 'rascunho A' && drive.files.get('B').content === 'rascunho B',
+      [drive.files.get('A').content, drive.files.get('B').content]);
+    check('do mais antigo pro mais novo, um PATCH cada', drive.log.filter(l => l.startsWith('PATCH')).join('|') === 'PATCH A|PATCH B', drive.log);
+    check('os rascunhos sumiram e a lista da home esvaziou', App.listDrafts().length === 0
+      && w.document.getElementById('drafts-list').classList.contains('hidden'), App.listDrafts());
+    drive.log.length = 0;
+    await App.syncDrafts();
+    check('segunda rodada nao vai ao Drive', noteCalls(drive).length === 0, drive.log);
+  });
+
+  await scenario('S2. Rascunho de nota que nunca foi criada: a nota nasce no Drive uma vez so', async () => {
+    const { App, drive, w } = await boot();
+    drive.seedRoots();
+    seedDraft(w, 'new_123', { fileId: null, name: 'ideia.md', content: 'nota nascida sem rede', timestamp: Date.now() - 1000, parents: [INBOX] });
+    await App.syncDrafts();
+    const created = [...drive.files.values()].filter(f => f.name === 'ideia.md');
+    check('a nota foi criada no _inbox, com o texto', created.length === 1 && created[0].content === 'nota nascida sem rede' && created[0].parents[0] === INBOX,
+      created);
+    check('o rascunho sumiu', w.localStorage.getItem('drivenotes_draft_new_123') === null);
+    await App.syncDrafts();
+    check('segunda rodada nao cria de novo', drive.count('POST') === 1, drive.log);
+  });
+
+  await scenario('S3. Rascunho cuja nota mudou no Drive: nada e escrito, fica marcado conflito, e a segunda rodada nem pergunta', async () => {
+    const { App, drive, w } = await boot();
+    drive.put('A', 'a.md', 'antes');
+    const base = drive.files.get('A').modifiedTime;
+    drive.remoteEdit('A', 'escrito no PC');
+    const old = Date.now() - 3 * 3600e3;
+    seedDraft(w, 'A', { fileId: 'A', name: 'a.md', content: 'meu rascunho', timestamp: old, baseModifiedTime: base, parents: ['folderA'] });
+    await App.syncDrafts();
+    check('nada escrito: o Drive segue com o texto do PC', drive.count('PATCH') === 0 && drive.files.get('A').content === 'escrito no PC', drive.log);
+    const d = draftOf(w, 'A');
+    check('o rascunho fica, com conflict: true, o mesmo texto e a idade de antes',
+      d?.conflict === true && d.content === 'meu rascunho' && d.timestamp === old && d.baseModifiedTime === base, d);
+    check('na home, a etiqueta conflito no lugar do tempo',
+      w.document.querySelector('#drafts-ul li .recent-time')?.textContent === 'conflito', DRAFTS_SHOWN(w));
+    drive.log.length = 0;
+    await App.syncDrafts();
+    check('segunda rodada: nenhuma chamada por ele', noteCalls(drive).length === 0, drive.log);
+
+    // Opened as before: the save finds the conflict again and asks her
+    App.openDraft('drivenotes_draft_A');
+    await App.save({ manual: true });
+    check('aberto e salvo com toque: dialogo de conflito, sem PATCH', dialog(w).visible && dialog(w).buttons === CONFLICT_BUTTONS && drive.count('PATCH') === 0,
+      [dialog(w), drive.log]);
+    w.document.querySelector('[data-conflict="later"]').click();
+    clearTimeout(App.autoSaveTimer);
+  });
+
+  await scenario('S4. Nota apagada e Drive falhando: a apagada fica marcada, a outra espera com a idade de antes e sobe quando a rede volta', async () => {
+    const { App, drive, w } = await boot();
+    drive.put('A', 'a.md', 'antes A');
+    drive.put('B', 'b.md', 'antes B');
+    seedDraft(w, 'A', { fileId: 'A', name: 'a.md', content: 'rascunho A', timestamp: Date.now() - 5000,
+      baseModifiedTime: drive.files.get('A').modifiedTime, parents: ['folderA'] });
+    const old = Date.now() - 2 * 3600e3;
+    seedDraft(w, 'B', { fileId: 'B', name: 'b.md', content: 'rascunho B', timestamp: old,
+      baseModifiedTime: drive.files.get('B').modifiedTime, parents: ['folderA'] });
+    binned(drive, 'A');
+    drive.failWrites = true;
+    await App.syncDrafts();
+    check('a apagada: nenhum PATCH, rascunho marcado conflict', drive.count('PATCH') === 0 && draftOf(w, 'A')?.conflict === true, [drive.log, draftOf(w, 'A')]);
+    const b = draftOf(w, 'B');
+    check('Drive falhando: o rascunho fica, sem conflito, com a mesma idade', b?.content === 'rascunho B' && !b.conflict && b.timestamp === old, b);
+
+    drive.failWrites = false;
+    drive.log.length = 0;
+    w.dispatchEvent(new w.Event('online'));
+    const up = await until(() => drive.files.get('B').content === 'rascunho B' && w.localStorage.getItem('drivenotes_draft_B') === null);
+    check('a rede volta (online): o B sobe sozinho', up, drive.log);
+    await until(() => !App._syncingDrafts);
+    check('... e a apagada nem e perguntada', drive.count('GET meta A') === 0 && draftOf(w, 'A')?.conflict === true, drive.log);
+  });
+
+  await scenario('S5. A nota aberta fica de fora; rascunho limpo por um save na frente da fila, ou aberto enquanto ela anda, nao sobe de novo', async () => {
+    const { App, drive, type, w } = await boot();
+    drive.put('A', 'a.md', 'antes A');
+    drive.put('B', 'b.md', 'antes B');
+    drive.put('C', 'c.md', 'antes C');
+    await App.openFile('A', 'a.md');
+    type('A por salvar');
+    clearTimeout(App.autoSaveTimer);
+    App.saveDraft();
+    await App.syncDrafts();
+    check('a nota aberta com texto por salvar: syncDrafts nao toca nela',
+      drive.count('PATCH') === 0 && draftOf(w, 'A')?.content === 'A por salvar' && App.isDirty, drive.log);
+
+    // The queue held: a save of B goes first and clears its draft; C is opened while the round waits
+    seedDraft(w, 'B', { fileId: 'B', name: 'b.md', content: 'rascunho B', timestamp: Date.now() - 5000,
+      baseModifiedTime: drive.files.get('B').modifiedTime, parents: ['folderA'] });
+    seedDraft(w, 'C', { fileId: 'C', name: 'c.md', content: 'rascunho C', timestamp: Date.now() - 4000,
+      baseModifiedTime: drive.files.get('C').modifiedTime, parents: ['folderA'] });
+    let release;
+    App.enqueue(() => new Promise(r => { release = r; }));
+    const fileB = { id: 'B', name: 'b.md', draftKey: 'drivenotes_draft_B', modifiedTime: drive.files.get('B').modifiedTime, parents: ['folderA'] };
+    App.enqueue(() => App.saveSnapshot(fileB, 'rascunho B'));
+    const round = App.syncDrafts();
+    App.openDraft('drivenotes_draft_C');
+    clearTimeout(App.autoSaveTimer);
+    await until(() => typeof release === 'function');
+    release();
+    await round;
+    check('B subiu uma vez so: a rodada releu o rascunho dentro da fila', drive.count('PATCH B') === 1 && drive.files.get('B').content === 'rascunho B', drive.log);
+    // A copy read before the queue would go to the Drive again and come back as a false conflict
+    check('... sem segunda ida por ele e sem rascunho de conflito falso',
+      drive.count('GET meta B') === 1 && w.localStorage.getItem('drivenotes_draft_B') === null, [drive.log, draftOf(w, 'B')]);
+    check('C, aberto enquanto a fila andava, ficou de fora', drive.count('PATCH C') === 0 && draftOf(w, 'C')?.content === 'rascunho C'
+      && App.currentFile?.draftKey === 'drivenotes_draft_C', drive.log);
+    await App._saveChain;
+    clearTimeout(App.autoSaveTimer);
+  });
+
+  await scenario('S6. Quando roda: na abertura com login, ao voltar pra home; sem login, nada sai do aparelho', async () => {
+    {
+      const drive = makeDrive();
+      drive.put('A', 'a.md', 'antes');
+      const { App, w } = await boot({ auth: false, drive, seedStorage: {
+        drivenotes_draft_A: JSON.stringify({ fileId: 'A', name: 'a.md', content: 'rascunho A', timestamp: Date.now() - 5000,
+          baseModifiedTime: drive.files.get('A').modifiedTime, parents: ['folderA'] }),
+      } });
+      await App._saveChain;
+      check('sem login: a abertura nao vai ao Drive e o rascunho fica', noteCalls(drive).length === 0 && !!draftOf(w, 'A'), drive.log);
+      w.dispatchEvent(new w.Event('online'));
+      await App._saveChain;
+      check('sem login: o online tambem nao', noteCalls(drive).length === 0 && !!draftOf(w, 'A'), drive.log);
+    }
+    {
+      const drive = makeDrive();
+      drive.put('A', 'a.md', 'antes');
+      const { w } = await boot({ auth: false, drive, seedStorage: {
+        drivenotes_token: 'fake', drivenotes_token_expires: String(Date.now() + 3600e3),
+        drivenotes_draft_A: JSON.stringify({ fileId: 'A', name: 'a.md', content: 'rascunho A', timestamp: Date.now() - 5000,
+          baseModifiedTime: drive.files.get('A').modifiedTime, parents: ['folderA'] }),
+      } });
+      const up = await until(() => drive.files.get('A').content === 'rascunho A' && w.localStorage.getItem('drivenotes_draft_A') === null);
+      check('na abertura, com login: o rascunho sobe sozinho', up, drive.log);
+    }
+    {
+      const { App, drive, w } = await boot({ watcher: true });
+      drive.put('A', 'a.md', 'antes A');
+      drive.put('B', 'b.md', 'antes B');
+      await App.navigateTo('A', 'a.md');
+      seedDraft(w, 'B', { fileId: 'B', name: 'b.md', content: 'rascunho B', timestamp: Date.now() - 5000,
+        baseModifiedTime: drive.files.get('B').modifiedTime, parents: ['folderA'] });
+      App.goHome();
+      const up = await until(() => drive.files.get('B').content === 'rascunho B' && DRAFTS_SHOWN(w).length === 0);
+      check('voltar pra home: o rascunho sobe e a lista esvazia', up, [drive.log, DRAFTS_SHOWN(w)]);
+    }
+  });
+
+  // The draft written at a pause in the typing (markDirty). The pause is shortened here; `pauseOver` resolves
+  // after the draft timer armed by the last change has fired, since timers of the same delay fire in order.
+  const shortPause = (w) => { w.__CONFIG.DRAFT_DELAY = 40; };
+  const pauseOver = (w) => new Promise(r => w.setTimeout(r, w.__CONFIG.DRAFT_DELAY + 5));
+  // localStorage that refuses the drafts: `fails` refusals, then it takes them again. Returns the undo.
+  const refuseDrafts = (w, fails) => {
+    const real = w.Storage.prototype.setItem;
+    let left = fails;
+    w.Storage.prototype.setItem = function (key, value) {
+      if (String(key).startsWith('drivenotes_draft_') && left > 0) {
+        left--;
+        throw new w.DOMException('quota', 'QuotaExceededError');
+      }
+      return real.call(this, key, value);
+    };
+    return () => { w.Storage.prototype.setItem = real; };
+  };
+
+  await scenario('D1. Digitar e esperar a pausa sem sair do app: existe rascunho com o texto', async () => {
+    const { App, drive, type, w } = await boot();
+    shortPause(w);
+    drive.put('A', 'a.md', 'antes A');
+    await App.openFile('A', 'a.md');
+    type('escrito antes de o app morrer');
+    clearTimeout(App.autoSaveTimer);
+    check('logo depois de digitar ainda nao ha rascunho', draftOf(w, 'A') === null, draftOf(w, 'A'));
+    const kept = await until(() => draftOf(w, 'A')?.content === 'escrito antes de o app morrer');
+    const d = draftOf(w, 'A');
+    check('passada a pausa: rascunho com o texto, da nota A', kept && d.fileId === 'A' && d.name === 'a.md', d);
+    check('... e nada foi ao Drive', drive.count('PATCH') === 0, drive.log);
+    check('o intervalo de verdade e 2 s', w.__CONFIG.DRAFT_DELAY === 40 && /DRAFT_DELAY: 2000/.test(fs.readFileSync(path.join(ROOT, 'app/core.js'), 'utf8')));
+    clearTimeout(App.autoSaveTimer);
+  });
+
+  await scenario('D2. Trocar de nota antes da pausa: o temporizador nao grava rascunho da nota nova, limpa', async () => {
+    const { App, drive, type, w } = await boot();
+    shortPause(w);
+    drive.put('A', 'a.md', 'antes A');
+    drive.put('B', 'b.md', 'antes B');
+    await App.openFile('A', 'a.md');
+    type('A editada');
+    const over = pauseOver(w);
+    await App.openFile('B', 'b.md');
+    await over;
+    await App._saveChain;
+    check('B continua limpa e sem rascunho', !App.isDirty && draftOf(w, 'B') === null, draftOf(w, 'B'));
+    check('A subiu pela troca de nota e nao ficou rascunho dela', drive.files.get('A').content === 'A editada' && draftOf(w, 'A') === null,
+      [drive.log, draftOf(w, 'A')]);
+  });
+
+  await scenario('D3. Salvo antes da pausa: o temporizador que dispara depois nao deixa rascunho fantasma', async () => {
+    const { App, drive, type, w } = await boot();
+    shortPause(w);
+    drive.put('A', 'a.md', 'antes A');
+    await App.openFile('A', 'a.md');
+    type('salvo logo');
+    const over = pauseOver(w);
+    await App.save({ manual: true });
+    check('o save foi antes da pausa e deixou a nota limpa', drive.files.get('A').content === 'salvo logo' && !App.isDirty && draftOf(w, 'A') === null,
+      [drive.log, draftOf(w, 'A')]);
+    await over;
+    check('depois da pausa: nenhum rascunho', draftOf(w, 'A') === null && App.listDrafts().length === 0, App.listDrafts());
+  });
+
+  await scenario('D4. Rascunho que nao cabe: o indice e as listagens da arvore saem, a segunda tentativa grava', async () => {
+    const { App, drive, type, w } = await boot();
+    drive.put('A', 'a.md', 'antes A');
+    await App.openFile('A', 'a.md');
+    w.localStorage.setItem('drivenotes_note_index_v3', JSON.stringify({ builtAt: Date.now(), notes: [{ id: 'X', name: 'x.md' }] }));
+    w.localStorage.setItem('drivenotes_tree_listings', JSON.stringify({ root: [] }));
+    App._noteIndex = [{ id: 'X', name: 'x.md' }];
+    type('texto grande');
+    clearTimeout(App.autoSaveTimer);
+    clearTimeout(App._draftTimer);
+    const undo = refuseDrafts(w, 1);
+    let stored;
+    try {
+      stored = App.saveDraft();
+    } finally {
+      undo();
+    }
+    check('saveDraft responde true e o rascunho esta la', stored === true && draftOf(w, 'A')?.content === 'texto grande', [stored, draftOf(w, 'A')]);
+    check('o indice de titulos e as listagens sairam do aparelho',
+      w.localStorage.getItem('drivenotes_note_index_v3') === null && w.localStorage.getItem('drivenotes_tree_listings') === null);
+    check('... a copia em memoria do indice ficou', App._noteIndex?.length === 1, App._noteIndex);
+    check('sem mensagem de erro', !App.els.saveStatus.classList.contains('error'), App.els.saveStatus.textContent);
+  });
+
+  await scenario('D5. Rascunho que nao cabe nem depois de liberar espaco: mensagem na nota da tela, so registro pra outra', async () => {
+    const { App, drive, type, w } = await boot();
+    shortPause(w);
+    drive.put('A', 'a.md', 'antes A');
+    await App.openFile('A', 'a.md');
+    App.setSaveStatus('', '');
+    const undo = refuseDrafts(w, 1000);
+    try {
+      type('sem lugar');
+      clearTimeout(App.autoSaveTimer);
+      const said = await until(() => App.els.saveStatus.textContent === 'Sem espaço no aparelho: toque em salvar');
+      check('passada a pausa: a mensagem aparece, como erro', said && App.els.saveStatus.classList.contains('error'), App.els.saveStatus.textContent);
+      check('... no registro: draft not stored, e nenhum rascunho', App._log.some(l => l.includes('draft not stored')) && draftOf(w, 'A') === null, App._log.slice(-3));
+      check('saveDraft responde false', App.saveDraft() === false);
+
+      App.setSaveStatus('', '');
+      const other = { id: 'B', name: 'b.md', draftKey: 'drivenotes_draft_B' };
+      check('outra nota: false, sem mexer no status da tela', App.saveDraft(other, 'texto de B') === false && App.els.saveStatus.textContent === '',
+        App.els.saveStatus.textContent);
+    } finally {
+      undo();
+      clearTimeout(App._draftTimer);
+      clearTimeout(App.autoSaveTimer);
+    }
+  });
+
+  await scenario('D6. Armazenamento persistente: pedido ao abrir, e o painel diz sim, nao ou ?', async () => {
+    {
+      const { App, w } = await boot();
+      App.showDiagnostics();
+      const lines = w.document.getElementById('debug-text').textContent.split('\n');
+      const at = lines.indexOf('armazenamento persistente: ?');
+      check('sem navigator.storage (jsdom): ?, logo depois da linha do standalone',
+        at > 0 && lines[at - 1].startsWith('instalado (standalone):'), lines.slice(0, 6));
+    }
+    {
+      let asked = 0;
+      const { App, w } = await boot({ beforeApp: (w) => {
+        Object.defineProperty(w.navigator, 'storage', { configurable: true,
+          value: { persist: async () => { asked++; return true; }, persisted: async () => true } });
+      } });
+      const read = await until(() => App._persisted === true);
+      App.showDiagnostics();
+      check('com a API: pedido uma vez, registrado, e o painel diz sim',
+        read && asked === 1 && App._log.some(l => l.includes('storage persist: true'))
+        && w.document.getElementById('debug-text').textContent.includes('armazenamento persistente: sim'), [asked, App._persisted]);
+    }
+    {
+      const { App, w } = await boot({ beforeApp: (w) => {
+        Object.defineProperty(w.navigator, 'storage', { configurable: true,
+          value: { persist: async () => false, persisted: async () => false } });
+      } });
+      await until(() => App._persisted === false);
+      App.showDiagnostics();
+      check('negado: o painel diz nao', w.document.getElementById('debug-text').textContent.includes('armazenamento persistente: não'), App._persisted);
+    }
+    {
+      let rejected = 0;
+      const onRejection = () => { rejected++; };
+      process.on('unhandledRejection', onRejection);
+      const { App, w } = await boot({ beforeApp: (w) => {
+        Object.defineProperty(w.navigator, 'storage', { configurable: true,
+          value: { persist: () => Promise.reject(new Error('no')), persisted: () => Promise.reject(new Error('no')) } });
+      } });
+      await App.askPersistentStorage();
+      await sleep(0);
+      process.off('unhandledRejection', onRejection);
+      App.showDiagnostics();
+      check('a API falhando: nenhuma promessa solta e o painel diz ?', rejected === 0
+        && w.document.getElementById('debug-text').textContent.includes('armazenamento persistente: ?'), rejected);
+    }
+  });
+
+  // The old vault shares the Drive with the root: a note or a photo of the same name over there is not a
+  // match. Outside the root: a folder at the top of the Drive, a file with no folder, and a dot-folder
+  // of the root.
+  const seedOutside = (drive) => {
+    drive.put('vault', 'Obsidian', '', []); drive.files.get('vault').mimeType = FOLDER;
+    makeDir(drive, 'dots', '.trash', ROOT_ID);
+    makeDir(drive, 'proj', 'projects', ROOT_ID);
+  };
+
+  await scenario('L1. Duas notas de mesmo nome, uma na raiz e outras fora: o link abre a da raiz, mesmo a de fora sendo a mais recente', async () => {
+    const { App, drive, w } = await boot({ watcher: true });
+    seedOutside(drive);
+    drive.put('A', 'a.md', 'ver [[x]]', ['proj']);
+    drive.put('XR', 'x.md', 'a da raiz', [ROOT_ID]);
+    drive.put('XD', 'x.md', 'na pasta de ponto', ['dots']);
+    drive.put('XN', 'x.md', 'sem pasta', []);
+    drive.put('XV', 'x.md', 'a do vault antigo', ['vault']); // the newest: the Drive answers it first
+    await App.navigateTo('A', 'a.md');
+    App.setMode('preview');
+    App.els.previewContainer.querySelector('a.wikilink').click();
+    const opened = await until(() => App.currentFile?.id !== 'A');
+    check('o toque abre a da raiz', opened && App.currentFile.id === 'XR', App.currentFile?.id);
+  });
+
+  await scenario('L2. Nota que so existe fora da raiz: Nota nao encontrada, no toque e no espiar', async () => {
+    const { App, drive, w } = await boot({ watcher: true });
+    seedOutside(drive);
+    drive.put('A', 'a.md', 'ver [[y]] e [[z]]', ['proj']);
+    drive.put('YV', 'y.md', 'so no vault antigo', ['vault']);
+    drive.put('ZD', 'z.md', 'so na pasta de ponto', ['dots']);
+    await App.navigateTo('A', 'a.md');
+    App.setMode('preview');
+    const stack = App.navStack.length;
+    App.els.previewContainer.querySelectorAll('a.wikilink')[0].click();
+    const said = await until(() => /não encontrada/.test(App.els.saveStatus.textContent));
+    check('o toque avisa e fica onde esta', said && App.currentFile.id === 'A' && App.els.saveStatus.textContent === 'Nota não encontrada: y',
+      [App.currentFile?.id, App.els.saveStatus.textContent]);
+    check('... e a tela do toque foi desfeita', App.navStack.length === stack, [stack, App.navStack.length]);
+    await App.openPeek({ target: 'y', heading: '' });
+    check('o espiar diz o mesmo', App.els.peekMessage.textContent === 'Nota não encontrada: y', App.els.peekMessage.textContent);
+    App.closePeek();
+    await App.openPeek({ target: 'z', heading: '' });
+    check('dentro de pasta de ponto da raiz tambem nao conta', App.els.peekMessage.textContent === 'Nota não encontrada: z', App.els.peekMessage.textContent);
+    App.closePeek();
+  });
+
+  await scenario('L3. O espiar cai na mesma nota que o toque, a da raiz', async () => {
+    const { App, drive } = await boot({ watcher: true });
+    seedOutside(drive);
+    makeDir(drive, 'other', 'outra', ROOT_ID);
+    drive.put('A', 'a.md', 'ver [[x]]', ['proj']);
+    drive.put('XR', 'x.md', 'a da raiz', ['other']);
+    drive.put('XV', 'x.md', 'a do vault antigo', ['vault']);
+    await App.navigateTo('A', 'a.md');
+    App.setMode('preview');
+    await App.openPeek({ target: 'x', heading: '' });
+    check('o cartao mostra a da raiz', App._peek?.note?.id === 'XR' && App.els.peekBody.textContent.includes('a da raiz'),
+      [App._peek?.note?.id, App.els.peekBody.textContent]);
+    App.closePeek();
+    App.els.previewContainer.querySelector('a.wikilink').click();
+    await until(() => App.currentFile?.id !== 'A');
+    check('... e o toque abre a mesma', App.currentFile?.id === 'XR', App.currentFile?.id);
+  });
+
+  await scenario('L4. Foto de mesmo nome fora da raiz: mostra e manda pra lixeira so a da raiz; so fora vira rotulo', async () => {
+    const { App, drive, w } = await boot({ editor: true });
+    w.URL.createObjectURL = (blob) => `blob:fake/${blob.of}`;
+    seedOutside(drive);
+    const image = (id, name, parents) => { drive.put(id, name, 'bin', parents); drive.files.get(id).mimeType = 'image/jpeg'; };
+    image('FR', 'f.jpg', ['proj']);
+    image('FV', 'f.jpg', ['vault']); // newer, and no _media to tell them apart
+    image('GV', 'g.jpg', ['vault']);
+    drive.put('A', 'a.md', 'a\n![[f.jpg]]\n\n![[g.jpg]]', ['proj']);
+    await App.openFile('A', 'a.md');
+    App.setMode('preview');
+    const c = App.els.previewContainer;
+    await until(() => c.querySelector('img[src]') && c.querySelector('.wikilink-file'));
+    check('a foto mostrada e a da raiz', c.querySelector('img')?.getAttribute('src') === 'blob:fake/FR', c.innerHTML);
+    check('a que so existe fora vira rotulo, sem baixar', c.querySelector('.wikilink-file')?.textContent === 'g.jpg'
+      && drive.count('GET content GV') === 0, c.innerHTML);
+
+    App.setMode('edit');
+    App.confirmDialog = async () => true;
+    const removed = await App.removeEmbedLine(2);
+    await App._saveChain;
+    check('a lixeira leva a da raiz, a de fora fica', removed === true && drive.files.get('FR').trashed === true && !drive.files.get('FV').trashed,
+      drive.log.filter(l => l.startsWith('TRASH')));
+  });
+
+  await scenario('N1. Duas notas novas no mesmo minuto: a segunda ganha -2, sem esperar nada', async () => {
+    const { App, w } = await boot();
+    App.generateFileName = () => '2026-10-05-1432.md';
+    App.newFile();
+    const first = App.currentFile.name;
+    App.newFile();
+    check('a primeira com o nome da hora, a segunda com -2 antes do .md',
+      first === '2026-10-05-1432.md' && App.currentFile.name === '2026-10-05-1432-2.md', [first, App.currentFile.name]);
+    App.newFile();
+    check('a terceira, -3', App.currentFile.name === '2026-10-05-1432-3.md', App.currentFile.name);
+
+    App.newFile({ name: '2026-10-05-1432-journal.md' });
+    App.newFile({ name: '2026-10-05-1432-journal.md' });
+    check('nota de journal: o -2 entra antes do .md', App.currentFile.name === '2026-10-05-1432-journal-2.md', App.currentFile.name);
+
+    // The index, when loaded, and the drafts count too, case aside
+    App._noteIndex = [{ id: 'x', name: '2026-10-05-1500.md' }];
+    w.localStorage.setItem('drivenotes_draft_new_1', JSON.stringify({ fileId: null, name: '2026-10-05-1501.MD', content: 'texto' }));
+    App.generateFileName = () => '2026-10-05-1500.md';
+    App.newFile();
+    check('nome que ja esta no indice ganha -2', App.currentFile.name === '2026-10-05-1500-2.md', App.currentFile.name);
+    App.generateFileName = () => '2026-10-05-1501.md';
+    App.newFile();
+    check('nome de um rascunho (maiuscula a parte) ganha -2', App.currentFile.name === '2026-10-05-1501-2.md', App.currentFile.name);
+
+    App._noteIndex = null;
+    App.generateFileName = () => '2026-10-05-1502.md';
+    App.newFile();
+    check('sem indice e nome livre: fica como veio', App.currentFile.name === '2026-10-05-1502.md', App.currentFile.name);
+  });
+
+  await scenario('N2. Renomear para um nome que ja existe: a caixa fica aberta com a recusa', async () => {
+    const { App, drive, w } = await boot();
+    seedVault(drive);
+    await App.noteIndex();
+    await App.openFile('n-a', 'Abacaxi.md');
+    const message = w.document.getElementById('modal-message');
+    App.promptRename();
+    App.els.modalInput.value = 'Zebra';
+    await App._modalConfirm();
+    check('nome de outra nota (maiuscula a parte): aberta, com o aviso, nada renomeado',
+      App.els.modal.classList.contains('visible') && !message.hidden && message.textContent === 'Já existe uma nota com esse nome'
+        && drive.files.get('n-a').name === 'Abacaxi.md' && !drive.log.some(l => l.startsWith('RENAME')),
+      [message.textContent, drive.files.get('n-a').name]);
+
+    App.els.modalInput.value = 'abacaxi';
+    await App._modalConfirm();
+    check('o proprio nome em outra caixa nao e recusa: fecha', !App.els.modal.classList.contains('visible'));
+    await App._saveChain;
+    await until(() => drive.files.get('n-a').name === 'abacaxi.md');
+    check('... e renomeia', drive.files.get('n-a').name === 'abacaxi.md', drive.files.get('n-a').name);
+
+    App.promptRename();
+    App.els.modalInput.value = 'manga';
+    await App._modalConfirm();
+    check('nome livre: fecha', !App.els.modal.classList.contains('visible'));
+    await App._saveChain;
+    await until(() => drive.files.get('n-a').name === 'manga.md');
+    check('... e renomeia', drive.files.get('n-a').name === 'manga.md', drive.files.get('n-a').name);
+  });
+
+  await scenario('N3. Renomear com 150 notas ligando: as 150 consertadas; com mais de 300, o resumo avisa', async () => {
+    const { App, drive } = await boot();
+    drive.delay = 0;
+    drive.put('T', 'alvo.md', 'alvo', [ROOT_ID]);
+    for (let i = 1; i <= 150; i++) drive.put(`l${i}`, `liga-${i}.md`, `nota ${i} [[alvo]]`, [ROOT_ID]);
+    await App.openFile('T', 'alvo.md');
+    await App.renameFile(App.currentFile, 'destino');
+    await App._saveChain;
+    const fixed = [...drive.files.values()].filter(f => /^liga-/.test(f.name) && f.content.endsWith('[[destino]]')).length;
+    check('as 150 consertadas', fixed === 150, fixed);
+    check('a busca andou pelas paginas', drive.log.filter(l => l.startsWith('FULLTEXT alvo')).length === 2, drive.log.filter(l => l.startsWith('FULLTEXT')));
+    check('o resumo conta as 150', App.els.saveStatus.textContent === 'Renomeado, 150 links atualizados', App.els.saveStatus.textContent);
+
+    for (let i = 1; i <= 310; i++) drive.put(`m${i}`, `muito-${i}.md`, `nota ${i} [[mais]]`, [ROOT_ID]);
+    drive.put('M', 'mais.md', 'mais', [ROOT_ID]);
+    await App.openFile('M', 'mais.md');
+    const before = drive.count('GET content');
+    await App.renameFile(App.currentFile, 'menos');
+    await App._saveChain;
+    const fixedMore = [...drive.files.values()].filter(f => /^muito-/.test(f.name) && f.content.endsWith('[[menos]]')).length;
+    check('corta em 300 candidatos, antes de baixar', fixedMore === 300 && drive.count('GET content') - before === 300,
+      [fixedMore, drive.count('GET content') - before]);
+    check('o resumo avisa que pode ter sobrado', App.els.saveStatus.textContent === 'Renomeado, 300 links atualizados, pode ter sobrado link',
+      App.els.saveStatus.textContent);
+
+    const linking = await App.findLinkingNotes('mais.md', { exceptId: 'M' });
+    check('apagar segue contando pelo array, que leva o truncated', Array.isArray(linking) && linking.length === 10 && linking.truncated === false,
+      [linking.length, linking.truncated]);
+  });
+
+  // The notes on the fake Drive, folders aside
+  const noteFiles = (drive) => [...drive.files.values()].filter(f => f.mimeType !== FOLDER);
+  // Everything the device keeps, to hand to the app opened again (boot's seedStorage)
+  const deviceStorage = (w) => Object.fromEntries(Object.keys(w.localStorage).map(k => [k, w.localStorage.getItem(k)]));
+
+  await scenario('I1. Criacao cuja resposta se perde nao duplica: a segunda tentativa adota a nota e grava o texto de agora', async () => {
+    {
+      const { App, drive, type } = await boot();
+      drive.loseCreate = 1;
+      App.newFile();
+      await App._saveChain;
+      check('a primeira criacao chegou ao Drive, mas o app viu erro de rede',
+        noteFiles(drive).length === 1 && App.currentFile.id === null && App.currentFile.pendingId === 'new1'
+          && App.els.saveStatus.textContent === 'Erro ao criar no Drive',
+        [drive.log, App.currentFile, App.els.saveStatus.textContent]);
+      type('o texto de agora');
+      await App.save();
+      const notes = noteFiles(drive);
+      check('o save seguinte nao cria outra nota: o Drive responde 409 e a nota fica uma so',
+        notes.length === 1 && drive.log.includes('POST 409 new1') && App.currentFile.id === 'new1', drive.log);
+      check('... com o texto mais novo, e a versao do Drive guardada pra conferir conflito',
+        notes[0].content === 'o texto de agora' && App.currentFile.modifiedTime === notes[0].modifiedTime && !App.isDirty,
+        [notes[0].content, App.currentFile.modifiedTime, notes[0].modifiedTime]);
+      check('... e salva de novo como qualquer nota, sem conflito', await (async () => {
+        type('mais uma linha');
+        await App.save();
+        return noteFiles(drive).length === 1 && drive.files.get('new1').content === 'mais uma linha' && !App.isDirty;
+      })(), drive.log);
+    }
+    {
+      // Renamed between the two tries: the note on the Drive still has the first name, and gets the new one
+      const { App, drive, type } = await boot();
+      drive.loseCreate = 1;
+      App.newFile();
+      await App._saveChain;
+      await App.renameFile(App.currentFile, 'renomeada');
+      type('texto da renomeada');
+      await App.save();
+      const notes = noteFiles(drive);
+      check('renomeada antes da segunda tentativa: uma nota, com o nome novo e o texto novo',
+        notes.length === 1 && notes[0].name === 'renomeada.md' && notes[0].content === 'texto da renomeada'
+          && App.currentFile.modifiedTime === notes[0].modifiedTime,
+        [notes.map(n => [n.name, n.content]), drive.log]);
+    }
+    {
+      // No ID from the Drive (no network): nothing is created without one, and the text waits as usual
+      const { App, drive, type } = await boot();
+      drive.hiccup = { method: 'GET', status: 503, times: 1 };
+      App.newFile();
+      type('sem id');
+      await App._saveChain;
+      check('sem id do Drive: nenhum POST, nenhuma nota', drive.count('POST') === 0 && noteFiles(drive).length === 0 && App.currentFile.id === null,
+        drive.log);
+      await App.save();
+      check('... e o save seguinte pede o id e cria', noteFiles(drive).length === 1 && noteFiles(drive)[0].content === 'sem id', drive.log);
+    }
+  });
+
+  await scenario('I2. Check-in: nota do dia cuja resposta se perde nao nasce em dobro, mesmo com o app aberto de novo', async () => {
+    // The search by name does not see the day's note yet, as the Drive may not right after a create
+    const lagNames = (w) => {
+      const real = w.fetch;
+      w.fetch = async (url, opts) => /name = '\d{4}-\d{2}-\d{2}-journal\.md'/.test(new URL(url).searchParams.get('q') || '')
+        ? { ok: true, status: 200, json: async () => ({ files: [] }) } : real(url, opts);
+    };
+    {
+      const { App, drive, w } = await boot();
+      seedJournal(drive);
+      setDay(App, 2026, 10, 3);
+      drive.loseCreate = 1;
+      const answer = await App.setCheckin('workout', true);
+      const id = journalFiles(drive)[0]?.id;
+      check('a nota do dia nasceu, o app viu erro: o toque fica por subir, com o id guardado no aparelho',
+        answer === false && journalFiles(drive).length === 1 && App._checkin.pending['2026-10-03']?.workout === true
+          && App._checkin.pendingIds['2026-10-03'] === id && keptCheckin(w).pendingIds['2026-10-03'] === id,
+        [App._checkin, drive.log]);
+
+      // The app opened again, with what the device kept
+      const again = await boot({ drive, seedStorage: deviceStorage(w) });
+      setDay(again.App, 2026, 10, 3);
+      check('aberto de novo: o id do dia volta do aparelho', again.App._checkin.pendingIds['2026-10-03'] === id, again.App._checkin);
+      lagNames(again.w);
+      await again.App.setCheckin('water', true);
+      const notes = journalFiles(drive);
+      check('o toque seguinte nao cria outra nota: 409, e as duas chaves na mesma',
+        notes.length === 1 && drive.log.includes(`POST 409 ${id}`) && notes[0].content === '---\ntype: journal\nworkout: true\nwater: true\n---\n',
+        [notes.map(n => n.content), drive.log]);
+      check('... nada por subir, o id saiu da lista e a nota passa a ser a do dia',
+        Object.keys(again.App._checkin.pending).length === 0 && Object.keys(again.App._checkin.pendingIds).length === 0
+          && again.App._checkin.fileId === id && Object.keys(keptCheckin(again.w).pendingIds).length === 0,
+        again.App._checkin);
+    }
+    {
+      // Text written on the PC into the note that was born: it stays
+      const { App, drive, w } = await boot();
+      seedJournal(drive);
+      setDay(App, 2026, 10, 3);
+      drive.loseCreate = 1;
+      await App.setCheckin('workout', true);
+      const id = journalFiles(drive)[0].id;
+      drive.remoteEdit(id, '---\ntype: journal\nworkout: true\n---\nEscrevi no PC.\n');
+      lagNames(w);
+      await App.setCheckin('diet', true);
+      check('o 409 le a nota que esta la: o texto do PC fica e a chave entra',
+        journalFiles(drive).length === 1 && drive.files.get(id).content === '---\ntype: journal\nworkout: true\ndiet: true\n---\nEscrevi no PC.\n',
+        JSON.stringify(drive.files.get(id).content));
+    }
+    {
+      // The search by name already sees it: the note is found, and the id goes from the list
+      const { App, drive } = await boot();
+      seedJournal(drive);
+      setDay(App, 2026, 10, 3);
+      drive.loseCreate = 1;
+      await App.setCheckin('workout', true);
+      await App.setCheckin('reading', true);
+      check('achada pelo nome: uma nota, as duas chaves, e o id sai da lista',
+        journalFiles(drive).length === 1 && journalFiles(drive)[0].content === '---\ntype: journal\nworkout: true\nreading: true\n---\n'
+          && Object.keys(App._checkin.pendingIds).length === 0 && drive.count('POST') === 1,
+        [drive.log, App._checkin]);
+    }
+    {
+      // What the device kept may be broken: only a day with a text id stays, and only while that day has something to go up
+      const kept = JSON.stringify({ date: null, tracker: {}, fileId: null,
+        pending: { '2026-10-02': { water: true } },
+        pendingIds: { '2026-10-02': 'id2', '2026-10-01': 'id1', 'x': 'idx', '2026-09-30': 5, '2026-09-29': '' } });
+      const { App } = await boot({ seedStorage: { drivenotes_checkin: kept } });
+      check('ids guardados estranhos: so o do dia com pendencia fica', JSON.stringify(App._checkin.pendingIds) === JSON.stringify({ '2026-10-02': 'id2' }),
+        App._checkin.pendingIds);
+      const broken = await boot({ seedStorage: { drivenotes_checkin: JSON.stringify({ pendingIds: ['lixo'] }) } });
+      check('lista no lugar do objeto: nenhum id', JSON.stringify(broken.App._checkin.pendingIds) === '{}', broken.App._checkin);
+    }
+  });
+
+  await scenario('I3. App reaberto no meio da criacao (rascunho com o id pedido): continua uma nota so', async () => {
+    // A note born, its draft written before the ID came back, the create lost, the app killed
+    const killed = async () => {
+      const a = await boot({ idb: true });
+      a.drive.loseCreate = 1;
+      a.App.newFile();
+      a.type('texto da primeira vida');
+      a.App.saveDraft();
+      await a.App._saveChain;
+      const key = a.App.currentFile.draftKey;
+      const draft = a.App.readDraft(key);
+      const storage = deviceStorage(a.w);
+      a.w.close();
+      return { drive: a.drive, idb: a.idb, key, draft, storage };
+    };
+    {
+      const { drive, idb, key, draft, storage } = await killed();
+      check('o rascunho ganhou o id antes de a criacao sair, e a nota nasceu no Drive',
+        draft?.pendingId === 'new1' && !draft.fileId && noteFiles(drive).length === 1, [draft, drive.log]);
+      // Opened again: the drafts left behind go up on their own
+      const { App, w } = await boot({ idb, drive, seedStorage: storage });
+      await App.syncDrafts();
+      check('aberto de novo, o rascunho sobe sozinho: uma nota so, com o texto dele',
+        noteFiles(drive).length === 1 && drive.files.get('new1').content === 'texto da primeira vida' && drive.log.includes('POST 409 new1')
+          && App.listDrafts().length === 0 && w.localStorage.getItem(key) === null,
+        [drive.log, App.listDrafts()]);
+    }
+    {
+      const { drive, idb, key, storage } = await killed();
+      // Opened again: she opens the draft herself, writes on, and saves
+      const { App, type } = await boot({ idb, drive, seedStorage: storage });
+      App.openDraft(key);
+      check('abrir o rascunho traz o id pedido', App.currentFile.pendingId === 'new1', App.currentFile);
+      type('texto da segunda vida');
+      await App.save();
+      check('salvar o rascunho aberto: uma nota so, com o texto mais novo',
+        noteFiles(drive).length === 1 && drive.files.get('new1').content === 'texto da segunda vida' && App.currentFile.id === 'new1'
+          && App.listDrafts().length === 0,
+        [drive.log, App.listDrafts()]);
     }
   });
 

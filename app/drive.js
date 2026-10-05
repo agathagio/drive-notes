@@ -67,30 +67,42 @@ Object.assign(App, {
 
   /** fetch with the access token. Renews it here, quietly, when the hour has passed and there is a refresh
       token, so that no caller has to remember; a window is only ever opened by ensureAuth() from a tap.
-      On 401 re-authenticates (quietly too) and retries once. */
+      On 401 re-authenticates (quietly too) and retries once. A passing hiccup (429, 5xx) on a GET or a
+      PATCH is tried again after each wait in CONFIG.DRIVE_RETRY_DELAYS; a POST never is, since sending a
+      create twice makes two files. A failure throws an Error whose `status` is the HTTP status. */
   async driveFetch(url, options = {}, retried = false) {
     if (!this.hasValidToken() && localStorage.getItem(KEYS.REFRESH_TOKEN)) {
       await this.ensureAuth({ quiet: true });
     }
-    const response = await fetch(url, {
-      ...options,
-      headers: { ...options.headers, 'Authorization': `Bearer ${this.accessToken}` },
-    });
+    const method = (options.method || 'GET').toUpperCase();
+    const delays = method === 'GET' || method === 'PATCH' ? CONFIG.DRIVE_RETRY_DELAYS : [];
 
-    if (response.status === 401 && !retried) {
-      await this.reAuth({ quiet: true });
-      return this.driveFetch(url, options, true);
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetch(url, {
+        ...options,
+        headers: { ...options.headers, 'Authorization': `Bearer ${this.accessToken}` },
+      });
+
+      if (response.status === 401 && !retried) {
+        await this.reAuth({ quiet: true });
+        return this.driveFetch(url, options, true);
+      }
+
+      if (response.ok) return response;
+
+      if ([429, 500, 502, 503, 504].includes(response.status) && attempt < delays.length) {
+        await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+        continue;
+      }
+
+      const error = new Error(`Drive request failed: ${response.status}`);
+      error.status = response.status;
+      throw error;
     }
-
-    if (!response.ok) {
-      throw new Error(`Drive request failed: ${response.status}`);
-    }
-
-    return response;
   },
 
-  /** Fetch file metadata by ID */
-  async driveGetFileMeta(fileId, fields = 'id,name,modifiedTime,parents') {
+  /** Fetch file metadata by ID. A file in the bin still answers, with `trashed: true`. */
+  async driveGetFileMeta(fileId, fields = 'id,name,modifiedTime,parents,trashed') {
     const response = await this.driveFetch(
       `https://www.googleapis.com/drive/v3/files/${fileId}?fields=${fields}`
     );
@@ -240,12 +252,24 @@ Object.assign(App, {
     return response.json();
   },
 
-  /** Create a new file on Drive */
-  async driveCreateFile(name, content, folderId) {
+  /** A file ID handed out by the Drive ahead of the creation. A create sent with it can be sent again:
+      if the first one landed, the second answers 409 instead of making a second file. */
+  async driveNewId() {
+    const response = await this.driveFetch('https://www.googleapis.com/drive/v3/files/generateIds?count=1');
+    const id = (await response.json()).ids?.[0];
+    if (!id) throw new Error('Drive handed out no file ID');
+    return id;
+  },
+
+  /** Create a new file on Drive. With `id` (from driveNewId), a repeat of a create that landed throws with status 409. */
+  async driveCreateFile(name, content, folderId, id) {
     const metadata = {
       name: name,
       mimeType: 'text/markdown',
     };
+    if (id) {
+      metadata.id = id;
+    }
     if (folderId) {
       metadata.parents = [folderId];
     }

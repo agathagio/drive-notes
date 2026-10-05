@@ -34,6 +34,8 @@ const FAKE_DRIVE = `
   };
   window.fetch = async (url) => {
     const u = new URL(url); const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
+    // The ID a create is sent with (files.generateIds)
+    if (u.pathname.endsWith('/generateIds')) return ok({ ids: ['NEW'] });
     const m = u.pathname.match(/files\\/([^/]+)$/);
     if (m) { const f = files[m[1]]; return u.searchParams.get('alt') === 'media' ? ok(f.content) : ok({ ...f, modifiedTime: 't1' }); }
     const q = u.searchParams.get('q') || ''; const parent = /^'([^']+)' in parents/.exec(q);
@@ -202,6 +204,7 @@ const FAKE_DRIVE = `
       const posts = [];
       window.fetch = async (url, opts = {}) => {
         const ok = (o) => ({ ok: true, status: 200, json: async () => o });
+        if (String(url).includes('/generateIds')) return ok({ ids: ['P1'] });
         if (opts.method === 'POST') { posts.push(opts.body); return ok({ id: 'P1', name: 'x' }); }
         return ok({ files: [{ id: 'MEDIA', name: '_media', mimeType: 'application/vnd.google-apps.folder', parents: ['ROOT'] }] });
       };
@@ -248,6 +251,8 @@ const FAKE_DRIVE = `
         // Wider than the editor on purpose: it is the only one that forces the app to measure the available
         // width, instead of falling back to the image's own size
         if (u.pathname.endsWith('/HUGE')) return { ok: true, status: 200, blob: async () => new Blob([svg(4000, 1000)], { type: 'image/svg+xml' }) };
+        // The photos' folder, right under the root: a picture is only looked for inside the root
+        if (u.pathname.endsWith('/files/m')) return { ok: true, status: 200, json: async () => ({ id: 'm', name: '_media', parents: [CONFIG.ROOT.id] }) };
         window.__searches++;
         const q = u.searchParams.get('q') || '';
         const hit = q.includes("'larga.png'") ? 'WIDE' : q.includes("'alta.png'") ? 'TALL' : q.includes("'gigante.png'") ? 'HUGE' : null;
@@ -315,6 +320,7 @@ const FAKE_DRIVE = `
       window.__written = [];
       window.fetch = async (url, opts = {}) => {
         const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
+        if (String(url).includes('/generateIds')) return ok({ ids: ['NEW'] });
         if (opts.method === 'POST') return ok({ id: 'NEW', name: 'n.md', parents: [CONFIG.DEFAULT_FOLDER_ID], modifiedTime: 't1' });
         if (opts.method === 'PATCH') { window.__written.push(opts.body); return ok({ id: 'OLD', modifiedTime: 't1' }); }
         if (new URL(url).searchParams.get('alt') === 'media') return ok('---\\ncreated: 2026-01-02\\nupdated: 2026-01-03\\n---\\n\\ntexto');
@@ -802,6 +808,7 @@ const FAKE_DRIVE = `
         const u = new URL(url);
         const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
         await new Promise(r => setTimeout(r, window.__drive.delay));
+        if (u.pathname.endsWith('/generateIds')) return ok({ ids: ['NEW'] });
         if (u.searchParams.get('alt') === 'media') return ok(window.__drive.text || window.__drive.longNote);
         if (/files\\/N2$/.test(u.pathname)) return ok({ id: 'N2', name: 'destino.md', parents: ['F1'], modifiedTime: window.__drive.mt });
         return ok({ files: [] });
@@ -946,6 +953,7 @@ const FAKE_DRIVE = `
       window.fetch = async (url) => {
         const u = new URL(url);
         const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
+        if (u.pathname.endsWith('/generateIds')) return ok({ ids: ['NEW'] });
         if (/files\\/FOTO$/.test(u.pathname)) {
           await new Promise(r => setTimeout(r, window.__photo.delay));
           window.__photo.arrived = true;
@@ -953,6 +961,8 @@ const FAKE_DRIVE = `
         }
         if (u.searchParams.get('alt') === 'media') return ok(longNote);
         if (/files\\/N3$/.test(u.pathname)) return ok({ id: 'N3', name: 'longa.md', parents: ['F1'], modifiedTime: 't1' });
+        // The photo's folder, right under the root: a picture is only looked for inside the root
+        if (/files\\/m$/.test(u.pathname)) return ok({ id: 'm', name: '_media', parents: [CONFIG.ROOT.id] });
         const q = u.searchParams.get('q') || '';
         return ok({ files: q.includes("'foto.png'") ? [{ id: 'FOTO', name: 'foto.png', mimeType: 'image/png', parents: ['m'] }] : [] });
       };
@@ -1055,6 +1065,7 @@ const FAKE_DRIVE = `
       window.fetch = async (url) => {
         const u = new URL(url);
         const ok = (o) => ({ ok: true, status: 200, json: async () => o, text: async () => o, arrayBuffer: async () => new TextEncoder().encode(o).buffer });
+        if (u.pathname.endsWith('/generateIds')) return ok({ ids: ['NEW'] });
         if (u.searchParams.get('alt') === 'media') return ok(window.__note);
         if (u.pathname.endsWith('/N4')) return ok({ id: 'N4', name: 'trecho.md', parents: ['F1'], modifiedTime: 't1' });
         return ok({ files: [] });

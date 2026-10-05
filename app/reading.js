@@ -637,11 +637,22 @@ Object.assign(App, {
     });
   },
 
-  /** The Drive file an `![[picture]]` names, or null. Same name in more than one place: the one in the
-      attachment folder wins, then the newest. Showing the picture and binning it
+  /** The files that sit inside the root and outside its dot-folders (.obsidian, .trash), in the same order.
+      A file with no parent, or whose folder cannot be placed, is left out. */
+  async keepInRoot(files) {
+    const trails = await Promise.all(files.map((f) => {
+      const parent = f.parents?.[0];
+      return parent ? Promise.resolve(this.folderTrail(parent)).catch(() => null) : null;
+    }));
+    return files.filter((f, i) => trails[i] && !trails[i].some(name => name.startsWith('.')));
+  },
+
+  /** The Drive file an `![[picture]]` names, inside the root, or null. Same name in more than one place:
+      the one in the attachment folder wins, then the newest. Showing the picture and binning it
       have to land on the same file, so both ask here. */
   async findEmbedFile(name) {
-    const images = (await this.driveFindByName([name])).filter(f => (f.mimeType || '').startsWith('image/'));
+    const images = await this.keepInRoot(
+      (await this.driveFindByName([name])).filter(f => (f.mimeType || '').startsWith('image/')));
     if (!images.length) return null;
     if (images.length === 1) return images[0];
     const media = await this.getMediaFolderId().catch(() => null);
@@ -718,14 +729,16 @@ Object.assign(App, {
     if (!(await this.openFile(found.note.id, found.note.name, { heading }))) this.cancelNav();
   },
 
-  /** The note a link's target names, picked the way a tap picks it: same name in more than one place,
-      the one next to the open note wins, then .md over the rest, then whatever the Drive answered first.
+  /** The note a link's target names, inside the root, picked the way a tap picks it: same name in more
+      than one place, the one next to the open note wins, then .md over the rest, then whatever the Drive
+      answered first.
       { base, note }, or { base, error } with 'missing' or 'type'. Throws when the Drive cannot be asked.
       The tap and the peek both come here, so they always land on the same note. */
   async findLinkedNote(target) {
     const base = target.split('/').pop().trim();
     const names = /\.md$/i.test(base) ? [base] : [`${base}.md`, base];
-    const matches = await this.driveFindByName(names);
+    // A file of the same name outside the root (the old vault shares the Drive) is not there at all
+    const matches = await this.keepInRoot(await this.driveFindByName(names));
     const notes = matches.filter(f => this.isNote(f));
     if (!notes.length) return { base, error: matches.length ? 'type' : 'missing' };
     const folder = this.currentFile?.parents?.[0];
