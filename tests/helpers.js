@@ -19,7 +19,7 @@ const LIBS = {
   tinymde: path.join(MODULES, 'tiny-markdown-editor', 'dist', 'tiny-mde.js'),
   // The single bundle built by esbuild, the same file index.html loads
   cm6: path.join(ROOT, 'vendor', 'codemirror.js'),
-  marked: path.join(MODULES, 'marked', 'marked.min.js'),
+  marked: path.join(MODULES, 'marked', 'lib', 'marked.umd.js'),
   purify: path.join(MODULES, 'dompurify', 'dist', 'purify.min.js'),
 };
 
@@ -73,10 +73,21 @@ function appScripts(html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'
   return [...html.matchAll(/<script src="(app\.js|app\/[^"]+)"><\/script>/g)].map(m => m[1]);
 }
 
-/** The app as one script: the files of appScripts() joined in order, which is what the browser runs */
+/**
+ * What only the real page runs, never a test page: app/start.js registers the service worker and starts
+ * App.watchVersions. The jsdom and file:// pages leave it out, so a scenario of versions (68 in
+ * app.test.js) hands the app its own stand-in for navigator.serviceWorker and finds nothing listening
+ * already. test:sw serves the repository as it is, and there it runs.
+ */
+const PAGE_ONLY = ['app/start.js'];
+
+/** The app as one script: the files of appScripts() joined in order, which is what the browser runs, but for PAGE_ONLY */
 function appSource() {
-  return appScripts().map(src => fs.readFileSync(path.join(ROOT, src), 'utf8')).join('\n');
+  return appScripts().filter(src => !PAGE_ONLY.includes(src)).map(src => fs.readFileSync(path.join(ROOT, src), 'utf8')).join('\n');
 }
+
+/** The Content-Security-Policy of index.html, whatever it says */
+const CSP_META = /[ \t]*<meta http-equiv="Content-Security-Policy"[^>]*>\r?\n?/i;
 
 /**
  * A page with the real index.html and the given app source, the libraries served from node_modules,
@@ -94,14 +105,23 @@ function appSource() {
  * TinyMDE and without the library falls back to the textarea. That commit's index.html loads the lib
  * from unpkg, and that tag becomes the local copy from node_modules (or goes, if nobody asked). An
  * index.html without that tag, like today's tree, gets the local copy at the end of head when it is asked for.
+ *
+ * The Content-Security-Policy goes too: this page swaps the CDN scripts for file:// copies and adds an
+ * inline script of its own, and the policy would refuse them. test:sw keeps it, and is the
+ * proof the app runs under it. The working tree's index.html must have it (a policy deleted by accident
+ * fails here); an old commit's, from before the policy, is taken as it is.
  */
-function buildPage(name, source, { tinymde = false, html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8') } = {}) {
+function buildPage(name, source, { tinymde = false, html } = {}) {
+  const own = html === undefined;
+  if (own) html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const dir = tmpDir();
   const url = (file) => pathToFileURL(file).href;
   fs.writeFileSync(path.join(dir, `${name}-app.js`), source);
   const APP_TAGS = /(?:[ \t]*<script src="(?:app\.js|app\/[^"]+)"><\/script>\r?\n)+/;
   if (!APP_TAGS.test(html)) throw new Error('buildPage: no app script tag in the index.html given');
-  const page = html
+  if (own && !CSP_META.test(html)) throw new Error('buildPage: no Content-Security-Policy meta in index.html');
+  const page = PAGE_ONLY.reduce((h, src) => h.replace(`<script src="${src}"></script>`, ''), html)
+    .replace(CSP_META, '')
     .replace('<head>', `<head><base href="${url(ROOT)}/">`)
     // The TinyMDE, only for the control that runs the app of before the editor swap: that commit's
     // index.html (2d8b20b) loads it from unpkg, so the tag becomes the local copy when asked for and
@@ -112,6 +132,7 @@ function buildPage(name, source, { tinymde = false, html = fs.readFileSync(path.
     .replace(/<script src="https:\/\/cdn\.jsdelivr\.net\/npm\/dompurify[^>]*><\/script>/, `<script src="${url(LIBS.purify)}"></script>`)
     .replace(/<script[^>]*src="https:\/\/(apis\.google|accounts\.google)[^>]*><\/script>/g, '')
     .replace(APP_TAGS, `  <script src="${url(path.join(dir, `${name}-app.js`))}"></script><script>window.__App = App;</script>\n`)
+    // The inline service worker script of the commits from before app/start.js (the historical controls)
     .replace(/<script>\s*if \('serviceWorker'[\s\S]*?<\/script>/, '');
   const file = path.join(dir, `${name}.html`);
   fs.writeFileSync(file, page);

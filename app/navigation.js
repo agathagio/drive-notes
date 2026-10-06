@@ -322,7 +322,7 @@ Object.assign(App, {
   // else a bar offers the update, and tapping it saves, reloads and comes back to the same view. Text not
   // yet on the Drive never reloads.
 
-  /** Called by index.html with navigator.serviceWorker, as the page loads */
+  /** Called by app/start.js with navigator.serviceWorker, as the page loads */
   watchVersions(container) {
     // The very first opening (or one after the site data was cleared) has no service worker behind it,
     // and hears controllerchange too, when the first one takes over: that one is not a new version.

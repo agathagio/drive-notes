@@ -84,7 +84,7 @@ Object.assign(App, {
       if (token.type === 'space' || token.type === 'def') return true;
       if (token.type !== 'html') return false;
       const probe = document.createElement('template');
-      probe.innerHTML = DOMPurify.sanitize(token.raw);
+      probe.innerHTML = this.sanitize(token.raw);
       return probe.content.children.length === 0;
     };
     const head = content.slice(0, content.length - body.length);
@@ -415,8 +415,19 @@ Object.assign(App, {
   /** Markdown to sanitized, decorated HTML inside `container`: the reading view's own drawing, shared
       with the peek. The caller checks that the renderer and the sanitizer are there. */
   renderMarkdownInto(container, body) {
-    container.innerHTML = DOMPurify.sanitize(marked.parse(body));
+    container.innerHTML = this.sanitize(marked.parse(body));
     this.decoratePreview(container);
+  },
+
+  /** The one sanitizer for note HTML, used by the drawing and by the noteBlocks probe alike: if the two
+      differed, reading and editor would count different blocks and the place in the note would slip. No
+      forms or controls (only input stays: task checkboxes are inputs), no CSS of its own, no id or name
+      to clash with the app's elements. Classes are filtered by the hook in markdown.js. */
+  sanitize(html) {
+    return DOMPurify.sanitize(html, {
+      FORBID_TAGS: ['form', 'style', 'button', 'select', 'textarea'],
+      FORBID_ATTR: ['id', 'name', 'style'],
+    });
   },
 
   /** Split a leading YAML block (--- ... ---) from the note body */

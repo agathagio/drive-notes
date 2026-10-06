@@ -10,10 +10,6 @@
 Object.assign(App, {
   // ── Google Auth ──
 
-  onGisLoaded() {
-    // Nothing to set up: the code client is made per request, with the account learned so far
-  },
-
   /** A code client for one popup. Made on the spot because login_hint only goes in at creation, and the
       account is learned after the first login and forgotten on signing out. Throws when the Google
       script has not loaded (an opening without network): the caller fails clean. */
@@ -258,14 +254,20 @@ Object.assign(App, {
     // The refresh token is what to revoke: it takes the grant with it. The endpoint takes a browser call.
     const token = localStorage.getItem(KEYS.REFRESH_TOKEN) || this.accessToken || localStorage.getItem(KEYS.TOKEN);
     if (token) {
+      let response;
       try {
-        // A 400 (token already dead) counts as revoked; only no answer at all stops the sign-out
-        await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, {
+        response = await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         });
       } catch (e) {
+        response = null;
         console.warn('Revoke failed:', e);
+      }
+      // A 400 (token already dead) counts as revoked; no answer, or any other error, stops the sign-out
+      // with nothing wiped, so the grant is never left alive at Google while the device forgets it
+      if (!response || (!response.ok && response.status !== 400)) {
+        if (response) console.warn('Revoke failed:', response.status);
         this.setSaveStatus('error', 'Não deu pra sair: tente de novo');
         return false;
       }
@@ -297,9 +299,4 @@ function loginNeeded() {
   const err = new Error('login needed');
   err.code = 'login_needed';
   return err;
-}
-
-// ── Google Identity callback (called from script onload in index.html) ──
-function onGisLoaded() {
-  App.onGisLoaded();
 }

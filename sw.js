@@ -1,5 +1,5 @@
 // Drive Notes: Service Worker
-const CACHE_NAME = 'drivenotes-v72';
+const CACHE_NAME = 'drivenotes-v73';
 
 // Renderer and sanitizer come from CDNs; without them offline the reading view falls back to
 // plain text. Must match the script tags in index.html, hash included (scenario 0 of
@@ -12,8 +12,8 @@ const CACHE_NAME = 'drivenotes-v72';
 // without formatting from the next opening on. Those copies are also fetched in CORS mode (the
 // default for a url), since the page cannot check an opaque response.
 const CDN_SCRIPTS = {
-  'https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js': 'sha384-H+hy9ULve6xfxRkWIh/YOtvDdpXgV2fmAGQkIDTxIgZwNoaoBal14Di2YTMR6MzR',
-  'https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js': 'sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3',
+  'https://cdn.jsdelivr.net/npm/marked@16.4.2/lib/marked.umd.js': 'sha384-SIgPzdreGEWG7eadwygSU+kb05fTwy7pw+JvOJ2VwHUqxs9fwzuRzHol8lzPDkRl',
+  'https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js': 'sha384-a7SzOxErzJ3ZpQz0zJ32d67dSitNzPcbfybc/ykU9KJhMgZkwqfSxlhhdJRS+XGL',
 };
 // The Google Fonts stylesheet is here too, but the font files it names live on
 // fonts.gstatic.com under urls we cannot predict: those are caught at runtime by CDN_HOSTS
@@ -49,6 +49,7 @@ const STATIC_ASSETS = [
   './app/media.js',
   './app/sketch.js',
   './app/markdown.js',
+  './app/start.js',
   './vendor/codemirror.js',
   './manifest.json',
   './icon-192.png',
@@ -182,10 +183,13 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // An opening from a shortcut on the icon (index.html?atalho=...) or from a share (?chegada=...) is the
-  // same page: answered from the cached index.html, the query ignored. Without this it never matches the
-  // cache (no network: an error page) and every new query would be stored as one more copy of the page.
-  if (event.request.mode === 'navigate' && url.origin === self.location.origin && url.search) {
+  // Every opening of the app is the same page, answered from the cached index.html with the query ignored:
+  // from a shortcut on the icon (index.html?atalho=...), from a share (?chegada=...), or from the address
+  // of the folder, without index.html at the end. Without this none of them matches the cache (no network:
+  // an error page), and every new query would be stored as one more copy of the page. Other pages of the
+  // site (privacidade.html) take the common way below.
+  const isAppPage = url.pathname.endsWith('/') || url.pathname.endsWith('/index.html');
+  if (event.request.mode === 'navigate' && url.origin === self.location.origin && isAppPage) {
     event.respondWith(
       caches.match('./index.html', { ignoreSearch: true }).then((cached) => cached || network(event.request))
     );
@@ -196,7 +200,12 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) {
-        // Return cached, but also update cache in background
+        // Our own files are never refreshed here: they arrive all together, in the install of the next
+        // version. Refreshed one by one, a cache would mix two versions (a deploy whose new sw.js never
+        // installs would serve the new files under the old cache), and every opening would download the
+        // whole app again. Only the CDN copies are refreshed behind the page, the locked scripts with
+        // their hash (see network).
+        if (!CDN_HOSTS.includes(url.hostname)) return cached;
         network(event.request).then((response) => {
           if (response.ok) {
             caches.open(CACHE_NAME).then((cache) => {

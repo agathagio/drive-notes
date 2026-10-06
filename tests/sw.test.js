@@ -5,12 +5,18 @@
 // What it proves: a new version reaches the screen in one opening (the home screen reloads on its own,
 // once), coming back from the background looks for one, and a note with text not on the Drive yet is
 // never reloaded: the bar offers the update, and tapping it saves, reloads and reopens the same note,
-// back on the same paragraph of the reading view, or on the same line of the editor.
+// back on the same paragraph of the reading view, or on the same line of the editor. And the app runs under
+// its own Content-Security-Policy (index.html keeps it here; the file:// suites take it out): scenario 12.
+// Its limit: the Drive is a fake inside the page, so connect-src to www.googleapis.com, the Google script
+// and its popup are never exercised here. Only a real login proves those (PLAN T10, "Como testar").
 //
 // SW_COMMIT=<commit> serves the app as it was in that commit instead of the working tree. It is the
 // control: against dba1d23 (v46, before the card "Versão nova numa abertura só") scenarios 2 to 4 must
 // fail, against 7bed916 (v47, before "Retomar a nota onde parou") scenario 5 must, and against f76e959
-// (v57, when the bar reopened the editor where the reading was) scenario 9 must, or they prove nothing.
+// (v57, when the bar reopened the editor where the reading was) scenario 9 must, and against 7af5b91 (v72,
+// when every opening refreshed our files behind the page) scenarios 10 and 11 must, or they prove nothing.
+// In scenario 10 the counted fetches and the copies in the cache fail every time; the stamps the page runs
+// only now and then (a reload alone does not show what the service worker hands out).
 const { execSync } = require('child_process');
 const fs = require('fs');
 const http = require('http');
@@ -33,16 +39,20 @@ let version = 1;
 // (Network.emulateNetworkConditions) does not reach them. Measured on 22 Sep 2026 in scenario 7: with the
 // page offline, the service worker still fetched index.html?atalho=nova from this server and cached it.
 let offline = false;
+// The new sw.js answers an error, so the new version can never install (a deploy that went wrong)
+let swBroken = false;
+// The paths of our own files that reached this server, sw.js aside, while a scenario counts them
+let hits = null;
 
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png' };
 const LOCAL_CDN = {
-  'https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js': '/cdn/marked.min.js',
-  'https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js': '/cdn/purify.min.js',
+  'https://cdn.jsdelivr.net/npm/marked@16.4.2/lib/marked.umd.js': '/cdn/marked.umd.js',
+  'https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js': '/cdn/purify.min.js',
 };
 
 /** What the server answers for a path: the repository, with the outside world swapped for local copies */
 function serve(pathname) {
-  if (pathname === '/cdn/marked.min.js') return fs.readFileSync(LIBS.marked);
+  if (pathname === '/cdn/marked.umd.js') return fs.readFileSync(LIBS.marked);
   if (pathname === '/cdn/purify.min.js') return fs.readFileSync(LIBS.purify);
   if (pathname === '/cdn/fonts.css') return '';
   const file = path.join(ROOT, pathname === '/' ? 'index.html' : pathname);
@@ -72,11 +82,14 @@ function serve(pathname) {
       .replace(/https:\/\/fonts\.googleapis\.com\/css2[^']*/, `${ORIGIN}/cdn/fonts.css`)
       .replace(/const CACHE_NAME = '[^']+';/, `const CACHE_NAME = 'drivenotes-test-${version}';`);
     if (!text.includes(`drivenotes-test-${version}`)) throw new Error('CACHE_NAME not found in sw.js');
-  } else if (pathname === '/app.js' || pathname === '/app/core.js') {
+  } else if (pathname === '/app.js' || pathname.startsWith('/app/')) {
     // Which version's files the page is running: the proof that the new one reached the screen.
     // /app.js until the split of the app, /app/core.js after it; both, so that a SW_COMMIT control
     // serving an old commit keeps proving what it proves
-    text += `\nwindow.__servedVersion = ${version};\n`;
+    if (pathname === '/app.js' || pathname === '/app/core.js') text += `\nwindow.__servedVersion = ${version};\n`;
+    // Every file of the app carries its own stamp as well: a cache holding two versions at once shows
+    // up as two numbers here, where the single stamp above would only see the version of core.js
+    text += `\n(window.__servedFiles = window.__servedFiles || {})[${JSON.stringify(pathname)}] = ${version};\n`;
   }
   return text;
 }
@@ -87,6 +100,12 @@ const server = http.createServer((req, res) => {
     return;
   }
   const { pathname } = new URL(req.url, ORIGIN);
+  if (pathname === '/sw.js' && swBroken) {
+    res.writeHead(500);
+    res.end();
+    return;
+  }
+  if (hits && pathname !== '/sw.js') hits.push(pathname);
   const body = serve(pathname);
   if (body === null) {
     res.writeHead(404);
@@ -99,15 +118,22 @@ const server = http.createServer((req, res) => {
 });
 
 // Runs at the start of every document the page loads, before the app: counts the loads (a reload is
-// one more), and stands in for the Google Drive with a single note kept in localStorage, so that what
-// a save wrote is still there after the reload
+// one more), writes down every refusal of the page's Content-Security-Policy, and stands in for the
+// Google Drive with notes kept in localStorage, so that what a save wrote is still there after the reload
 const EVERY_DOCUMENT = `(() => {
   if (location.origin !== ${JSON.stringify(ORIGIN)}) return;
   sessionStorage.setItem('__loads', String(+(sessionStorage.getItem('__loads') || 0) + 1));
+  // Kept in sessionStorage, so the whole run adds up across reloads (scenario 12 reads it)
+  document.addEventListener('securitypolicyviolation', (e) => {
+    const seen = JSON.parse(sessionStorage.getItem('__csp') || '[]');
+    seen.push({ directive: e.violatedDirective, blocked: e.blockedURI });
+    sessionStorage.setItem('__csp', JSON.stringify(seen));
+  }, true);
   localStorage.setItem('drivenotes_token', 'fake');
   localStorage.setItem('drivenotes_token_expires', String(Date.now() + 3600e3));
   const read = () => JSON.parse(localStorage.getItem('__drive') || '{}');
-  const reply = (o, status = 200) => new Response(typeof o === 'string' ? o : JSON.stringify(o), { status });
+  const reply = (o, status = 200) => new Response(typeof o === 'string' || o instanceof Uint8Array ? o : JSON.stringify(o), { status });
+  const listed = (f) => ({ id: f.id, name: f.name, parents: f.parents, mimeType: f.mimeType, modifiedTime: f.modifiedTime });
   const realFetch = window.fetch.bind(window);
   window.fetch = async (url, opts = {}) => {
     const u = new URL(String(url), location.href);
@@ -124,7 +150,17 @@ const EVERY_DOCUMENT = `(() => {
       localStorage.setItem('__drive', JSON.stringify(files));
       return reply({ id: f.id, modifiedTime: f.modifiedTime });
     }
-    if (f) return u.searchParams.get('alt') === 'media' ? reply(f.content) : reply({ id: f.id, name: f.name, parents: f.parents, modifiedTime: f.modifiedTime });
+    // A picture keeps its bytes in base64
+    if (f && u.searchParams.get('alt') === 'media') return reply(f.base64 ? Uint8Array.from(atob(f.base64), (c) => c.charCodeAt(0)) : f.content);
+    if (f) return reply({ id: f.id, name: f.name, parents: f.parents, modifiedTime: f.modifiedTime });
+    // A list answers two questions only: a file by its name (name = '...'), the search (contains '...',
+    // every word in the name or the text). Anything else, the tree included, finds nothing, as before
+    const q = u.searchParams.get('q') || '';
+    const names = [...q.matchAll(/name = '([^']*)'/g)].map((x) => x[1]);
+    const words = [...new Set([...q.matchAll(/contains '([^']*)'/g)].map((x) => x[1].toLowerCase()))];
+    const all = Object.values(files);
+    if (names.length) return reply({ files: all.filter((x) => names.includes(x.name)).map(listed) });
+    if (words.length) return reply({ files: all.filter((x) => words.every((w) => (x.name + ' ' + (x.content || '')).toLowerCase().includes(w))).map(listed) });
     return reply({ files: [] });
   };
 })();`;
@@ -152,6 +188,11 @@ const EVERY_DOCUMENT = `(() => {
   const deploy = (n) => { version = n; };
   // Coming back from the background. Headless pages are always visible, so the event is enough.
   const resume = () => js(`document.dispatchEvent(new Event('visibilitychange')); document.visibilityState`, false);
+  // A page with no policy of ours, like whatever hands Android's share to the app
+  const toBlankPage = async () => {
+    await send('Page.navigate', { url: 'about:blank' });
+    return waitFor(`location.href === 'about:blank'`, 5000);
+  };
 
   try {
     await send('Page.addScriptToEvaluateOnNewDocument', { source: EVERY_DOCUMENT });
@@ -271,10 +312,13 @@ const EVERY_DOCUMENT = `(() => {
     {
       await send('Page.navigate', { url: `${ORIGIN}/index.html` });
       await waitFor(`navigator.serviceWorker.controller && window.App`, 15000);
-      // What Android does with the manifest's share_target: a multipart POST to the action, as a navigation
+      // What Android does with the manifest's share_target: a multipart POST to the action, as a navigation.
+      // Sent from a blank page: Android's share comes from no page of ours, and the app's own page refuses
+      // to submit a form (form-action 'none' in its Content-Security-Policy)
+      await toBlankPage();
       await js(`(() => {
         const form = document.createElement('form');
-        form.method = 'POST'; form.enctype = 'multipart/form-data'; form.action = './share-target';
+        form.method = 'POST'; form.enctype = 'multipart/form-data'; form.action = ${JSON.stringify(ORIGIN + '/share-target')};
         const field = (name, value) => { const i = document.createElement('input'); i.type = 'hidden'; i.name = name; i.value = value; form.appendChild(i); };
         field('title', 'Um vídeo'); field('text', 'https://youtu.be/abc'); field('url', '');
         const input = document.createElement('input'); input.type = 'file'; input.name = 'photos';
@@ -324,10 +368,12 @@ const EVERY_DOCUMENT = `(() => {
       await send('Page.navigate', { url: `${ORIGIN}/index.html` });
       await waitFor(`navigator.serviceWorker.controller && window.App`, 15000);
       // Two files in one share: UTF-8 with its byte order mark, and UTF-16LE with its own. The recorder's
-      // encoding is unknown until the phone says; both must come out as the same letters.
+      // encoding is unknown until the phone says; both must come out as the same letters. From a blank
+      // page, as in scenario 6.
+      await toBlankPage();
       await js(`(() => {
         const form = document.createElement('form');
-        form.method = 'POST'; form.enctype = 'multipart/form-data'; form.action = './share-target';
+        form.method = 'POST'; form.enctype = 'multipart/form-data'; form.action = ${JSON.stringify(ORIGIN + '/share-target')};
         const field = (name, value) => { const i = document.createElement('input'); i.type = 'hidden'; i.name = name; i.value = value; form.appendChild(i); };
         field('title', ''); field('text', ''); field('url', '');
         const utf8 = new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('Ideia andando.' + String.fromCharCode(10) + 'Segunda linha, com acentuação.' + String.fromCharCode(10))]);
@@ -395,6 +441,131 @@ const EVERY_DOCUMENT = `(() => {
       console.log('     linha do topo do editor, antes e depois:', JSON.stringify({ left, back }));
       check('tocar no aviso: recarregou, na versao 6, e reabriu a mesma nota no editor', reopened, await state());
       check('... na mesma linha do editor, a ate uma linha de onde estava', Math.abs(back - left) <= 1, { left, back });
+    }
+
+    console.log('10. Deploy com o sw.js novo quebrado: duas aberturas seguem na versao 6, arquivo por arquivo');
+    {
+      // A promise nobody handled, on any page from here on (the failing update() is the suspect)
+      await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.addEventListener('unhandledrejection', (e) => {
+        sessionStorage.setItem('__unhandled', String(+(sessionStorage.getItem('__unhandled') || 0) + 1));
+      });` });
+      const loads = () => js(`+sessionStorage.getItem('__loads')`, false);
+      const open = async () => {
+        const n = await loads();
+        await send('Page.navigate', { url: `${ORIGIN}/index.html` });
+        return waitFor(`+sessionStorage.getItem('__loads') === ${n + 1} && document.readyState === 'complete' && typeof App === 'object' && window.__servedFiles`, 15000);
+      };
+      const ready = await open();
+      const before = await js(`window.__servedFiles`, false);
+      check('(a pagina abriu na versao 6, todos os arquivos do app carimbados)',
+        ready && Object.keys(before).length > 1 && Object.values(before).every((v) => v === 6), before);
+
+      swBroken = true;
+      deploy(7);
+      // The browser's own HTTP cache holds every file of version 6, fresh for ten minutes (max-age=600, what
+      // GitHub Pages sends). A refresh behind the page going through it would get version 6 back and the
+      // scenario would pass with the bug in place. Emptied, any fetch the service worker makes reaches this
+      // server, is counted in hits and answers version 7.
+      await send('Network.clearBrowserCache');
+      hits = [];
+      const opened = [await open()];
+      // A refresh behind the page lands in the cache a moment after the page is complete. When something was
+      // fetched, wait for it to land before the second opening, so that opening shows what it brought
+      // (without this the old code won the race now and then); nothing fetched, nothing to wait for
+      for (const end = Date.now() + 15000; hits.length && Date.now() < end;) {
+        if (await js(`caches.match('/app/core.js').then((r) => r.text()).then((t) => t.includes('__servedVersion = 7;'))`, false)) break;
+        await sleep(50);
+      }
+      opened.push(await open());
+      const s = await state();
+      const files = await js(`window.__servedFiles`, false);
+      // The stamps of the copies the cache holds. A reload alone does not prove what the service worker
+      // hands out (see drive-notes-aprendizados, Testes: measured here too, the old code had version 7 in the
+      // cache and the page still ran version 6 now and then), so the cache is read as well
+      const cached = await js(`(async () => {
+        const out = {};
+        for (const name of await caches.keys()) {
+          const cache = await caches.open(name);
+          for (const request of await cache.keys()) {
+            const p = new URL(request.url).pathname;
+            if (p.startsWith('/app/')) out[name + ' ' + p] = parseInt((await (await cache.match(request)).text()).trimEnd().split(' = ').pop());
+          }
+        }
+        return out;
+      })()`, false);
+      // Coming back from the background asks for the new sw.js too (registration.update()), and it fails
+      await resume();
+      const update = await js(`App._swRegistration ? App._swRegistration.update().then(() => 'resolved', (e) => 'rejected: ' + e.name) : 'no registration'`, false);
+      const unhandled = await js(`+sessionStorage.getItem('__unhandled')`, false);
+      const fetched = hits;
+      hits = null;
+      swBroken = false;
+      check('recarregar duas vezes: todos os arquivos do app continuam na versao 6',
+        opened.every(Boolean) && Object.keys(files).join() === Object.keys(before).join() && Object.values(files).every((v) => v === 6), files);
+      check('... com o cache da versao 6 e nenhum outro', s.served === 6 && s.caches.join() === 'drivenotes-test-6', s);
+      check('... e cada copia do app no cache e a da versao 6',
+        Object.keys(cached).length === Object.keys(before).length && Object.values(cached).every((v) => v === 6), cached);
+      check('... e nenhum arquivo nosso foi buscado de novo por tras', fetched.length === 0, fetched);
+      check('(o sw.js novo quebrado: o update() falha)', update.startsWith('rejected'), update);
+      check('... e a falha nao vira erro solto na pagina', unhandled === 0, unhandled);
+    }
+
+    console.log('11. Sem rede, abrir o endereco da pasta (sem index.html): o app abre do cache');
+    {
+      await send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+      offline = true;
+      await send('Page.navigate', { url: `${ORIGIN}/` });
+      // readyState too: App exists as soon as core.js has run, and a read before the last script (app/start.js
+      // since T10) saw a single stamp now and then
+      const opened = await waitFor(`location.pathname === '/' && document.readyState === 'complete' && typeof App === 'object' && document.body.dataset.view === 'welcome'`, 15000);
+      const s = await js(`({ path: location.pathname, view: document.body.dataset.view, files: window.__servedFiles })`, false).catch((e) => String(e));
+      await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+      offline = false;
+      check('sem rede, a URL da pasta abriu o app na home', opened === true, s);
+      check('... na versao em cache', opened && Object.keys(s.files).length > 1 && Object.values(s.files).every((v) => v === 6), s);
+    }
+
+    console.log('12. Content-Security-Policy: o app abre, mostra uma nota com foto e busca sem nenhuma recusa da politica');
+    {
+      // Every refusal since the first opening, written down by EVERY_DOCUMENT: the whole run went under the policy
+      const refusals = () => js(`JSON.parse(sessionStorage.getItem('__csp') || '[]')`, false);
+      const before = await refusals();
+      check('nenhuma recusa da politica nos cenarios 1 a 11', before.length === 0, before);
+      await js(`sessionStorage.removeItem('__csp'); 'ok'`, false);
+
+      // A note with a picture in it, the picture (a 1x1 PNG), and a note only the search finds, by a word of its text
+      const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+      await js(`const d = JSON.parse(localStorage.getItem('__drive'));
+        d.F = { id: 'F', name: 'com-foto.md', parents: [${JSON.stringify(ROOT_ID)}], modifiedTime: '2026-10-05T10:00:00.000Z', content: 'Antes da foto' + String.fromCharCode(10, 10) + '![[ponto.png]]' + String.fromCharCode(10, 10) + 'Depois da foto' };
+        d.P = { id: 'P', name: 'ponto.png', mimeType: 'image/png', parents: [${JSON.stringify(ROOT_ID)}], modifiedTime: '2026-10-05T10:00:00.000Z', base64: ${JSON.stringify(PNG)} };
+        d.G = { id: 'G', name: 'jardim.md', parents: [${JSON.stringify(ROOT_ID)}], modifiedTime: '2026-10-05T10:00:00.000Z', content: 'Plantar girassol em outubro' };
+        localStorage.setItem('__drive', JSON.stringify(d)); 'ok'`, false);
+
+      // The opening finds sw.js at version 7 (scenario 10's deploy) and the home reloads once: wait for it to settle
+      await send('Page.navigate', { url: `${ORIGIN}/index.html` });
+      const opened = await waitFor(`window.__servedVersion === 7 && document.readyState === 'complete' && navigator.serviceWorker.controller && document.body.dataset.view === 'welcome'`, 20000);
+      check('(o app abriu na home, ja na versao 7)', opened, await state().catch((e) => String(e)));
+
+      await js(`App.navigateTo('F', 'com-foto.md')`);
+      const photo = await waitFor(`(() => { const img = document.querySelector('#preview-container img'); return img && img.src.startsWith('blob:') && img.complete && img.naturalWidth === 1; })()`, 10000);
+      check('a nota com foto abriu, e a foto veio do Drive (blob:) e apareceu',
+        photo, await js(`[...document.querySelectorAll('#preview-container img')].map((i) => ({ src: i.src.slice(0, 5), w: i.naturalWidth }))`, false));
+
+      await js(`App.goHome(); 'ok'`);
+      await waitFor(`document.body.dataset.view === 'welcome'`, 5000);
+      await js(`(() => { const field = document.getElementById('home-search'); field.focus(); field.value = 'girassol'; field.dispatchEvent(new Event('input', { bubbles: true })); return 'ok'; })()`);
+      const found = await waitFor(`[...document.querySelectorAll('#home-results .search-row')].some((r) => r.textContent.includes('jardim'))`, 10000);
+      check('a busca por uma palavra do texto achou a nota', found, await js(`document.getElementById('home-results').textContent`, false));
+      const after = await refusals();
+      check('... e nada disso foi recusado pela politica', after.length === 0, after);
+
+      // The control: without it, zero refusals could just mean nobody was listening. A fetch from the page to
+      // an origin out of connect-src is what a script stealing the token would do: it must be refused and seen
+      const blocked = await js(`fetch('https://csp-control.invalid/steal').then(() => 'went through', (e) => 'refused: ' + e.name)`, false);
+      const seen = await waitFor(`JSON.parse(sessionStorage.getItem('__csp') || '[]').some((v) => v.blocked.startsWith('https://csp-control.invalid'))`, 5000);
+      const control = await refusals();
+      check('(controle) um fetch pra fora da lista e recusado, e a recusa fica registrada',
+        blocked.startsWith('refused') && seen && control.length === 1 && control[0].directive === 'connect-src', { blocked, control });
     }
   } finally {
     browser.close();

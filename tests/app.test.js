@@ -225,7 +225,8 @@ function fakeCtx(canvas) {
 /** The Worker (CONFIG.AUTH_URL) and Google's revoke endpoint faked behind w.fetch; everything else goes to the Drive.
     `answers[grant_type]` is what the Worker says for that grant (default: a fresh token); `{ status, body }` is an
     error with that status; the string 'network' throws like a fetch with no network. `answers.raw` is a body that
-    is not JSON (a 5xx page). `answers.revoke` is 'network' to fail the revoke. */
+    is not JSON (a 5xx page). `answers.revoke` is 'network' to fail the revoke, or `{ status }` for Google
+    answering that status. */
 function fakeWorker(w, drive, answers = {}) {
   const worker = { calls: [], revoked: [] };
   const AUTH_URL = w.__CONFIG.AUTH_URL;
@@ -245,7 +246,8 @@ function fakeWorker(w, drive, answers = {}) {
     if (s.startsWith('https://oauth2.googleapis.com/revoke')) {
       if (answers.revoke === 'network') throw new TypeError('Failed to fetch');
       worker.revoked.push(new URL(s).searchParams.get('token'));
-      return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+      const status = answers.revoke?.status || 200;
+      return { ok: status < 400, status, json: async () => ({}), text: async () => '' };
     }
     return drive.fetch(url, opts);
   };
@@ -449,6 +451,28 @@ async function scenario(title, block) {
     check('todo app/*.js da pasta esta no index.html', inFolder.every(f => loaded.includes(f)), { leftover: inFolder.filter(f => !loaded.includes(f)) });
     check('todo script do app que o index.html carrega existe', loaded.every(f => fs.existsSync(path.join(ROOT, f))), { missing: loaded.filter(f => !fs.existsSync(path.join(ROOT, f))) });
     check('o primeiro script do app e o app/core.js, que declara o App', loaded[0] === 'app/core.js', loaded);
+    // app/start.js calls App.watchVersions, so every other file has to be in before it
+    const allScripts = [...html.matchAll(/<script\b[^>]*>/g)].map(m => m[0]);
+    check('o ultimo script do index.html e o app/start.js', allScripts[allScripts.length - 1] === '<script src="app/start.js">', allScripts.slice(-2));
+
+    // The Content-Security-Policy: a policy in a meta only covers what comes after it, so it sits right
+    // after charset, before any script or stylesheet. And the Worker in connect-src is the one CONFIG.AUTH_URL
+    // names: changing the Worker without the policy would lock the login out on the phone, and fails here instead
+    const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/.exec(html);
+    check('o index.html tem a Content-Security-Policy', !!csp);
+    const head = html.slice(0, html.indexOf('</head>'));
+    const cspAt = csp ? html.indexOf(csp[0]) : -1;
+    check('... logo depois do charset, antes de qualquer script, link ou outra meta',
+      cspAt > html.indexOf('<meta charset') && !/<(script|link|meta)\b/.test(html.slice(html.indexOf('<meta charset') + 1, cspAt))
+      && [...head.matchAll(/<(script|link)\b/g)].every(m => m.index > cspAt));
+    const directives = Object.fromEntries((csp ? csp[1] : '').split(';').map(d => d.trim().split(/\s+/)).map(([k, ...v]) => [k, v]));
+    const authOrigin = new URL(/AUTH_URL: '([^']+)'/.exec(appSource())[1]).origin;
+    check(`... com o Worker do CONFIG.AUTH_URL no connect-src (${authOrigin})`, (directives['connect-src'] || []).includes(authOrigin), directives['connect-src']);
+    check('... e o revoke do Sair da conta tambem', (directives['connect-src'] || []).includes('https://oauth2.googleapis.com'), directives['connect-src']);
+    // What the policy refuses, it refuses silently on the phone: no inline script, no event attribute, no javascript: link
+    check('o index.html nao tem script em linha', allScripts.every(tag => /\ssrc="/.test(tag)), allScripts.filter(tag => !/\ssrc="/.test(tag)));
+    check('... nem atributo de evento (onload=, onclick=...) nem link javascript:',
+      !/<[^>]*\son[a-z]+\s*=/i.test(html) && !/javascript:/i.test(html), html.match(/<[^>]*\son[a-z]+\s*=[^>]*>/i)?.[0]);
 
     // The CDN scripts carry an integrity hash: the browser refuses a file that does not match it,
     // and a wrong hash shows up on the phone as a reading view with no formatting. jsDelivr serves
@@ -706,6 +730,82 @@ async function scenario(title, block) {
     App.setMode('preview');
     check('sem DOMPurify: texto puro, nenhum HTML', App.els.previewContainer.children.length === 0 && App.els.previewContainer.textContent.includes('<img'));
     w.DOMPurify = saved;
+  }
+  });
+
+  await scenario('12b. Sanitizador fechado: HTML da nota nao desenha formulario, CSS proprio nem painel do app', async () => {
+  {
+    const { App, drive, w } = await boot();
+    drive.put('A', 'a.md', [
+      '<form action="https://x"><input type="password"></form>', '',
+      '<div class="modal-overlay visible">x</div>', '',
+      '<p id="confirm-ok" name="n" style="color: red">y</p>', '',
+      '<style>body { display: none }</style>', '',
+      '<span class="wikilink modal-overlay">z</span>', '',
+      '<button>b</button><select><option>o</option></select><textarea>t</textarea>',
+    ].join('\n'));
+    await App.openFile('A', 'a.md');
+    const c = App.els.previewContainer;
+    check('nenhum form na leitura', !c.querySelector('form'), c.innerHTML);
+    check('o que sobra do form e a caixa de senha solta, sem action', c.children[0]?.outerHTML === '<input type="password">', c.children[0]?.outerHTML);
+    const div = [...c.querySelectorAll('div')].find(d => d.textContent === 'x');
+    check('div com classe de painel do app chega sem class', div && !div.hasAttribute('class') && !c.querySelector('.modal-overlay, .visible'), div?.outerHTML);
+    const p = [...c.querySelectorAll('p')].find(e => e.textContent === 'y');
+    check('p sem id, name e style', p && !p.hasAttribute('id') && !p.hasAttribute('name') && !p.hasAttribute('style'), p?.outerHTML);
+    check('nenhum style na leitura, e a pagina continua visivel', !c.querySelector('style') && w.getComputedStyle(w.document.body).display !== 'none', c.innerHTML);
+    const span = [...c.querySelectorAll('span')].find(e => e.textContent === 'z');
+    check('classe misturada: fica so a do app', span?.getAttribute('class') === 'wikilink', span?.outerHTML);
+    check('nenhum botao, select ou textarea da nota', !c.querySelector('button, select, textarea'), c.innerHTML);
+  }
+  });
+
+  await scenario('12c. Sanitizador fechado: tarefa, wikilink, foto, codigo e o lugar na nota continuam', async () => {
+  {
+    const { App, drive, w } = await boot();
+    const until = async (cond, limit = 3000) => { const end = Date.now() + limit; while (!cond() && Date.now() < end) await sleep(10); };
+    w.URL.createObjectURL = (blob) => `blob:fake/${blob.of}`;
+    drive.put('media', '_media', '', [ROOT_ID]); drive.files.get('media').mimeType = FOLDER;
+    drive.put('I1', 'foto.jpg', 'bin', ['media']); drive.files.get('I1').mimeType = 'image/jpeg';
+    drive.put('B', 'Nota B.md', '# B');
+    drive.seedFolders('folderA');
+    const note = [
+      '---', 'tags: [a]', '---', '',
+      '# Topo', '',
+      '<form action="https://x"><input type="password"></form>', '',
+      '<style>body { display: none }</style>', '',
+      '<form action="https://y"></form>', '',
+      '- [ ] tarefa', '', '- depois da linha em branco', '',
+      '[[Nota B]] ![[foto.jpg]]', '',
+      '```js', 'let a = 1;', '```', '',
+      'fim',
+    ].join('\n');
+    drive.put('A', 'a.md', note);
+    await App.openFile('A', 'a.md');
+    const c = App.els.previewContainer;
+
+    // Frontmatter, h1, the input left by the form, list, paragraph, code, "fim": the <style> block and the
+    // empty form draw nothing. The empty form is what tells the two sanitizers apart (the default keeps it)
+    check('noteBlocks e a leitura contam os mesmos blocos (style e form vazio somem das duas contas)',
+      App.noteBlocks(note).length === 7 && c.children.length === 7, [App.noteBlocks(note).length, [...c.children].map(e => e.tagName)]);
+    check('a leitura usa os blocos do texto, nao a divisao por igual', JSON.stringify(App.readingBlocks()) === JSON.stringify(App.noteBlocks(note)));
+    check('bloco de codigo mantem language-js', c.querySelector('pre code')?.className === 'language-js', c.querySelector('pre')?.outerHTML);
+    check('item depois da linha em branco mantem a classe gap', c.querySelectorAll('li.gap').length === 1, c.querySelector('ul')?.outerHTML);
+    const link = c.querySelector('a.wikilink');
+    check('wikilink mantem classe e data-target', link?.dataset.target === 'Nota B', link?.outerHTML);
+    const img = c.querySelector('img.embed-img');
+    check('foto embutida mantem classe e data-embed', img?.dataset.embed === 'foto.jpg', c.innerHTML);
+    await until(() => img?.getAttribute('src')?.startsWith('blob:'));
+    check('foto embutida aparece', img?.getAttribute('src') === 'blob:fake/I1', img?.outerHTML);
+
+    const box = c.querySelector('li > input[type="checkbox"]');
+    check('tarefa marcavel', box && !box.disabled, box?.outerHTML);
+    box.checked = true; box.dispatchEvent(new w.Event('change', { bubbles: true }));
+    check('marcar a tarefa troca o texto', App.getContent().includes('- [x] tarefa'), App.getContent());
+    await App.save(); await App._saveChain;
+
+    link.click();
+    await until(() => App.currentFile?.id === 'B');
+    check('wikilink continua abrindo', App.currentFile?.id === 'B', App.currentFile);
   }
   });
 
@@ -5117,6 +5217,17 @@ async function scenario(title, block) {
     await App.ensureAuth({ quiet: true }).catch((e) => { failed = e; });
     check('resposta que nao e JSON: erro comum, refresh token fica', failed && failed.code !== 'login_needed' && w.localStorage.getItem('drivenotes_refresh_token') === 'r1', String(failed));
   }
+  {
+    // The Worker's rate limit answers 429: not invalid_grant, so the refresh token stays and no popup opens
+    const { App, drive, w } = await boot({ seedStorage: { drivenotes_refresh_token: 'r1' } });
+    await App._refreshing?.catch(() => {}); // the home tree's renewal at opening (see the two trips above)
+    w.localStorage.setItem('drivenotes_token_expires', String(Date.now() - 1000));
+    fakeWorker(w, drive, { refresh_token: { status: 429, body: { error: 'rate_limited' } } });
+    const popup = fakePopup(App);
+    let failed = null;
+    await App.ensureAuth().catch((e) => { failed = e; });
+    check('Worker responde 429: erro rate_limited, refresh token fica, nenhum popup', failed?.code === 'rate_limited' && w.localStorage.getItem('drivenotes_refresh_token') === 'r1' && popup.count === 0, String(failed));
+  }
   });
 
   await scenario('82. Sair da conta: revoga no Google, limpa o aparelho e volta ao comeco', async () => {
@@ -5147,6 +5258,15 @@ async function scenario(title, block) {
     fakeWorker(w, drive, { revoke: 'network' });
     await App.signOut();
     check('revogar sem rede: avisa e nao apaga nada', App.els.saveStatus.textContent === 'Não deu pra sair: tente de novo' && w.localStorage.getItem('drivenotes_refresh_token') === 'r1' && App.listDrafts().length === 1 && reloads === 0);
+
+    // Confirm, Google answers 500: the grant may still be alive, so nothing wiped either
+    App.setSaveStatus('', '');
+    const failing = fakeWorker(w, drive, { revoke: { status: 500 } });
+    const out500 = await App.signOut();
+    check('Google responde 500: avisa, devolve false, refresh token e rascunho ficam, sem recarregar',
+      failing.revoked[0] === 'r1' && out500 === false && App.els.saveStatus.textContent === 'Não deu pra sair: tente de novo'
+      && w.localStorage.getItem('drivenotes_refresh_token') === 'r1' && App.listDrafts().length === 1 && reloads === 0
+      && (await App.NoteStore.get('A')) !== null, [out500, App.els.saveStatus.textContent, reloads]);
 
     // Confirm, Google reachable: revoked and wiped
     const worker = fakeWorker(w, drive);
@@ -5198,6 +5318,17 @@ async function scenario(title, block) {
     App.confirmDialog = async (title, t) => { text = t; return false; };
     await App.signOut();
     check('dois rascunhos: plural e os dois nomes', /2 rascunhos ainda não estão no Drive: (b\.md, a\.md|a\.md, b\.md)\. Sair apaga eles\./.test(text), text);
+  }
+  {
+    // Google answers 400 (the token was already dead): counts as revoked, the device is wiped
+    const { App, drive, w } = await boot({ seedStorage: { drivenotes_refresh_token: 'r1' } });
+    await App._refreshing?.catch(() => {}); // the home tree's renewal at opening
+    fakeWorker(w, drive, { revoke: { status: 400 } });
+    let reloads = 0;
+    App.reloadPage = () => { reloads++; };
+    App.confirmDialog = async () => true;
+    const out = await App.signOut();
+    check('Google responde 400 (token ja morto): conta como revogado, apaga e recarrega', out === true && !w.localStorage.getItem('drivenotes_refresh_token') && reloads === 1, [out, reloads]);
   }
   });
 

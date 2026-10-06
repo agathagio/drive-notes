@@ -2,6 +2,11 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
+  <!-- Second lock on the Drive key: a script that gets in anyway cannot load more code or send anything
+       anywhere outside this list. Right after charset, because a policy in a meta only covers what comes
+       after it. connect-src carries CONFIG.AUTH_URL (app/core.js): scenario 0 of tests/app.test.js fails
+       when the two disagree. style-src needs 'unsafe-inline': CodeMirror injects its own stylesheets. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; font-src https://fonts.gstatic.com; img-src 'self' blob: data: https:; connect-src 'self' https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com https://drive-notes-auth.agathagio.workers.dev; frame-src https://accounts.google.com; manifest-src 'self'; worker-src 'self'; form-action 'none'; base-uri 'none'">
   <!-- interactive-widget=resizes-content: the page shrinks when the keyboard opens, so the text being typed is never under it -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="theme-color" content="#242229">
@@ -33,13 +38,13 @@
        page swaps these tags for local copies by matching '<script src="https://cdn...'. -->
 
   <!-- marked.js (markdown preview renderer) -->
-  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js" integrity="sha384-H+hy9ULve6xfxRkWIh/YOtvDdpXgV2fmAGQkIDTxIgZwNoaoBal14Di2YTMR6MzR" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@16.4.2/lib/marked.umd.js" integrity="sha384-SIgPzdreGEWG7eadwygSU+kb05fTwy7pw+JvOJ2VwHUqxs9fwzuRzHol8lzPDkRl" crossorigin="anonymous"></script>
 
   <!-- DOMPurify (sanitizes the rendered preview) -->
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js" integrity="sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js" integrity="sha384-a7SzOxErzJ3ZpQz0zJ32d67dSitNzPcbfybc/ykU9KJhMgZkwqfSxlhhdJRS+XGL" crossorigin="anonymous"></script>
 
   <!-- Google Identity Services (login). Drive itself is called with plain fetch. -->
-  <script async defer src="https://accounts.google.com/gsi/client" onload="onGisLoaded()"></script>
+  <script async defer src="https://accounts.google.com/gsi/client"></script>
 </head>
 <body data-view="welcome">
 
@@ -379,7 +384,7 @@
   <div id="swipe-hint" class="swipe-hint" aria-hidden="true"></div>
 
   <!-- App logic: app/core.js declares App, the other files extend it with Object.assign, so core comes
-       first and the rest may come in any order. All of them before the inline script below, which needs
+       first and the rest may come in any order. All of them before app/start.js, which needs
        App.watchVersions (app/navigation.js). Classic scripts on purpose: they share the global scope. -->
   <script src="app/core.js"></script>
   <script src="app/editor.js"></script>
@@ -398,10 +403,7 @@
   <script src="app/sketch.js"></script>
   <script src="app/markdown.js"></script>
 
-  <!-- Register Service Worker, and bring a new version to the screen in one opening. Read here,
-       before anything else runs: whether a service worker was already in charge of this page. -->
-  <script>
-    if ('serviceWorker' in navigator) App.watchVersions(navigator.serviceWorker);
-  </script>
+  <!-- Last: registers the service worker. A file and not an inline script, which the policy above refuses. -->
+  <script src="app/start.js"></script>
 </body>
 </html>

@@ -109,3 +109,20 @@ if (typeof marked !== 'undefined') {
     },
   });
 }
+
+// ── Sanitizer: only the app's own classes ──
+// HTML pasted into a note (a web clipping) must not borrow the app's look: a class like modal-overlay would
+// draw one of the app's panels on top of the reading view. Only the classes the renderer above emits
+// survive, and a class attribute left with none is dropped. Registered once, on the page's DOMPurify, so it
+// holds for every App.sanitize call (see reading.js).
+const ALLOWED_CLASSES = new Set(['wikilink', 'wikilink-file', 'embed-img', 'gap']);
+
+if (typeof DOMPurify !== 'undefined') {
+  DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
+    if (data.attrName !== 'class') return;
+    const kept = data.attrValue.split(/\s+/)
+      .filter(name => ALLOWED_CLASSES.has(name) || name.startsWith('language-'));
+    if (kept.length) data.attrValue = kept.join(' ');
+    else data.keepAttr = false;
+  });
+}

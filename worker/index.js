@@ -54,6 +54,14 @@ export default {
       form.set('refresh_token', body.refresh_token);
     }
 
+    // A brake on whoever hammers the Worker, keyed by caller IP. Cloudflare counts per location and
+    // approximately, so this is a ceiling on abuse, not an exact quota. Without the binding (tests, local
+    // runs) there is no limit. Preflights and malformed requests above never spend it.
+    if (env.RATE_LIMITER) {
+      const { success } = await env.RATE_LIMITER.limit({ key: request.headers.get('CF-Connecting-IP') || 'unknown' });
+      if (!success) return reply({ error: 'rate_limited' }, 429, origin);
+    }
+
     const google = await fetch(TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

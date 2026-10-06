@@ -8,7 +8,7 @@ const APP = 'https://agathagio.github.io';
 
 /** One request through the Worker. Google is faked behind global fetch: it answers `answer` with `status`
     and every call is recorded with the form it received. */
-async function call({ method = 'POST', origin = APP, body, answer = { access_token: 'tok', expires_in: 3600 }, status = 200 }) {
+async function call({ method = 'POST', origin = APP, body, answer = { access_token: 'tok', expires_in: 3600 }, status = 200, limiter, ip }) {
   const calls = [];
   globalThis.fetch = async (url, opts) => {
     calls.push({ url: String(url), form: Object.fromEntries(new URLSearchParams(opts.body)) });
@@ -16,11 +16,17 @@ async function call({ method = 'POST', origin = APP, body, answer = { access_tok
   };
   const request = new Request('https://drive-notes-auth.example.workers.dev/', {
     method,
-    headers: { Origin: origin, 'Content-Type': 'application/json' },
+    headers: { Origin: origin, 'Content-Type': 'application/json', ...(ip ? { 'CF-Connecting-IP': ip } : {}) },
     body: method === 'POST' ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined,
   });
-  const response = await worker.fetch(request, env);
+  const response = await worker.fetch(request, limiter ? { ...env, RATE_LIMITER: limiter } : env);
   return { response, calls };
+}
+
+/** A fake Rate Limiting binding: answers `success` and records the keys it was asked about */
+function fakeLimiter(success) {
+  const keys = [];
+  return { keys, limit: async ({ key }) => { keys.push(key); return { success }; } };
 }
 
 test('preflight from the app origin answers the CORS headers and never reaches Google', async () => {
@@ -81,4 +87,33 @@ test('a code without the code, or a refresh without the token, is refused before
   assert.equal(a.response.status, 400);
   assert.equal(b.response.status, 400);
   assert.equal(a.calls.length + b.calls.length, 0);
+});
+
+test('under the rate limit: the limiter is asked by caller IP and the request reaches Google', async () => {
+  const limiter = fakeLimiter(true);
+  const { response, calls } = await call({ body: { grant_type: 'refresh_token', refresh_token: 'r1' }, limiter, ip: '203.0.113.7' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(limiter.keys, ['203.0.113.7']);
+  assert.equal(calls.length, 1);
+});
+
+test('over the rate limit: 429 rate_limited with the CORS headers, and Google is never called', async () => {
+  const limiter = fakeLimiter(false);
+  const { response, calls } = await call({ body: { grant_type: 'refresh_token', refresh_token: 'r1' }, limiter });
+  assert.equal(response.status, 429);
+  assert.equal((await response.json()).error, 'rate_limited');
+  assert.equal(response.headers.get('Access-Control-Allow-Origin'), APP);
+  assert.deepEqual(limiter.keys, ['unknown']);
+  assert.equal(calls.length, 0);
+});
+
+test('preflight and malformed requests do not spend the rate limit', async () => {
+  const limiter = fakeLimiter(false);
+  const a = await call({ method: 'OPTIONS', limiter });
+  const b = await call({ body: 'not json', limiter });
+  const c = await call({ body: { grant_type: 'refresh_token' }, limiter });
+  assert.equal(a.response.status, 204);
+  assert.equal(b.response.status, 400);
+  assert.equal(c.response.status, 400);
+  assert.equal(limiter.keys.length, 0);
 });
