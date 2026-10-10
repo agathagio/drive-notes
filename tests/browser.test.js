@@ -293,6 +293,20 @@ const FAKE_DRIVE = `
     l = await lines();
     check('ir pro modo leitura e voltar mantem a imagem', l[3].on && l[3].bg, l[3]);
 
+    // The decoration counts the line start by itself (one pass over the text, T13): a wrong count puts
+    // the picture on another line. The two cases where the sum is easiest to get wrong: the last line,
+    // which has no newline after it, and a picture right after an empty line
+    const embedAt = async (note) => {
+      await editNote(note, 0, 0);
+      await waitFor(`document.querySelector('.cm-line.embed-line')`, 3000);
+      return JSON.parse(await js(`JSON.stringify([...document.querySelectorAll('.cm-line')]
+        .map((el, i) => el.classList.contains('embed-line') ? [i, el.textContent] : null).filter(Boolean))`));
+    };
+    let at = await embedAt('antes\nmeio\n![[larga.png]]');
+    check('foto na ultima linha, sem quebra depois: a imagem fica nela e so nela', at.length === 1 && at[0][0] === 2 && at[0][1] === '![[larga.png]]', at);
+    at = await embedAt('antes\n\n![[larga.png]]\ndepois');
+    check('foto logo depois de linha vazia: a imagem fica nela e so nela', at.length === 1 && at[0][0] === 2 && at[0][1] === '![[larga.png]]', at);
+
     // A photo wider than the editor: it is drawn at the width left on the line. The background
     // goes in with `auto var(--embed-h)`, so the drawn width is the height times the image's
     // ratio (4000x1000 = 4:1). Regression: measuring the clientWidth of .cm-content, which includes the
@@ -596,6 +610,7 @@ const FAKE_DRIVE = `
       await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
       if (!scrolled) console.log(`     (tentativa ${attempt} de rolar a barra perdida)`);
     }
+    console.log('     alvo do arrasto:', JSON.stringify(target));
     check('o botao alvo do arrasto esta na tela (senao o toque cai no nada)', target.right <= 360, target);
     check('o dedo arrastado em cima de um botao rola a barra', scrolled,
       await js('document.querySelector(".toolbar").scrollLeft'));

@@ -3,7 +3,7 @@
   "private": true,
   "description": "Drive Notes: PWA pessoal de notas em markdown no Google Drive. Este package.json existe só para os testes; o app não tem build.",
   "scripts": {
-    "test": "node tests/app.test.js && node --test worker/index.test.js",
+    "test": "node tests/app.test.js && node --test worker/index.test.js && node --test tests/dictation.test.js",
     "test:worker": "node --test worker/index.test.js",
     "test:browser": "node tests/browser.test.js",
     "test:sw": "node tests/sw.test.js",

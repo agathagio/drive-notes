@@ -148,6 +148,9 @@
     <button class="toolbar-btn" data-history="redo" title="Refazer" aria-label="Refazer">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 14 20 9 15 4"/><path d="M4 20v-7a4 4 0 0 1 4-4h12"/></svg>
     </button>
+    <button class="toolbar-btn" data-clean title="Limpar ditado" aria-label="Limpar ditado">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 3v4"/><path d="M17 5h4"/><path d="M5 17v4"/><path d="M3 19h4"/></svg>
+    </button>
     <div class="toolbar-separator"></div>
     <button class="toolbar-btn" data-format="wikilink" title="Link entre notas" aria-label="Link entre notas">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 3h3a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1h-3"/><path d="M8 21H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h3"/></svg>
@@ -402,6 +405,7 @@
   <script src="app/media.js"></script>
   <script src="app/sketch.js"></script>
   <script src="app/markdown.js"></script>
+  <script src="app/dictation.js"></script>
 
   <!-- Last: registers the service worker. A file and not an inline script, which the policy above refuses. -->
   <script src="app/start.js"></script>

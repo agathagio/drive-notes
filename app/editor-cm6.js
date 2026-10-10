@@ -60,9 +60,15 @@ Object.assign(App, {
       // pressed, and reading the DOM in here forces the browser to recompute style and layout then
       // and there
       let available = null;
-      for (let n = 1; n <= state.doc.lines; n++) {
-        const line = state.doc.line(n);
-        const info = lineInfo(line.text);
+      // One pass over the text, with the line start counted here: `doc.line(n)` searches the tree
+      // from the top for every line, and on a note of thousands of lines that made dictation
+      // stutter. Only a line with `![[` can be an embed (EMBED_LINE allows spaces before it), so the
+      // others never reach lineInfo. The `+ 1` is the newline, and runs after a skipped line too
+      let from = 0;
+      for (const it = state.doc.iterLines(); !it.next().done; from += it.value.length + 1) {
+        const text = it.value;
+        if (!text.includes('![[')) continue;
+        const info = lineInfo(text);
         if (!info) continue;
         if (available === null) available = availableWidth();
         const width = Math.min(available || info.width, info.width);
@@ -71,7 +77,7 @@ Object.assign(App, {
         const height = Math.floor(Math.min(width * info.height / info.width, App.EMBED_MAX_HEIGHT));
         marks.push(Decoration.line({
           attributes: { class: 'embed-line', style: `--embed: url("${info.url}"); --embed-h: ${height}px` },
-        }).range(line.from));
+        }).range(from));
       }
       return Decoration.set(marks);
     };
@@ -557,6 +563,18 @@ Object.assign(App, {
         // The blank ends stay out of it. A selection of whole lines usually takes the newline at the
         // end, and swapping that too would glue the next line onto the link
         const from = sel.from + (raw.length - raw.trimStart().length);
+        const start = newMark(from);
+        const end = newMark(from + text.length);
+        view.dispatch({ effects: [start.effect, end.effect] });
+        return { text, start: start.id, end: end.id };
+      },
+      // The caret's whole line, in the same shape, for when nothing is selected. Blank ends trimmed the
+      // same way; a blank line has no stretch
+      caretLineStretch: () => {
+        const line = view.state.doc.lineAt(view.state.selection.main.head);
+        const text = line.text.trim();
+        if (!text) return null;
+        const from = line.from + (line.text.length - line.text.trimStart().length);
         const start = newMark(from);
         const end = newMark(from + text.length);
         view.dispatch({ effects: [start.effect, end.effect] });

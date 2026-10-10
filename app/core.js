@@ -694,6 +694,10 @@ const App = {
     const extract = document.querySelector('.toolbar-btn[data-extract]');
     if (extract) this.bindToolbarButton(extract, () => this.promptExtract());
 
+    // Dictation cleanup: tapped right after dictating, with the keyboard open
+    const clean = document.querySelector('.toolbar-btn[data-clean]');
+    if (clean) this.bindToolbarButton(clean, () => this.cleanSelection());
+
     this.els.sketchCancel.addEventListener('click', () => this.sketchCancel());
     this.els.sketchColors.addEventListener('click', (e) => {
       const color = e.target.dataset?.sketchColor;

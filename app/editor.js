@@ -74,6 +74,8 @@ Object.assign(App, {
     // Extract to a new note. The stretch is opaque, like a mark: `text` is the only field anyone
     // outside may read. The fallback textarea has neither: no stretch, and nothing gets replaced.
     selectedStretch() { return this._impl?.selectedStretch?.() ?? null; },
+    // The caret's whole line as a stretch, for the dictation cleanup when nothing is selected
+    caretLineStretch() { return this._impl?.caretLineStretch?.() ?? null; },
     replaceStretch(stretch, insert) { return this._impl?.replaceStretch?.(stretch, insert) || false; },
   },
 

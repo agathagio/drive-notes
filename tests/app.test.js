@@ -2698,18 +2698,21 @@ async function scenario(title, block) {
   }
   });
 
-  await scenario('47. A barra de formatacao: 18 botoes, todos desenhados', async () => {
+  await scenario('47. A barra de formatacao: 20 botoes, todos desenhados', async () => {
   {
     const { w } = await boot();
     const buttons = [...w.document.querySelectorAll('.toolbar .toolbar-btn')];
     const order = buttons.map(b => b.dataset.history || b.dataset.format || b.dataset.photo || b.dataset.sketch
+      || (b.hasAttribute('data-clean') ? 'clean' : undefined)
       || (b.hasAttribute('data-extract') ? 'extract' : undefined));
-    // The order is the bar Agatha uses with her thumb: undo and redo, the note's links, the
-    // photo and the drawing, the text formatting, the blocks, and the lists at the end. The extract one (v43) only
-    // shows up with text selected and sticks to the right end: it is last in line on purpose
-    const expected = ['undo', 'redo', 'wikilink', 'tag', 'camera', 'gallery', 'open', 'heading',
+    // The order is the bar Agatha uses with her thumb: undo and redo, the dictation cleanup next to
+    // them (its undo is the button beside it), the note's links, the photo and the drawing, the text
+    // formatting, the blocks, and the lists at the end. The extract one (v43) only shows up with text
+    // selected and sticks to the right end: it is last in line on purpose
+    const expected = ['undo', 'redo', 'clean', 'wikilink', 'tag', 'camera', 'gallery', 'open', 'heading',
       'bold', 'italic', 'strikethrough', 'highlight', 'code', 'quote', 'link', 'list', 'ordered', 'checklist', 'extract'];
-    check('a barra tem os 18 botoes na ordem combinada, e o de extrair no fim', order.join(',') === expected.join(','), order);
+    check('a barra tem os 20 botoes na ordem combinada, o de limpar depois do refazer e o de extrair no fim',
+      order.join(',') === expected.join(','), order);
     // Letters and emoji on the bar came out in each Android's font and did not inherit the button's color:
     // every button is a stroke SVG, and none has loose text inside
     const undrawn = buttons.filter(b => !b.querySelector('svg') || b.textContent.trim());
@@ -3573,6 +3576,86 @@ async function scenario(title, block) {
     check('sem login: nada criado, o trecho fica, e o status pede login',
       noLoginDrive.count('POST') === 0 && noLogin.getContent() === text
       && noLogin.els.saveStatus.textContent === 'Faça login pra extrair', [noLoginDrive.log, noLogin.els.saveStatus.textContent]);
+  }
+  });
+
+  await scenario('62b. Limpar ditado: a linha do cursor ou a selecao, num toque, e desfazer devolve o ditado', async () => {
+  {
+    const { App, drive, w } = await boot({ editor: true });
+    check('o editor de verdade esta montado', App.Editor.kind() === 'cm6', App.Editor.kind());
+    const d = w.document;
+    const view = App.Editor._impl.view;
+    const status = () => App.els.saveStatus.textContent;
+    const dictated = 'eu fui no no mercado';
+    drive.put('D', 'ditado.md', dictated, [ROOT_ID]);
+    await App.openFile('D', 'ditado.md');
+    App.setMode('edit');
+    App.Editor.focus();
+    await sleep(30);
+
+    // Caret in the middle of the line, nothing selected. The tap goes through bindToolbarButton's
+    // mouse path, which proves the button's wiring and not only the command
+    view.dispatch({ selection: { anchor: dictated.indexOf('no no') } });
+    const btn = d.querySelector('.toolbar-btn[data-clean]');
+    check('a barra tem o botao de limpar ditado', !!btn);
+    btn.click();
+    check('cursor na linha: a linha inteira foi limpa', App.getContent() === 'Eu fui no mercado.', App.getContent());
+    check('... o cabecalho diz Ditado limpo', status() === 'Ditado limpo', status());
+    check('... e a nota ficou por salvar', App.isDirty);
+    App.Editor.undo();
+    check('um desfazer devolve o ditado exato', App.getContent() === dictated, App.getContent());
+
+    // Dictated right before the tap: one undo takes only the cleanup, never the typing along with it
+    App.setContent('');
+    view.dispatch({ changes: { from: 0, insert: dictated }, selection: { anchor: dictated.length }, userEvent: 'input.type' });
+    App.cleanSelection();
+    check('logo depois de ditar: limpou', App.getContent() === 'Eu fui no mercado.', App.getContent());
+    App.Editor.undo();
+    check('... e um desfazer devolve o que foi ditado, sem apagar a digitacao',
+      App.getContent() === dictated, App.getContent());
+
+    // A selection covering only the second line: only that line changes
+    const two = 'primeira no no linha\nsegunda no no linha';
+    App.setContent(two);
+    view.dispatch({ selection: { anchor: two.indexOf('segunda'), head: two.length } });
+    App.cleanSelection();
+    check('com selecao: so o trecho selecionado muda',
+      App.getContent() === 'primeira no no linha\nSegunda no linha.', App.getContent());
+
+    // Already clean: nothing changes, it says so, and the note is not marked as unsaved
+    App.setContent('Eu fui no mercado.');
+    view.dispatch({ selection: { anchor: 3 } });
+    App.cleanSelection();
+    check('linha ja limpa: o texto fica igual', App.getContent() === 'Eu fui no mercado.', App.getContent());
+    check('... o cabecalho diz Nada a limpar', status() === 'Nada a limpar', status());
+    check('... e a nota nao ficou por salvar', !App.isDirty);
+
+    // A blank line under the caret: no stretch, nothing happens
+    App.setContent('texto no no aqui\n\n');
+    view.dispatch({ selection: { anchor: App.getContent().length } });
+    App.setSaveStatus('', '');
+    check('linha em branco: nao ha trecho', App.Editor.caretLineStretch() === null);
+    App.cleanSelection();
+    check('... e nada muda', App.getContent() === 'texto no no aqui\n\n' && status() === '', [App.getContent(), status()]);
+
+    // In reading view nothing happens
+    App.setContent(dictated);
+    view.dispatch({ selection: { anchor: 2 } });
+    App.setMode('preview');
+    App.setSaveStatus('', '');
+    App.cleanSelection();
+    check('no modo leitura nada acontece', App.getContent() === dictated && status() === '', [App.getContent(), status()]);
+    App.setMode('edit');
+
+    // The fallback textarea has no stretch: the button does nothing there
+    const { App: plain, w: pw } = await boot();
+    check('textarea de reserva: sem trecho da linha', plain.Editor.caretLineStretch() === null);
+    plain.setContent(dictated);
+    plain.setMode('edit');
+    plain.setSaveStatus('', '');
+    pw.document.querySelector('.toolbar-btn[data-clean]').click();
+    check('... e o botao nao mexe no texto', plain.getContent() === dictated && plain.els.saveStatus.textContent === '',
+      [plain.getContent(), plain.els.saveStatus.textContent]);
   }
   });
 

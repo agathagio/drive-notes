@@ -36,6 +36,21 @@ Object.assign(App, {
     this.markDirty();
   },
 
+  /** The toolbar's dictation cleanup: the selection, or the caret's line when nothing is selected.
+      One transaction, so the undo next to the button brings the dictated text back. If the stretch
+      changed before the swap, replaceStretch refuses and nothing is said. */
+  cleanSelection() {
+    if (this.mode !== 'edit') return;
+    const stretch = this.Editor.selectedStretch() || this.Editor.caretLineStretch();
+    if (!stretch) return;
+    const cleaned = this.Dictation.clean(stretch.text);
+    if (cleaned === stretch.text) {
+      this.setSaveStatus('', 'Nada a limpar');
+      return;
+    }
+    if (this.Editor.replaceStretch(stretch, cleaned)) this.setSaveStatus('saved', 'Ditado limpo');
+  },
+
   /** The smallest edit that puts `prefix` at the start of the line, replacing any other block marker,
       or takes it off when it is already there: `{ from, to, insert }`, in columns of the line.
       The editor needs the change this narrow to keep the caret where the writing was; whoever only
